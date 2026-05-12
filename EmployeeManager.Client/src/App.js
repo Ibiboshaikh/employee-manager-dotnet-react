@@ -51,6 +51,9 @@ import { ToastContainer } from "react-toastify";
 // Without this import, toasts would appear but look broken (no styling).
 import "react-toastify/dist/ReactToastify.css";
 
+// Global app styles (CSS reset, modal overlay, etc.)
+import "./App.css";
+
 // Our application components (each one is a "page" in the app)
 import Login from "./components/Login";              // Login page
 import EmployeeList from "./components/EmployeeList"; // Employee dashboard

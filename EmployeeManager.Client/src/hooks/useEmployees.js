@@ -9,7 +9,6 @@
 import { useState, useEffect } from "react";
 import { toast } from "react-toastify";
 import { getEmployees, deleteEmployee } from "../services/api";
-import  ConfirmModal  from "../components/ConfirmModal";
 function useEmployees() {
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -38,26 +37,28 @@ function useEmployees() {
   // Confirm, delete on the server, then drop the row from local state.
   // Skipping a re-fetch keeps the UI instant.
   const handleDelete = async (id, name) => {
-    // setConfirm({open: true, id, name});
-    debugger
-    ConfirmModal({open: true, message: name, onConfirm: async () => {
-     try {
-        await deleteEmployee(id);
-        setEmployees((prev) => prev.filter((e) => e.id !== id));
+   setConfirm({open: true, id, name});
+  };
+
+  const  onConfirm = async () => {
+    try {
+        await deleteEmployee(confirm.id);
+        setEmployees((prev) => prev.filter((e) => e.id !== confirm.id));
         toast.success("Employee deleted");
       } catch (error) {
         toast.error("Failed to delete employee");
       } finally {
         setConfirm({open: false, id: null, name:""});
       }
-    }, oncancel: () => 
-      setConfirm({open: false, id: null, name:""})
-    });
-  };
+  }
+
+  function oncancel() {
+    setConfirm({open: false, id: null, name:""});
+  }
 
   // Expose only what EmployeeList reads. setEmployees and fetchEmployees
   // stay private — no external caller needs them.
-  return { employees, loading, handleDelete, fetchedAt };
+  return { employees, loading, handleDelete, fetchedAt, confirm, onConfirm, oncancel };
 }
 
 export default useEmployees;

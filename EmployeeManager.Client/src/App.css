@@ -34,3 +34,33 @@ body {
   background-color: #f0f2f5;  /* Light gray background — gives the app a clean look */
   color: #333;                 /* Dark gray text — easier on the eyes than pure black */
 }
+
+/* MODAL — overlay pins to viewport, modal box centers inside it */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: white;
+  padding: 24px 32px;
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  min-width: 320px;
+}
+
+.modal button {
+  margin: 12px 8px 0 0;
+  padding: 8px 16px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+}
+
+.modal button:first-of-type { background: #f44336; color: white; }
+.modal button:last-of-type  { background: #ccc; }

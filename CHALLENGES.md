@@ -1791,7 +1791,10 @@ Prev / Next buttons and a "Page X of Y" label.
 
 CHALLENGE 12.2 — Replace window.confirm with a modal       Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~22 min (2026-05-12) — beat target by 13. Logic-solo on state
+shape + two-step delete + option B (handlers in hook). Stuck once on
+rendering JSX inside the hook body — clicked after "hooks return data,
+components render JSX." Side-quest: pre-existing dead App.css import.
 
 window.confirm() is blocking and can't be styled. Replace it with a
 React modal component.
@@ -1908,12 +1911,12 @@ Fill this in as you complete each challenge:
   11.2       | 25 min  | 5 min     | Beat target by 20 min. Excludes side discussion on naming/hook semantics. Copy-pasted filter chain from EmployeeList.js (logic-solo, syntax-referenced). Two senior-level instincts on this challenge: (1) questioned generic hook name → renamed to useEmployeeFilter; (2) moved localStorage useEffect AND lazy initializer into the hook without reading the suggestion (chose option B over recommended option A). Both decisions are architecturally cleaner — feature ownership over minimal scope. Self-articulated: "I know what to do if I understand the question; only syntax has rust." Healthy stage.
   11.3       | 20 min  | ~13 min   | Beat target by ~7 min. Logic-solo, syntax-referenced. Two senior-instinct deviations from spec (dropped setEmployees and fetchEmployees from return — both YAGNI-clean). Surfaced function-identity / useEffect dep gotcha — full explanation given, .NET delegate analogy clicked. Final pass: requested cleanup of unused code and comments across both files.
   12.1       | 30 min  | ~8 min    | Beat target by ~22 min. Syntax copy-pasted from spec; logic understood solo. Caught spec gap: reset useEffect deps `[search, department, hideBelow50K]` missed minSalary/maxSalary. Refactored to `[filtered.length]` — cleaner, future-filter-safe. 3 minor polish items open (stale comment, totalPages=0 edge case, control placement).
-  12.2       | 35 min  |           |
+  12.2       | 35 min  | ~22 min   | Beat target by ~13 min. Logic-solo: state shape `{open, id, name}` spec-exact, two-step delete (set confirm → onConfirm reads state), picked option B (handlers in hook, render in parent — same feature-ownership instinct as 11.2). Stuck point: tried to render `<ConfirmModal>` inside the hook body — revealed one concept gap (hooks return data, components render JSX). Clicked instantly after explanation. Minor: `onConfirm(id)` took id as param before seeing the wire-up. Lost time to "use Bootstrap" instinct when modal rendered unstyled — root cause was a pre-existing missing `import './App.css'` in App.js, not user's bug. Sharpening note: when stuck, ask "whose responsibility — hook (state/logic) or component (rendering)?"
   12.3       | 35 min  |           |
 
   Total target time: ~10h (Rounds 1–7: ~5h | Round 8: 45m | Round 9: 35m |
                            Round 10: 50m | Round 11: 65m | Round 12: 100m)
-  Your total time:   ___
+  Your total time:   ~4h 30m through 12.2 (vs. ~9h 25m target for the same scope — ~52% under)
 
 After you finish all challenges, you will understand:
   - How .NET Clean Architecture works (layers, DI, interfaces)

@@ -16,11 +16,12 @@ import StatsBar from './StatsBar';
 import useSort from '../hooks/useSort';
 import useEmployeeFilter from '../hooks/useEmployeeFilter';
 import useEmployees from '../hooks/useEmployees';
+import ConfirmModal from "./ConfirmModal";
 
 const EmployeeList = () => {
   // ── HOOKS ──────────────────────────────────────────────────────────────
   // Data + delete handling
-  const { employees, loading, handleDelete, fetchedAt } = useEmployees();
+  const { employees, loading, handleDelete, fetchedAt, confirm, onConfirm, oncancel } = useEmployees();
 
   // Filter values, setters, and the filtered array.
   const {
@@ -194,6 +195,12 @@ const EmployeeList = () => {
        <button disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next</button>
 
           <label>{selectedEmployee?.firstName}: {selectedEmployee?.salary}</label>
+          <ConfirmModal
+    open={confirm.open}
+    message={confirm.name}
+    onConfirm={onConfirm}
+    oncancel={oncancel}
+  />
         </Fragment>
       )}
     </div>
