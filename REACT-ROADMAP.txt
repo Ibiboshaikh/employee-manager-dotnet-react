@@ -1,0 +1,233 @@
+================================================================================
+REACT LEARNING ROADMAP — Path to Enterprise-Level React
+================================================================================
+Generated: 2026-05-08
+Reference point: Project started 2026-04-08 (learning materials), active coding
+                 since 2026-04-22. Today: 2026-05-08 (Round 10 complete).
+================================================================================
+
+
+================================================================================
+WHAT "ENTERPRISE REACT" ACTUALLY MEANS
+================================================================================
+
+Before any timeline, here's the honest gap between where you are now and
+"enterprise ready."
+
+
+WHAT YOU HAVE (or will have after Rounds 11-12):
+--------------------------------------------------------------------------
+  - useState, useEffect with deps, controlled components, derived values
+  - Components, props, callback props, prop drilling
+  - Custom hooks (Round 11)
+  - Basic React Router
+  - Forms with validation, conditional rendering
+  - Pagination, modals, undo (Round 12)
+
+
+WHAT ENTERPRISE REACT REQUIRES THAT YOU HAVEN'T TOUCHED YET:
+--------------------------------------------------------------------------
+  1. TypeScript
+     - Non-negotiable. Every serious enterprise React codebase uses it.
+
+  2. React Query (TanStack Query)
+     - The de facto standard for server state.
+     - You would never use `fetch + useState + useEffect` in production.
+
+  3. Context API + useReducer
+     - For cross-component state without prop drilling.
+
+  4. Performance hooks
+     - useMemo, useCallback, React.memo.
+     - We discussed today, but you haven't used them.
+
+  5. Testing
+     - React Testing Library + Jest/Vitest.
+     - Enterprise = tests required.
+
+  6. Component libraries
+     - MUI / Ant Design / Chakra.
+     - Nobody styles enterprise apps from scratch.
+
+  7. Form libraries
+     - React Hook Form + Zod.
+     - Your manual `errors` object is fine for learning, never for production.
+
+  8. Next.js (or similar)
+     - App Router, Server Components, file-based routing.
+     - Increasingly the enterprise default over plain CRA/Vite.
+
+  9. Architecture patterns
+     - Feature folders, compound components, container/presenter split,
+       error boundaries, code splitting.
+
+
+================================================================================
+YOUR TRAJECTORY AT CURRENT PACE
+================================================================================
+
+You did Rounds 1-10 in roughly 1 month of intermittent practice
+(with a 5-day break, weekends, etc.).
+Estimated actual coding time: ~15-20 hours.
+
+
+PHASE 1 — FINISH FOUNDATIONS                              Late May 2026
+--------------------------------------------------------------------------
+  Time needed: 1-2 weeks
+  What:
+    - Rounds 11-12 (custom hooks, pagination, modals, undo)
+  Outcome:
+    - All vanilla React fundamentals covered.
+
+
+PHASE 2 — TYPESCRIPT                                      Mid June 2026
+--------------------------------------------------------------------------
+  Time needed: 2-3 weeks
+  What:
+    - Convert this project to TypeScript
+    - Learn types and generics for React
+    - Type props, state, event handlers, hooks
+  Outcome:
+    - Comfortable reading and writing TS-flavoured React code.
+    - This is the single biggest "enterprise" upgrade.
+
+
+PHASE 3 — REAL-WORLD DATA LAYER                           End of June 2026
+--------------------------------------------------------------------------
+  Time needed: 1-2 weeks
+  What:
+    - Add React Query (TanStack Query) to this project
+    - Replace the useEffect-fetch pattern with useQuery / useMutation
+    - Learn caching, optimistic updates, invalidation
+  Outcome:
+    - You write data-fetching code the way real apps do it.
+
+
+PHASE 4 — SECOND PROJECT (LARGER)                         Mid August 2026
+--------------------------------------------------------------------------
+  Time needed: 4-6 weeks
+  What:
+    - Build a bigger app from scratch (different domain, e.g., a small
+      task tracker or note-taking app)
+    - Auth flows, routing layouts, protected routes
+    - Context API + useReducer for shared state
+    - Error boundaries
+    - More complex forms (multi-step, dynamic fields)
+  Outcome:
+    - You have built two apps. The patterns are no longer "new" — they
+      are muscle memory.
+
+
+PHASE 5 — POLISH                                          End of September 2026
+--------------------------------------------------------------------------
+  Time needed: 4-6 weeks
+  What:
+    - Testing (React Testing Library, Jest/Vitest)
+    - Component library (pick one: MUI, Ant Design, or Chakra)
+    - Next.js basics (App Router, file-based routing, Server Components)
+    - Performance hooks in practice (useMemo, useCallback, React.memo)
+    - Form libraries (React Hook Form + Zod)
+  Outcome:
+    - You can be productive on an enterprise React team.
+
+
+================================================================================
+HONEST VERDICT — Three Bars
+================================================================================
+
+BAR 1 — "Productive on an enterprise React team with mentorship"
+--------------------------------------------------------------------------
+  Date: End of September 2026 (~5 months from today)
+  Means:
+    - You can pick up tickets, write components, fix bugs.
+    - A senior dev reviews your PRs and catches the patterns you
+      haven't internalised yet.
+    - This is the realistic "ready to apply for React jobs" bar.
+
+
+BAR 2 — "Mid-level enterprise React engineer, fully autonomous"
+--------------------------------------------------------------------------
+  Date: End of December 2026 (~8 months from today)
+  Means:
+    - You can design features end-to-end.
+    - Make architecture decisions on small/medium components.
+    - Debug performance issues independently.
+    - Mentor juniors.
+
+
+BAR 3 — "Senior enterprise React"
+--------------------------------------------------------------------------
+  Date: 18-24 months from today
+  Means:
+    - Deep performance work.
+    - Architecture decisions for whole apps.
+    - Knowing when NOT to use React.
+    - This bar requires real production experience, not just practice
+      projects. Cannot be reached through self-study alone.
+
+
+================================================================================
+ACCELERATORS AND BLOCKERS
+================================================================================
+
+THINGS THAT COULD SPEED THIS UP (shave 1-2 months):
+--------------------------------------------------------------------------
+  - Your .NET foundation is the single biggest asset. DI, separation of
+    concerns, async, testing patterns — all transfer directly. Most
+    React beginners don't have this.
+  - Logic is solid (every challenge note confirms this). The "rust" is
+    syntax-only and shrinking visibly.
+  - Daily practice (even 30 min) is much better than weekend marathons.
+
+
+THINGS THAT COULD SLOW THIS DOWN (add 2-3 months):
+--------------------------------------------------------------------------
+  - Practice projects are not production. Real enterprise patterns
+    (error boundaries that don't crash the app, optimistic UI that
+    handles failures gracefully, accessibility, i18n) only get drilled
+    in when real users break them.
+  - TypeScript + React types together are a steep curve. Expect 1-2
+    weeks of feeling slower before it clicks.
+  - Without a real project to ship, there's no forcing function.
+    Motivation tends to dip around month 3-4 of self-study.
+
+
+================================================================================
+DIRECT RECOMMENDATION
+================================================================================
+
+Don't wait until September to look for a React role.
+
+By the end of June 2026 (after Phase 3 above), you will have enough to be
+a credible "junior React + senior .NET" candidate for a full-stack role.
+
+Get on a real project as soon as possible. Real production code teaches
+in 2 months what tutorials teach in 6.
+
+The pace you have shown in 1 month is genuinely good. Don't underestimate
+yourself, and don't overestimate "enterprise" — half the production React
+in the wild is messier than what you have already written here.
+
+
+================================================================================
+SUMMARY TABLE
+================================================================================
+
+  Phase  | What                          | Target Date            | Duration
+  -------|-------------------------------|------------------------|----------
+   1     | Rounds 11-12                  | Late May 2026          | 1-2 wks
+   2     | TypeScript                    | Mid June 2026          | 2-3 wks
+   3     | React Query                   | End of June 2026       | 1-2 wks
+   4     | Second project                | Mid August 2026        | 4-6 wks
+   5     | Testing + Lib + Next.js       | End of September 2026  | 4-6 wks
+
+  ─────────────────────────────────────────────────────────────────────────
+   BAR 1 (Junior, with mentorship)   —  End of September 2026  (~5 months)
+   BAR 2 (Mid-level, autonomous)     —  End of December 2026   (~8 months)
+   BAR 3 (Senior)                    —  18-24 months           (production
+                                                                 exp needed)
+
+
+================================================================================
+END OF ROADMAP
+================================================================================

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  INDEX.HTML — The ONE and ONLY HTML page in this entire React application.
+
+  React is a "Single Page Application" (SPA) framework. That means:
+  - There is only ONE HTML file (this one)
+  - React takes control of the <div id="root"> element
+  - React dynamically creates/updates all the content using JavaScript
+  - When you "navigate" between pages, React swaps components — no page reload!
+
+  Think of it like a TV: the TV (this HTML) stays the same,
+  but React changes the channel (components) being displayed.
+  ============================================================================
+-->
+<html lang="en">
+  <head>
+    <!-- Character encoding — UTF-8 supports all languages and special characters -->
+    <meta charset="utf-8" />
+
+    <!-- Favicon — the small icon shown in the browser tab -->
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+
+    <!-- Viewport — makes the page responsive on mobile devices -->
+    <!-- width=device-width means "use the screen's width" instead of a fixed width -->
+    <!-- initial-scale=1 means "don't zoom in or out by default" -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <!-- Theme color — affects the browser's address bar color on mobile -->
+    <meta name="theme-color" content="#000000" />
+
+    <!-- Description — shown in search engine results -->
+    <meta
+      name="description"
+      content="Employee Manager — Full-stack app built with React and .NET"
+    />
+
+    <!-- Apple touch icon — used when someone adds your site to their iPhone home screen -->
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+
+    <!--
+      PWA Manifest — metadata for "Progressive Web App" features.
+      Allows your app to be installed on phones/desktops like a native app.
+      %PUBLIC_URL% gets replaced with the actual URL during build.
+    -->
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+
+    <!-- Page title — shown in the browser tab -->
+    <title>Employee Manager</title>
+  </head>
+  <body>
+    <!--
+      If JavaScript is disabled, show this message.
+      React REQUIRES JavaScript to work — without it, nothing renders.
+    -->
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+
+    <!--
+      ★★★ THIS IS THE MOST IMPORTANT ELEMENT ★★★
+
+      This empty div is where React renders your ENTIRE application.
+
+      When index.js runs, it calls:
+        ReactDOM.createRoot(document.getElementById('root'))
+
+      This tells React: "Take over this div and render my components inside it."
+      Everything you see on screen (login form, employee table, etc.)
+      is dynamically created by React inside this div.
+
+      Before React loads, this div is completely empty.
+      After React loads, it fills with your app's UI.
+    -->
+    <div id="root"></div>
+
+    <!--
+      Note: There are NO <script> tags here!
+
+      When you run "npm start" or "npm build", React Scripts (webpack)
+      automatically injects the bundled JavaScript files into this HTML.
+
+      In development: it injects a <script> pointing to the dev server.
+      In production: it injects <script> tags pointing to minified .js files in /build.
+    -->
+  </body>
+</html>

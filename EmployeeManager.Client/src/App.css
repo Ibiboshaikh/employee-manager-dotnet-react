@@ -1,0 +1,36 @@
+/* ============================================================================
+   APP.CSS — Global CSS reset and base styles for the application.
+
+   This file is imported by App.js and provides a consistent starting point
+   by removing default browser styles that vary between Chrome, Firefox, etc.
+
+   WHY A CSS RESET?
+   Browsers have their own default styles (margins, paddings, font sizes).
+   Without a reset, your app looks different on different browsers.
+   This reset ensures consistent behavior everywhere.
+   ============================================================================ */
+
+/* UNIVERSAL RESET — applies to EVERY HTML element (the * selector) */
+* {
+  margin: 0;           /* Remove all default margins (browsers add margins to h1, p, body, etc.) */
+  padding: 0;          /* Remove all default paddings (browsers add padding to ul, ol, etc.) */
+  box-sizing: border-box;
+  /* ^^^ IMPORTANT: Makes width/height include padding and border.
+
+     Without this (default "content-box"):
+       A div with width:100px + padding:10px = 120px total (padding adds to width)
+
+     With "border-box":
+       A div with width:100px + padding:10px = 100px total (padding fits inside width)
+
+     border-box is almost always what you want. It makes layouts predictable. */
+}
+
+/* BODY STYLES — base styles for the page */
+body {
+  /* System font stack — uses the operating system's native font for fast rendering */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  background-color: #f0f2f5;  /* Light gray background — gives the app a clean look */
+  color: #333;                 /* Dark gray text — easier on the eyes than pure black */
+}

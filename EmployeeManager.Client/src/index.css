@@ -1,0 +1,36 @@
+/* ============================================================================
+   INDEX.CSS — Base-level styles loaded before anything else.
+
+   These styles set the foundation: font family and text rendering.
+   They're imported in index.js and apply to the entire <body>.
+
+   App.css (loaded later via App.js) adds more specific global styles
+   like the CSS reset (* { margin: 0; padding: 0; }).
+   ============================================================================ */
+
+/* Body styles — apply to the entire page */
+body {
+  margin: 0;   /* Remove default browser margin (browsers add 8px by default) */
+
+  /* Font stack — the browser tries each font in order, using the first one available:
+     -apple-system     → macOS/iOS system font (San Francisco)
+     BlinkMacSystemFont → Chrome on macOS
+     'Segoe UI'         → Windows system font
+     'Roboto'           → Android system font / Google Fonts
+     'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans' → Linux fonts
+     'Helvetica Neue'   → Older macOS
+     sans-serif          → Fallback: any sans-serif font available */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+
+  /* Font smoothing — makes text look crisper on macOS/Chrome */
+  -webkit-font-smoothing: antialiased;   /* Chrome, Safari, Edge */
+  -moz-osx-font-smoothing: grayscale;    /* Firefox on macOS */
+}
+
+/* Code elements — used for <code> tags (monospace/fixed-width font) */
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
