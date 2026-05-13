@@ -209,7 +209,6 @@ const EmployeeForm = () => {
   // Called when the user clicks "Create Employee" or "Update Employee".
   // Determines which API call to make based on isEditMode.
   const handleSubmit = async (e) => {
-    debugger
     // Prevent default form behavior (page reload)
     e.preventDefault();
     const errs = Validate();

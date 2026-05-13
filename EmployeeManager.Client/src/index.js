@@ -36,6 +36,8 @@ import App from './App';
 // Performance monitoring utility (optional, not critical for the app).
 // You can pass a function like console.log to measure render performance.
 import reportWebVitals from './reportWebVitals';
+import { AuthProvider } from './Context/AuthContext';
+import { RecentActivityProvider } from './Context/RecentActivityContext';
 
 // ── STEP 1: Create a React "root" ──────────────────────────────────────────
 // Find the DOM element with id="root" (from index.html)
@@ -55,7 +57,11 @@ const root = ReactDOM.createRoot(document.getElementById('root'));
 // It does NOT affect the production build at all.
 root.render(
   <React.StrictMode>
-    <App />
+    <RecentActivityProvider>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    </RecentActivityProvider>
   </React.StrictMode>
 );
 

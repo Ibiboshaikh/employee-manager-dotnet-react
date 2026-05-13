@@ -45,6 +45,7 @@ import { useNavigate } from "react-router-dom";
 // login: our API function from api.js that sends POST /api/auth/login.
 // It's imported as a named import (with curly braces) because api.js uses export const.
 import { login } from "../services/api";
+import { useAuth } from "../Context/AuthContext";
 // ^^^ "../" means "go up one directory" — from components/ to src/, then into services/
 
 // toast: a function to show popup notification messages.
@@ -77,7 +78,7 @@ const Login = () => {
   // useNavigate() returns a function that changes the URL.
   // We call navigate("/employees") to go to the employee list after login.
   const navigate = useNavigate();
-
+  const { login: loginCredentials } = useAuth();
   // ── EVENT HANDLER: Form Submission ─────────────────────────────────────
 
   // This function runs when the user submits the form (clicks "Sign In" or presses Enter).
@@ -107,28 +108,13 @@ const Login = () => {
       const response = await login({ username, password });
       // ^^^ { username, password } is JavaScript shorthand for { username: username, password: password }
 
-      // ── SAVE AUTH DATA TO LOCALSTORAGE ───────────────────────────────
-      // localStorage is a browser API that stores key-value pairs.
-      // Data persists even after closing the browser tab.
-      //
-      // We save two things:
-      // 1. "token" — the JWT string (sent with every future API request)
-      // 2. "user" — user info as JSON string (displayed in the UI)
-
-      localStorage.setItem("token", response.data.token);
-      // ^^^ Saves: "token" = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-
-      localStorage.setItem(
-        "user",
-        JSON.stringify({
-          fullName: response.data.fullName, // "System Administrator"
-          role: response.data.role,          // "Admin"
-        })
-      );
-      // ^^^ JSON.stringify converts the object to a string because
-      // localStorage can ONLY store strings (not objects).
-      // Saves: "user" = '{"fullName":"System Administrator","role":"Admin"}'
-      // Later, we read it back with: JSON.parse(localStorage.getItem("user"))
+      // ── HAND OFF TO AUTHCONTEXT ──────────────────────────────────────
+      // AuthContext's login() writes token + user to localStorage AND
+      // updates the global user state, so every component that reads
+      // useAuth() sees the new user immediately.
+      // Aliased to `loginCredentials` here because the API's `login`
+      // function (imported above) shadows the same name.
+      loginCredentials(response.data, response.data.token);
 
       // Show a green success toast popup
       toast.success(`Welcome, ${response.data.fullName}!`);

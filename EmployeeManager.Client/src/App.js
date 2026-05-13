@@ -59,7 +59,7 @@ import Login from "./components/Login";              // Login page
 import EmployeeList from "./components/EmployeeList"; // Employee dashboard
 import EmployeeForm from "./components/EmployeeForm"; // Create/Edit form
 import ProtectedRoute from "./components/ProtectedRoute"; // Auth guard
-
+import ErrorBoundary from "./components/ErrorBoundary";
 // ── THE APP COMPONENT ──────────────────────────────────────────────────────
 
 // This is a functional component — a JavaScript function that returns JSX.
@@ -69,6 +69,7 @@ function App() {
     // <Router> (BrowserRouter) enables routing for the entire app.
     // It uses the browser's URL bar to determine which component to show.
     // Everything that uses routing (Links, Routes, useNavigate) must be inside this.
+    <ErrorBoundary>
     <Router>
 
       {/* ── TOAST NOTIFICATION CONTAINER ────────────────────────────────
@@ -118,6 +119,7 @@ function App() {
         <Route path="*" element={<Navigate to="/employees" replace />} />
       </Routes>
     </Router>
+    </ErrorBoundary>
   );
 }
 

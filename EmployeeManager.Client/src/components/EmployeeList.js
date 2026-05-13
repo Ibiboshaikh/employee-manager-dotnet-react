@@ -7,7 +7,7 @@
 // This file is mostly JSX + a small amount of derived/local UI state.
 // ============================================================================
 
-import React, { useState, useEffect, Fragment } from "react";
+import React, { useState, useEffect, Fragment, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
 import EmployeeRow from './EmployeeRow';
@@ -17,11 +17,13 @@ import useSort from '../hooks/useSort';
 import useEmployeeFilter from '../hooks/useEmployeeFilter';
 import useEmployees from '../hooks/useEmployees';
 import ConfirmModal from "./ConfirmModal";
+import { useAuth } from "../Context/AuthContext";
+import RecentActivityModal from "./RecentActivityModal";
 
 const EmployeeList = () => {
   // ── HOOKS ──────────────────────────────────────────────────────────────
   // Data + delete handling
-  const { employees, loading, handleDelete, fetchedAt, confirm, onConfirm, oncancel } = useEmployees();
+  const { employees, loading, handleDelete, fetchedAt, confirm, onConfirm, onCancel } = useEmployees();
 
   // Filter values, setters, and the filtered array.
   const {
@@ -33,6 +35,8 @@ const EmployeeList = () => {
     filtered,
   } = useEmployeeFilter(employees);
 
+  const { user, logout } = useAuth();
+  
   // Current { field, order } and a toggler.
   const [sort, handleSort] = useSort('firstName');
 
@@ -40,8 +44,11 @@ const EmployeeList = () => {
   const [view, setView] = useState(0);             // FilterBar layout toggle
   const [selected, setSelected] = useState(null);  // Currently clicked row id
 
-  const [page, setPage] = useState(1);                 // For pagination (not implemented yet)
-  const pageSize = 10;                                  // Employees per page
+  const [recentActivityOpen, setRecentActivityOpen] = useState(false); // Recent Activity Modal
+
+  // Pagination state. totalPages and paginated below are derived, not state.
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
 
   // ── DERIVED VALUES (do NOT store in state) ─────────────────────────────
   // Sort runs on the filtered slice every render — cheap and always fresh.
@@ -69,26 +76,26 @@ const EmployeeList = () => {
   // Resolve the selected id back to its full employee object.
   const selectedEmployee = employees.find(e => e.id === selected);
 
-  // ── NAVIGATION + USER INFO ─────────────────────────────────────────────
+  // ── NAVIGATION ─────────────────────────────────────────────────────────
   const navigate = useNavigate();
 
-  // Logged-in user written to localStorage at login.
-  // The || "{}" fallback prevents JSON.parse from crashing when nothing is stored.
-  const user = JSON.parse(localStorage.getItem("user") || "{}");
-
-  // Debug: log how many employees survive the current filter.
+  // Reset to page 1 whenever the filter result count changes, so a filter
+  // change doesn't strand the user on an empty page (e.g. was on page 5,
+  // applied a filter that left only 12 rows = 2 pages).
   useEffect(() => {
-    console.log('Filter changed:', filtered.length, 'employees shown');
-  }, [filtered]);
-
-  useEffect(() => { setPage(1); }, [filtered.length]);
+    setPage(1);
+  }, [filtered.length]);
 
   // ── HANDLERS ───────────────────────────────────────────────────────────
   const handleLogout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
+    logout();
     navigate("/login");
   };
+
+  // Stable callbacks for memoized EmployeeRow. Without useCallback, a new
+  // function identity each render defeats React.memo on the row.
+  const onEdit = useCallback((id) => navigate(`/employees/edit/${id}`), [navigate]);
+  const onDelete = useCallback((id, name) => handleDelete(id, name), [handleDelete]);
 
   // ── RENDER ─────────────────────────────────────────────────────────────
   if (loading) return <div style={styles.loading}>Loading employees...</div>;
@@ -100,7 +107,7 @@ const EmployeeList = () => {
       <div style={styles.navbar}>
         <h2 style={styles.navTitle}>Employee Manager</h2>
         <div style={styles.navRight}>
-          <span style={styles.userName}>Hello, {user.fullName}</span>
+          <span style={styles.userName}>Hello, {user?.fullName}</span>
           <button onClick={handleLogout} style={styles.logoutBtn}>
             Logout
           </button>
@@ -181,8 +188,8 @@ const EmployeeList = () => {
                 <EmployeeRow
                   key={emp.id}
                   employee={emp}
-                  onEdit={() => navigate(`/employees/edit/${emp.id}`)}
-                  onDelete={() => handleDelete(emp.id, `${emp.firstName} ${emp.lastName}`)}
+                  onEdit={onEdit}
+                  onDelete={onDelete}
                   onSelect={setSelected}
                   selected={selected}
                 />
@@ -190,17 +197,33 @@ const EmployeeList = () => {
             </tbody>
           </table>
 
-          <button disabled={page === 1} onClick={() => setPage(p => p - 1)}>Prev</button>
-       <span> Page {page} of {totalPages} </span>
-       <button disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next</button>
+          {/* PAGINATION — Prev / Page X of Y / Next */}
+          <div style={styles.pagination}>
+            <button disabled={page === 1} onClick={() => setPage((p) => p - 1)}>
+              Prev
+            </button>
+            <span> Page {page} of {totalPages} </span>
+            <button disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+              Next
+            </button>
+          </div>
 
+          {/* Footer label for the currently selected row (clicked, not edited) */}
           <label>{selectedEmployee?.firstName}: {selectedEmployee?.salary}</label>
+
+          {/* DELETE CONFIRM MODAL — state lives in useEmployees; rendered here */}
           <ConfirmModal
-    open={confirm.open}
-    message={confirm.name}
-    onConfirm={onConfirm}
-    oncancel={oncancel}
-  />
+            open={confirm.open}
+            message={confirm.name}
+            onConfirm={onConfirm}
+            onCancel={onCancel}
+          />
+          <button onClick={() => setRecentActivityOpen(true)}>View Recent Activities</button>
+          {/* RECENT ACTIVITY MODAL — state lives in RecentActivityContext; rendered here */}
+          <RecentActivityModal
+            open={recentActivityOpen}
+            onClose={() => setRecentActivityOpen(false)}
+          />
         </Fragment>
       )}
     </div>
@@ -292,6 +315,13 @@ const styles = {
     border: "none",
     borderRadius: "4px",
     cursor: "pointer",
+  },
+
+  pagination: {
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    padding: "12px 0",
   },
 
   loading: { textAlign: "center", padding: "50px", color: "#666" },

@@ -1826,7 +1826,31 @@ React modal component.
 
 CHALLENGE 12.3 — Undo delete                               Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~6-7 min (2026-05-12) — beat target by ~28 min. Syntax
+copy-referenced from this challenge's TASK block (user's standing
+working pattern, see Logic-vs-Syntax note). Logic-solo on the
+capture-before-remove order and the Undo-button-in-toast pattern.
+
+Stuck point: tried `toast.dismiss(this.toastId)` — .NET/jQuery reflex.
+`this` is undefined inside an arrow-fn-in-a-hook. Pattern internalized:
+`const toastId = toast.success(...)` captures the ID; the onClick closure
+reads `toastId` at click time, by which point assignment has completed
+(same shape as a captured C# delegate).
+
+Cleanup pass after the implementation: added function-level comments,
+fixed mixed-indent / object-literal spacing across useEmployees +
+EmployeeList + ConfirmModal. Two real bugs surfaced during the cleanup:
+  1. Leftover `debugger` statement in ConfirmModal (would pause DevTools
+     every time the modal opened).
+  2. Prop-name mismatch — ConfirmModal destructured `oncancel`, parent
+     passed `onCancel`. Cancel button was wired to undefined and did
+     nothing. Renamed to `onCancel` and the button works.
+
+Closed remaining 12.1 polish items in the same pass:
+  - Next-button `page === totalPages` -> `page >= totalPages` (handles
+    the totalPages=0 case when filters return zero results).
+  - Selected-employee label moved above the pagination controls (was
+    sitting between pagination and the modal).
 
 After deleting an employee, give the user 5 seconds to undo it. Show a
 toast with an "Undo" button. If clicked, the employee comes back.
@@ -1859,6 +1883,1333 @@ toast with an "Undo" button. If clicked, the employee comes back.
   Toasts can contain interactive JSX. "Undo" patterns don't need complex
   state — capture what you need before removing it, pass it into the
   handler, and restore with a state update.
+
+
+================================================================================
+ROUND 13 — ADVANCED PATTERNS (designed 2026-05-12, post-Round-12)
+================================================================================
+
+Round 12 finished the vanilla React UX patterns. Round 13 covers the
+"enterprise" patterns that show up in every production React codebase:
+state machines (useReducer), cross-component state (Context), perf
+controls (memo / useCallback / useMemo), and resilience (ErrorBoundary).
+
+13.5 is intentionally different — a "no-reference" capstone to measure
+where your syntax recall actually is. Logic-solo is the bar as always;
+the question 13.5 answers is *how much* you still need to look up.
+
+
+CHALLENGE 13.1 — Replace useState with useReducer            Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME: ~5 min (2026-05-12) — beat target by 25 min. Logic-solo,
+syntax copied from spec (standing pattern). Reducer is correctly pure:
+switch on action.type, immutable returns, default case returns state.
+All 3 dispatch sites wired (handleDelete → 'open', onConfirm finally
+→ 'close', onCancel → 'close'). Pattern clicked immediately — same shape
+as a .NET state-machine where each method returns a new state.
+Caught during review: leftover `debugger` statement before the return
+(2nd occurrence — first was in ConfirmModal during 12.2). Becoming a
+pattern — needs a "ctrl+shift+F for `debugger`" reflex before done.
+Minor: quote style inconsistency between `'open'` and `"close"`.
+
+The confirm state in useEmployees has 3 fields and 2 distinct transitions
+(open / close). useState is fine but useReducer makes the transitions
+explicit and pure-functional. Same pattern that Redux / Zustand / React
+Query all build on under the hood.
+
+  TASK:
+  1. Above useEmployees (or in a separate file), define the reducer:
+
+       function confirmReducer(state, action) {
+         switch (action.type) {
+           case 'open':  return { open: true, id: action.id, name: action.name };
+           case 'close': return { open: false, id: null, name: '' };
+           default:      return state;
+         }
+       }
+
+  2. In useEmployees, replace:
+       const [confirm, setConfirm] = useState({ open: false, id: null, name: '' });
+     with:
+       const [confirm, dispatch] = useReducer(confirmReducer, { open: false, id: null, name: '' });
+
+  3. Update handleDelete:
+       dispatch({ type: 'open', id, name });
+  4. Update onConfirm finally + onCancel:
+       dispatch({ type: 'close' });
+
+  RULES:
+  - The reducer must be a PURE FUNCTION — no setState calls, no API calls,
+    no side effects. Just state in, state out.
+  - Default case returns the state unchanged. Don't throw — silent
+    fallthrough is the convention.
+
+  WHAT YOU JUST LEARNED:
+  useReducer = state machine with named transitions. Same shape as a .NET
+  state object with methods, but the methods are pure data (action objects)
+  instead of mutating functions. The reducer is independently testable.
+
+
+CHALLENGE 13.2 — Context API for auth                        Target: 45 min
+--------------------------------------------------------------------------
+YOUR TIME: ~14-15 min (2026-05-12) — beat target by ~30 min. Logic-solo
+on the AuthContext shape, Provider wrap, and useAuth narrowing. Three
+small rust points surfaced and closed inline:
+  1. `const x = useAuth(); x(args)` — treated useAuth as a function.
+     Reframe: useAuth returns the value object `{ user, login, logout }`,
+     not a function. Destructure to get the function.
+  2. `const { loginCredentials } = useAuth();` — destructured a property
+     that didn't exist (context exposes `login`, not `loginCredentials`).
+  3. Name collision in Login.js: an existing local `login` variable
+     clashed with `login` from context. Pattern learned: destructure
+     with rename — `const { login: doLogin } = useAuth();`.
+Logout crash: post-logout, `user` becomes null and EmployeeList re-renders
+once before ProtectedRoute redirects, crashing on `user.fullName`. Fixed
+with optional chaining `user?.fullName`. Pattern internalised: any value
+that can become null mid-flow needs `?.` access in the JSX.
+
+Right now, user info is scraped from localStorage in 3 different places
+(Login.js, EmployeeList.js, api.js interceptor). That's prop-drilling-by-
+localStorage. Wrap it in a Context so every component reads the same source.
+
+  TASK:
+  1. Create src/context/AuthContext.js:
+
+       import { createContext, useContext, useState } from 'react';
+
+       const AuthContext = createContext(null);
+
+       export function AuthProvider({ children }) {
+         const [user, setUser] = useState(() =>
+           JSON.parse(localStorage.getItem('user') || 'null')
+         );
+
+         const login = (userData, token) => {
+           localStorage.setItem('user', JSON.stringify(userData));
+           localStorage.setItem('token', token);
+           setUser(userData);
+         };
+
+         const logout = () => {
+           localStorage.removeItem('user');
+           localStorage.removeItem('token');
+           setUser(null);
+         };
+
+         return (
+           <AuthContext.Provider value={{ user, login, logout }}>
+             {children}
+           </AuthContext.Provider>
+         );
+       }
+
+       export const useAuth = () => useContext(AuthContext);
+
+  2. Wrap <App /> in <AuthProvider> in index.js.
+  3. In Login.js: instead of writing localStorage directly, call
+       const { login } = useAuth();
+       login(userData, token);
+  4. In EmployeeList.js: replace the localStorage.getItem("user") parse with:
+       const { user, logout } = useAuth();
+     And call logout() in handleLogout instead of clearing localStorage manually.
+
+  RULES:
+  - Lazy initializer pattern in useState (the `() => JSON.parse(...)`) — only
+    runs once on mount, not on every render. This is the same pattern from
+    useEmployeeFilter localStorage.
+  - useContext returns null if there is no Provider above it. Don't forget
+    the wrap in index.js.
+
+  WHAT YOU JUST LEARNED:
+  Context = global state without prop drilling. Maps to .NET = registering
+  a singleton service in the DI container. The pattern that grows into
+  Redux / Zustand / React Query — they all use Context underneath.
+
+
+CHALLENGE 13.3 — React.memo + useCallback                    Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME: ~20 min (2026-05-12) — beat target by 10, but the most
+friction-heavy challenge of Round 13 so far. Memo concept itself clicked
+quickly once explained; what slowed things was a cluster of small
+JS/React-structural pieces, all syntax-layer:
+
+  1. Couldn't add console.log inside the `=> (` implicit-return form —
+     JS gotcha (expression body vs block body). Reframe: `=> (` returns
+     ONE expression; for statements, use `=> { ...; return (...); }`.
+  2. Tried to declare `const onEdit = useCallback(...)` inside the JSX /
+     `.map` — React structural rule: declarations live in the component
+     body, not inside the render output.
+  3. Prop-signature mismatch: EmployeeRow passed the WHOLE `employee`
+     object to onEdit/onDelete, but the parent's useCallback signatures
+     expected `(id)` and `(id, name)`. Edit/Delete navigated to
+     `[object Object]` until fixed.
+  4. Third leftover `debugger` in 3 challenges. Pattern is real — adding
+     a "ctrl+shift+F debugger" reflex before done is the right
+     correction.
+
+Conceptual mental model captured separately in
+`Downloads/react-memo-explained.txt` after this round so the
+function-identity trap doesn't have to be re-derived. Sharpening note:
+13.3 had THREE interlocking pieces (memo wrap + useCallback at parent +
+prop signature in child) — first challenge that required getting all
+three right for the optimization to actually work. Structural complexity
+> any single previous round.
+
+EmployeeRow re-renders on EVERY parent re-render — even when typing in the
+search box (which doesn't change any row's props). On a 79-row table that's
+79 unnecessary re-renders per keystroke. Fix it with React.memo + useCallback.
+
+  TASK:
+  1. In EmployeeRow.js, add a render log at the top of the component:
+       console.log('EmployeeRow render:', employee.id);
+     Then export the component wrapped in memo:
+       import { memo } from 'react';
+       export default memo(EmployeeRow);
+
+  2. Open DevTools, type in the search box. Watch the console.
+     You'll still see every row re-render. React.memo can't see "props
+     unchanged" because `onEdit`, `onDelete`, `onSelect` are NEW functions
+     every render.
+
+  3. In EmployeeList.js, wrap the callbacks in useCallback:
+       const onEdit = useCallback((id) =>
+         navigate(`/employees/edit/${id}`), [navigate]);
+       const onDelete = useCallback((id, name) =>
+         handleDelete(id, name), [handleDelete]);
+     Pass these to EmployeeRow instead of inline arrow functions.
+
+  4. Type in the search box again. Now only rows whose `employee` actually
+     changed should re-render. (Probably none — search filters them OUT,
+     it doesn't change them.)
+
+  5. Remove the console.log after verifying.
+
+  RULES:
+  - React.memo does a shallow prop comparison. Functions and objects
+    created inline = new identity every render = memo is defeated.
+  - useCallback's dep list matters. Wrong deps = stale closure.
+
+  WHAT YOU JUST LEARNED:
+  Function identity is the silent killer of React perf. React.memo +
+  useCallback together = avoid unnecessary re-renders. Maps to .NET:
+  a new lambda is a new delegate; equality is reference, not "logical
+  sameness." Same trap, same fix.
+
+
+CHALLENGE 13.4 — Error Boundary                              Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME: ~10 min (2026-05-12) — beat target by 15. Clean class-component
+implementation: getDerivedStateFromError + componentDidCatch + handleRetry +
+conditional render. Wrapped Router in App.js. Tonal break from the rest of
+Round 13 (class instead of hooks) handled with no friction — the .NET
+class-with-lifecycle-methods mental model carried over directly.
+Minor polish: indentation drift in App.js (inner Router not nested under
+ErrorBoundary) and ErrorBoundary.render() body, no file header comment.
+
+Without an error boundary, a render-time throw in any component takes
+down the whole React tree (white screen of death). With one, you isolate
+the damage and show a fallback.
+
+This is also the one place React still requires a CLASS component —
+the hook API doesn't expose `componentDidCatch`.
+
+  TASK:
+  1. Create src/components/ErrorBoundary.js:
+
+       import { Component } from 'react';
+
+       class ErrorBoundary extends Component {
+         state = { hasError: false, error: null };
+
+         static getDerivedStateFromError(error) {
+           return { hasError: true, error };
+         }
+
+         componentDidCatch(error, info) {
+           console.error('ErrorBoundary caught:', error, info);
+         }
+
+         handleRetry = () => this.setState({ hasError: false, error: null });
+
+         render() {
+           if (this.state.hasError) {
+             return (
+               <div style={{ padding: 24 }}>
+                 <h2>Something went wrong.</h2>
+                 <p>{this.state.error?.message}</p>
+                 <button onClick={this.handleRetry}>Retry</button>
+               </div>
+             );
+           }
+           return this.props.children;
+         }
+       }
+
+       export default ErrorBoundary;
+
+  2. In App.js, wrap your <Routes> (or just the protected ones):
+       <ErrorBoundary>
+         <Routes>...</Routes>
+       </ErrorBoundary>
+
+  3. Test it. Temporarily add to EmployeeList:
+       if (employees.length > 5) throw new Error('Forced render crash');
+     Reload — you should see the fallback, NOT a white screen. Click Retry.
+     Then REMOVE the throw.
+
+  RULES:
+  - Error boundaries catch errors during RENDER, lifecycle methods, and
+    child constructors. They do NOT catch errors in event handlers,
+    async code, or server-side rendering.
+  - The class component is correctness, not stylistic preference. Hooks
+    cannot replace this yet.
+
+  WHAT YOU JUST LEARNED:
+  React error boundaries = controller-level try/catch in .NET. Same goal:
+  contain failures so they don't cascade. The retry pattern is the same
+  shape as a polly retry policy at the .NET layer.
+
+
+CHALLENGE 13.5 — No-Reference Capstone                       Target: 45 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+This is the syntax-recall test. The goal isn't to build something
+complicated — it's to find out which patterns your fingers actually
+remember and which still need a lookup.
+
+  SCOPE:
+  Build a "Recent Activity" panel that shows the last 5 delete/undo
+  events with timestamps. Display it below the table, above the modal.
+
+  WHAT TO BUILD:
+  1. A custom hook useActivityLog() that exposes:
+       - entries: array of { id, action, name, at } (cap at 5 most recent)
+       - log(action, name): pushes a new entry, drops the oldest if >5
+  2. A RecentActivity component that renders the entries list with
+     bullet styling. Empty state: "No recent activity."
+  3. Wire it: call log('delete', name) inside the toast.success block
+     in useEmployees, and log('undo', name) inside handleUndo.
+     RecentActivity goes in EmployeeList above the modal.
+
+  THE ACTUAL RULES (this is the test):
+  - DO NOT copy syntax from this challenge body. There's no syntax shown
+    above on purpose. Look only at React API docs (react.dev) if you must.
+  - You MAY look at other components in this project for layout shape —
+    but not for the hook/state pattern.
+  - When you genuinely can't recall a syntax piece, write a one-line
+    comment `// TODO: lookup syntax for X` and KEEP MOVING. Don't grind.
+  - When done, list in the YOUR TIME notes which pieces needed lookup.
+    Honest signal: that list shows where your recall actually is.
+
+  WHAT YOU'RE MEASURING:
+  - Pieces you wrote from muscle memory = ✓ internalised, no more drilling.
+  - Pieces you had to look up = ✓ still need a few more reps.
+  - Concept gaps (you genuinely don't know how to approach something) =
+    flag — that's a real learning need, not just rust.
+
+  WHAT COMES AFTER:
+  Round 13 closes here. The next round is TypeScript migration. Round
+  13.5's "lookup list" tells us what to drill once more in JS BEFORE we
+  add TS on top — TypeScript will throw you back to "need reference" for
+  every pattern; better to enter that phase with the JS muscle memory
+  already firm.
+
+
+================================================================================
+ROUND 14 — TYPESCRIPT FOUNDATIONS (designed 2026-05-12)
+================================================================================
+
+Pacing: ONE round per week. This round is intentionally gentle.
+TypeScript will reset your syntax recall to zero — that's expected, not a
+setback. Your logic and design intuition carry over completely; only the
+annotations are new. Do one challenge per day. Sit with each conversion
+before moving on. The goal isn't speed here — it's letting TS feel
+natural before Round 15 piles on more.
+
+
+CHALLENGE 14.1 — Add TypeScript to the project              Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+Install TypeScript, generate tsconfig.json, rename one file to .tsx, and
+get a clean build. The smallest possible win — but the setup is real and
+needs to work before anything else.
+
+  TASK:
+  1. cd EmployeeManager.Client
+  2. Run:
+       npm install --save-dev typescript @types/react @types/react-dom @types/node
+  3. Create tsconfig.json at the Client root with reasonable defaults:
+       {
+         "compilerOptions": {
+           "target": "ES2020",
+           "lib": ["dom", "dom.iterable", "esnext"],
+           "module": "esnext",
+           "moduleResolution": "node",
+           "jsx": "react-jsx",
+           "strict": true,
+           "esModuleInterop": true,
+           "allowSyntheticDefaultImports": true,
+           "resolveJsonModule": true,
+           "isolatedModules": true,
+           "noEmit": true,
+           "skipLibCheck": true,
+           "forceConsistentCasingInFileNames": true
+         },
+         "include": ["src"]
+       }
+  4. Rename one simple file — StatusBadge.js → StatusBadge.tsx
+  5. Run `npm start` and confirm no errors. The .tsx file will compile.
+  6. Run `npx tsc --noEmit` and confirm no type errors.
+
+  RULES:
+  - `strict: true` is non-negotiable. Loose TS is worse than no TS.
+  - Don't convert anything else yet. One file is the win.
+
+  WHAT YOU JUST LEARNED:
+  TypeScript is bolted onto a React project via tsconfig + .tsx files;
+  the bundler (webpack via CRA) reads both .js and .tsx side by side.
+  You can migrate file by file — no big-bang rewrite needed.
+
+
+CHALLENGE 14.2 — Type the domain models                     Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+Create TypeScript interfaces that match the shape of Employee and User
+returned by your .NET API. These types become the contract every component
+and hook reads from.
+
+  TASK:
+  1. Create src/types/models.ts:
+
+       export interface Employee {
+         id: number;
+         firstName: string;
+         lastName: string;
+         email: string;
+         department: string;
+         position: string;
+         phoneNumber: string;
+         salary: number;
+         dateOfJoining: string;   // ISO date string from .NET
+         isActive: boolean;
+       }
+
+       export interface User {
+         id: number;
+         username: string;
+         fullName: string;
+         role: 'Admin' | 'User';  // string literal union
+       }
+
+       export interface LoginRequest {
+         username: string;
+         password: string;
+       }
+
+       export interface LoginResponse {
+         token: string;
+         fullName: string;
+         role: User['role'];
+       }
+
+  2. Import Employee into your StatusBadge.tsx and type the prop:
+
+       interface Props { employee: Employee }
+       function StatusBadge({ employee }: Props) { ... }
+
+  RULES:
+  - Use `interface` not `type` for object shapes — extension is cleaner.
+  - String literal unions ('Admin' | 'User') beat raw strings — TS catches
+    typos.
+  - Field optionality (`?`) only when the API genuinely returns undefined.
+    Don't lie about the shape.
+
+  WHAT YOU JUST LEARNED:
+  Domain types are the foundation. Once Employee is a TS interface, every
+  component that takes one gets autocomplete and red squiggles for typos —
+  the same value props give in C#.
+
+
+CHALLENGE 14.3 — Type a leaf component                      Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+Convert EmployeeRow.js → EmployeeRow.tsx. Leaf component, only props
+to type. Best place to feel out React + TS without complexity.
+
+  TASK:
+  1. Rename EmployeeRow.js → EmployeeRow.tsx.
+  2. Define the props interface above the component:
+
+       import { Employee } from '../types/models';
+
+       interface EmployeeRowProps {
+         employee: Employee;
+         onEdit: () => void;
+         onDelete: () => void;
+         onSelect: (id: number) => void;
+         selected: number | null;
+       }
+
+       function EmployeeRow({
+         employee, onEdit, onDelete, onSelect, selected,
+       }: EmployeeRowProps) { ... }
+
+  3. Save. Watch the IDE flag any usage in EmployeeList that passes the
+     wrong shape — they'll be red until you convert EmployeeList too.
+     Ignore for now; that's the migration trail.
+
+  RULES:
+  - Don't use React.FC — it's outdated convention. Just type props directly.
+  - Function-typed callbacks: `() => void` for no-arg, `(id: number) => void`
+    for typed args. Same shape as a C# Action / Action<int>.
+  - Run `npx tsc --noEmit` after — should pass with zero errors *for this file*.
+
+  WHAT YOU JUST LEARNED:
+  Props are typed via an interface. Callback props are typed by their
+  signature. The IDE becomes a contract enforcer — saves you the
+  "passed wrong prop shape" bugs that JS lets slip silently.
+
+
+CHALLENGE 14.4 — Type a custom hook (generic intro)         Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+Convert useSort.js → useSort.ts. This is your first generic hook — it can
+sort an array of any T with a key. Same shape as a C# generic method.
+
+  TASK:
+  1. Rename useSort.js → useSort.ts.
+  2. Type the hook to be generic over the item type:
+
+       import { useState } from 'react';
+
+       type SortOrder = 'asc' | 'desc';
+
+       interface SortState<T> {
+         field: keyof T;
+         order: SortOrder;
+       }
+
+       function useSort<T>(initialField: keyof T): [SortState<T>, (field: keyof T) => void] {
+         const [sort, setSort] = useState<SortState<T>>({
+           field: initialField,
+           order: 'asc',
+         });
+
+         const handleSort = (field: keyof T) => {
+           setSort(prev =>
+             prev.field === field
+               ? { ...prev, order: prev.order === 'asc' ? 'desc' : 'asc' }
+               : { field, order: 'asc' }
+           );
+         };
+
+         return [sort, handleSort];
+       }
+
+       export default useSort;
+
+  3. In EmployeeList (still .js), the call site becomes:
+       const [sort, handleSort] = useSort<Employee>('firstName');
+     (You'll need to convert EmployeeList in a later challenge — for now
+     the .js call site uses inferred any, which still works.)
+
+  RULES:
+  - `keyof T` is the magic that makes the field name type-safe — only
+    actual properties of T are accepted.
+  - Generic constraints (`<T extends ...>`) come later. For now, plain T
+    is enough.
+  - The return tuple type `[SortState<T>, (field: keyof T) => void]` matches
+    the destructure shape at call sites.
+
+  WHAT YOU JUST LEARNED:
+  Custom hooks become generic the same way C# methods do. `<T>` declared
+  on the function, used throughout. `keyof T` is one of TypeScript's most
+  useful operators — your sort field can only be a real property of the
+  data type. Typos = compile error.
+
+
+CHALLENGE 14.5 — No-reference TS challenge                  Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+Convert FilterBar.js → FilterBar.tsx with NO reference to this challenge
+file. You may look at react.dev / typescriptlang.org / TS error messages —
+but not at the other .tsx files you've already converted.
+
+  SCOPE:
+  - Define the props interface for FilterBar based on what EmployeeList
+    passes (search, setSearch, department, etc.).
+  - Type each callback prop with the right event handler signature
+    (input change is `(e: React.ChangeEvent<HTMLInputElement>) => void`
+     or just the value: `(value: string) => void`).
+  - Type the `view`, `onClear`, `departments: string[]` correctly.
+
+  RULES:
+  - No copying from EmployeeRow.tsx or StatusBadge.tsx. Type it from
+    scratch.
+  - When you genuinely can't recall a TS syntax, write `// TODO: lookup TS`
+    and KEEP MOVING. Don't grind. Note in YOUR TIME which pieces needed
+    lookup.
+  - `npx tsc --noEmit` should pass for this file when done.
+
+  WHAT YOU'RE MEASURING:
+  After 4 TS challenges, this is your first honest TS-recall test. The
+  lookup list tells us if Round 15 should slow down or speed up.
+
+
+================================================================================
+ROUND 15 — TYPESCRIPT DEEPER (designed 2026-05-12)
+================================================================================
+
+Pacing: Still one challenge per day. This is where TS starts paying off —
+the generic hooks and discriminated unions catch real bugs the JS version
+silently shipped. Don't rush. The goal of Round 15 is "TS feels normal."
+
+
+CHALLENGE 15.1 — Type the API service                       Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+Convert api.js → api.ts. Type each function's request and response shape.
+This is where TS catches "called the wrong endpoint" / "passed wrong field"
+bugs at compile time instead of runtime.
+
+  TASK:
+  1. Rename api.js → api.ts.
+  2. Import Employee, LoginRequest, LoginResponse from '../types/models'.
+  3. Type each export. Examples:
+
+       import axios, { AxiosResponse } from 'axios';
+       import { Employee, LoginRequest, LoginResponse } from '../types/models';
+
+       const api = axios.create({ baseURL: '/api' });
+       // ... existing interceptor unchanged
+
+       export const getEmployees = (): Promise<AxiosResponse<Employee[]>> =>
+         api.get<Employee[]>('/employee');
+
+       export const getEmployee = (id: number): Promise<AxiosResponse<Employee>> =>
+         api.get<Employee>(`/employee/${id}`);
+
+       export const createEmployee = (data: Omit<Employee, 'id'>) =>
+         api.post<Employee>('/employee', data);
+
+       export const updateEmployee = (id: number, data: Omit<Employee, 'id'>) =>
+         api.put<Employee>(`/employee/${id}`, data);
+
+       export const deleteEmployee = (id: number) =>
+         api.delete(`/employee/${id}`);
+
+       export const login = (creds: LoginRequest) =>
+         api.post<LoginResponse>('/auth/login', creds);
+
+  RULES:
+  - `Omit<Employee, 'id'>` is the right shape for create — the API
+    assigns the id. Utility types like Omit / Pick / Partial / Required
+    are essential — learn these names.
+  - Axios's generic `get<T>` types the `.data` field automatically.
+
+  WHAT YOU JUST LEARNED:
+  Generics on the HTTP boundary turn axios into a typed RPC client. The
+  same idea as Refit / HttpClient.GetFromJsonAsync<T> in .NET — the type
+  is the contract.
+
+
+CHALLENGE 15.2 — Type useEmployees fully                    Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+Convert useEmployees.js → useEmployees.ts. Type the state, the reducer
+(if you did 13.1), and the return value. This is the hook that everything
+else depends on — getting its types right unlocks the rest.
+
+  TASK:
+  1. Define the action union for the confirm reducer:
+
+       type ConfirmState = { open: boolean; id: number | null; name: string };
+       type ConfirmAction =
+         | { type: 'open'; id: number; name: string }
+         | { type: 'close' };
+
+       function confirmReducer(state: ConfirmState, action: ConfirmAction): ConfirmState {
+         switch (action.type) {
+           case 'open':  return { open: true, id: action.id, name: action.name };
+           case 'close': return { open: false, id: null, name: '' };
+         }
+       }
+
+  2. Type the hook's return:
+
+       interface UseEmployeesReturn {
+         employees: Employee[];
+         loading: boolean;
+         fetchedAt: string | null;
+         confirm: ConfirmState;
+         handleDelete: (id: number, name: string) => void;
+         onConfirm: () => Promise<void>;
+         onCancel: () => void;
+       }
+
+       function useEmployees(): UseEmployeesReturn { ... }
+
+  RULES:
+  - The discriminated union (`type: 'open' | 'close'`) is the big payoff.
+    Inside each case, TS narrows the action type and `.id` / `.name` are
+    only accessible when the type allows.
+  - No `default` case in the reducer switch — TS will warn if a new action
+    type is added and you forget to handle it. That's the safety.
+
+  WHAT YOU JUST LEARNED:
+  Discriminated unions = exhaustive state machines. TS proves at compile
+  time that you handled every action. The same shape as `match`
+  expressions in F# / Rust / modern C#.
+
+
+CHALLENGE 15.3 — Type the AuthContext                       Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+Convert your AuthContext (from 13.2) to TS. Force consumers to handle
+"no provider" cases at compile time — the most common Context bug.
+
+  TASK:
+  1. Define the context value shape and create with explicit type:
+
+       import { createContext, useContext, useState, ReactNode } from 'react';
+       import { User } from '../types/models';
+
+       interface AuthContextValue {
+         user: User | null;
+         login: (user: User, token: string) => void;
+         logout: () => void;
+       }
+
+       const AuthContext = createContext<AuthContextValue | null>(null);
+
+       export function AuthProvider({ children }: { children: ReactNode }) {
+         const [user, setUser] = useState<User | null>(() =>
+           JSON.parse(localStorage.getItem('user') || 'null')
+         );
+         // ... rest unchanged
+       }
+
+  2. Make useAuth narrow the null-check away so consumers never get null:
+
+       export function useAuth(): AuthContextValue {
+         const ctx = useContext(AuthContext);
+         if (!ctx) throw new Error('useAuth must be used inside AuthProvider');
+         return ctx;
+       }
+
+  RULES:
+  - Default value of `null` (not undefined, not an empty object) — forces
+    the runtime guard.
+  - The narrowing throw is the standard pattern. Without it, every
+    consumer has to handle `ctx | null`.
+  - `ReactNode` is the correct type for `children`. Not React.FC.
+
+  WHAT YOU JUST LEARNED:
+  Context with TS forces a discipline JS lets slide — every consumer
+  must be inside a Provider, or you get an explicit runtime error
+  instead of silently broken null reads. Maps to .NET DI: a service
+  that fails to resolve throws fast, not silently.
+
+
+CHALLENGE 15.4 — Type the form (EmployeeForm)               Target: 45 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+The form is where TS truly earns its place. Event types, controlled
+inputs, errors-as-record types — all the syntax that previously felt
+fuzzy snaps into place.
+
+  TASK:
+  1. Convert EmployeeForm.js → EmployeeForm.tsx.
+  2. Type the form state:
+
+       type EmployeeFormData = Omit<Employee, 'id'>;
+       type FormErrors = Partial<Record<keyof EmployeeFormData, string>>;
+
+       const [formData, setFormData] = useState<EmployeeFormData>({ ... });
+       const [errors, setErrors] = useState<FormErrors>({});
+
+  3. Type the change handler:
+
+       const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+         const { name, value, type, checked } = e.target as HTMLInputElement;
+         setFormData(prev => ({
+           ...prev,
+           [name]: type === 'checkbox' ? checked : value,
+         }));
+       };
+
+  4. Type the submit handler:
+
+       const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+         e.preventDefault();
+         // ...
+       };
+
+  5. Type the validate function's return:
+
+       const validate = (): FormErrors => { ... };
+
+  RULES:
+  - `Partial<Record<K, V>>` is the canonical errors shape. Most fields
+    have no error most of the time.
+  - Event types vary — ChangeEvent<HTMLInputElement> ≠ ChangeEvent<HTMLSelectElement>.
+    Union them when the same handler covers both.
+  - `React.FormEvent<HTMLFormElement>` for submit. The `<HTMLFormElement>`
+    parameter lets you access form.elements with the right typing.
+
+  WHAT YOU JUST LEARNED:
+  Form types are a real skill — getting `Partial<Record<keyof T, string>>`
+  into your fingers means every TS form you ever write is faster than
+  the last. Maps to the .NET ModelState validation pattern, but
+  type-checked.
+
+
+CHALLENGE 15.5 — Capstone: finish the migration             Target: 45 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+Convert the remaining .js files to .ts/.tsx so the entire client is TS.
+Files: App.tsx, EmployeeList.tsx, Login.tsx, ProtectedRoute.tsx,
+ConfirmModal.tsx, useEmployeeFilter.ts, ErrorBoundary.tsx (from 13.4),
+index.tsx, reportWebVitals.ts (or delete it — CRA cruft).
+
+  TASK:
+  - Walk each file. Rename. Add types. Resolve red squiggles.
+  - When the project compiles cleanly with `npx tsc --noEmit`, you're done.
+
+  RULES:
+  - Don't disable `strict` to make a stubborn file compile. Find the
+    real type.
+  - `any` is a last resort and a flag — note every `any` you wrote in
+    YOUR TIME so we can revisit them. Each `any` is a future bug.
+  - If a third-party library has no types, install @types/that-lib.
+
+  WHAT YOU JUST LEARNED:
+  Full-project TS is what enterprise codebases look like. You will
+  have lookup-cycles for several patterns; the lookup list from 14.5
+  and this challenge together = your real TS recall snapshot.
+
+
+================================================================================
+ROUND 16 — REACT QUERY / SERVER STATE (designed 2026-05-12)
+================================================================================
+
+Pacing: One challenge per day. React Query has its own vocabulary
+(queryKey, queryFn, isStale, isFetching, optimistic updates). Each
+challenge focuses on one concept. Don't pile them.
+
+The mental shift: your useEffect-fetch pattern was "imperatively fetch
+data on mount." React Query is "declare what data you need; the library
+fetches, caches, refetches, and invalidates." Same shape as caching
+attributes / response caching in .NET — but client-side.
+
+
+CHALLENGE 16.1 — Install TanStack Query + setup             Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. npm install @tanstack/react-query @tanstack/react-query-devtools
+  2. In src/index.tsx, wrap <App /> in a QueryClientProvider:
+
+       import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+       import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+
+       const queryClient = new QueryClient({
+         defaultOptions: {
+           queries: { staleTime: 30_000, refetchOnWindowFocus: false },
+         },
+       });
+
+       root.render(
+         <QueryClientProvider client={queryClient}>
+           <AuthProvider>
+             <App />
+           </AuthProvider>
+           <ReactQueryDevtools />
+         </QueryClientProvider>
+       );
+
+  RULES:
+  - QueryClient is created ONCE, top-level. Never inside a component
+    (would reset cache on every render).
+  - staleTime defaults to 0 — leave at default unless you understand the
+    trade-off. 30s is a reasonable starting point.
+  - Devtools is dev-only by default. Leave it on.
+
+  WHAT YOU JUST LEARNED:
+  React Query is the cache. QueryClientProvider is the cache scope.
+  Same mental model as IMemoryCache in .NET, but with deduplication,
+  staleness, and refetching baked in.
+
+
+CHALLENGE 16.2 — Convert useEmployees to useQuery           Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+Replace the useEffect-based fetch in useEmployees with useQuery. The
+hook becomes shorter and more capable in one stroke.
+
+  TASK:
+  1. Inside useEmployees, replace the state + useEffect block with:
+
+       import { useQuery } from '@tanstack/react-query';
+
+       const employeesQuery = useQuery({
+         queryKey: ['employees'],
+         queryFn: async () => (await getEmployees()).data,
+       });
+
+       const employees = employeesQuery.data ?? [];
+       const loading = employeesQuery.isLoading;
+       const fetchedAt = employeesQuery.dataUpdatedAt
+         ? new Date(employeesQuery.dataUpdatedAt).toLocaleTimeString()
+         : null;
+
+  2. Delete the manual useState<Employee[]>, useState(loading=true),
+     fetchedAt state, and the useEffect that called fetchEmployees().
+
+  RULES:
+  - queryKey is a unique identifier. Array form is convention.
+  - The data is undefined while loading — always default with `?? []`.
+  - Don't add a useEffect for fetch — React Query handles that.
+
+  WHAT YOU JUST LEARNED:
+  useQuery replaces 80% of your data-fetching code with one hook. The
+  cache shares state across components — two components calling
+  useQuery(['employees']) get the same data without prop drilling.
+
+
+CHALLENGE 16.3 — Convert delete to useMutation              Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+useMutation is the write-side counterpart. For delete, we add optimistic
+update — remove the row locally before the server confirms, restore on error.
+
+  TASK:
+  1. Inside useEmployees, add:
+
+       import { useMutation, useQueryClient } from '@tanstack/react-query';
+
+       const queryClient = useQueryClient();
+
+       const deleteMutation = useMutation({
+         mutationFn: (id: number) => deleteEmployee(id),
+         onMutate: async (id) => {
+           await queryClient.cancelQueries({ queryKey: ['employees'] });
+           const prev = queryClient.getQueryData<Employee[]>(['employees']);
+           queryClient.setQueryData<Employee[]>(['employees'], old =>
+             old?.filter(e => e.id !== id) ?? []
+           );
+           return { prev };
+         },
+         onError: (_err, _id, context) => {
+           if (context?.prev) queryClient.setQueryData(['employees'], context.prev);
+           toast.error('Failed to delete employee');
+         },
+         onSettled: () => queryClient.invalidateQueries({ queryKey: ['employees'] }),
+       });
+
+  2. onConfirm becomes:
+       const deletedEmployee = employees.find(e => e.id === confirm.id);
+       deleteMutation.mutate(confirm.id);
+       // show toast as before (sync — fires immediately)
+
+  RULES:
+  - onMutate runs BEFORE the mutation fires — that's where optimistic
+    updates go. It returns a context object (here `{ prev }`) that's
+    passed to onError for rollback.
+  - cancelQueries prevents an in-flight refetch from overwriting the
+    optimistic update.
+  - invalidateQueries in onSettled forces a refetch — server is truth.
+
+  WHAT YOU JUST LEARNED:
+  Optimistic UI with rollback. The shape: optimistic write → mutate →
+  on error, restore previous → on settled, sync with server. This is
+  the gold-standard write pattern in modern React.
+
+
+CHALLENGE 16.4 — Create + Edit mutations                    Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Add useCreateEmployee and useUpdateEmployee mutations (in useEmployees
+     or a new file useEmployeeMutations.ts).
+  2. In EmployeeForm, replace the manual try/catch + state updates with
+     these mutations.
+  3. Use mutation.isPending to disable the submit button while in-flight
+     (replaces your isSubmitting useState).
+  4. On success, invalidate ['employees'] and navigate back to /employees.
+
+  RULES:
+  - Don't optimistically update on create — you don't know the server-
+    assigned id until the response. Optimistic update for create is an
+    advanced pattern, skip it here.
+  - For edit, optimistic update IS worth doing — the data already exists,
+    just patch the cached entry.
+
+  WHAT YOU JUST LEARNED:
+  All your fetch+useState+useEffect+isSubmitting code collapses into
+  declarative useQuery / useMutation. Component code becomes purely
+  about UI, not data plumbing.
+
+
+CHALLENGE 16.5 — No-reference capstone: new resource        Target: 45 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+Add a new resource end-to-end with no syntax reference: a Departments
+list that fetches /api/departments (you'll need to add the endpoint
+to the .NET API too — or stub it client-side).
+
+  SCOPE:
+  - Add API client function (api.ts).
+  - Add useDepartments() hook using useQuery.
+  - Add a DepartmentList component that renders the list.
+  - Show it somewhere accessible (a sidebar, or a new route /departments).
+
+  RULES:
+  - No copying from the existing useEmployees code.
+  - You may look at TanStack Query docs and TS docs.
+  - Note in YOUR TIME which pieces needed lookup — same measurement as
+    13.5 / 14.5.
+
+  WHAT YOU JUST LEARNED:
+  After 5 React Query challenges, this proves you can spin up a new
+  cached resource from scratch — the exact "I can ship a feature"
+  test for a junior React engineer.
+
+
+================================================================================
+ROUND 17 — TESTING & QUALITY (designed 2026-05-12)
+================================================================================
+
+Pacing: One challenge per day. .NET unit testing concepts transfer; the
+new layer is React Testing Library's "query by role / accessible name"
+philosophy and async test patterns.
+
+Testing is not optional at enterprise. Every PR has tests; every refactor
+relies on them. The bar for "comfortable" includes writing tests
+unprompted.
+
+
+CHALLENGE 17.1 — Vitest + RTL setup                         Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. CRA already ships with Jest + RTL, but Vitest is faster and is the
+     modern default. Install:
+       npm install -D vitest @testing-library/react @testing-library/jest-dom
+                     @testing-library/user-event jsdom
+  2. Add to package.json scripts: `"test": "vitest"`.
+  3. Create vitest.config.ts with jsdom environment and a setup file
+     that imports @testing-library/jest-dom.
+  4. Write one trivial test:
+
+       import { render, screen } from '@testing-library/react';
+       import StatusBadge from '../components/StatusBadge';
+
+       test('renders Active badge for isActive=true', () => {
+         render(<StatusBadge employee={{ ...mockEmployee, isActive: true }} />);
+         expect(screen.getByText(/active/i)).toBeInTheDocument();
+       });
+
+  5. Run `npm test`. Confirm green.
+
+  RULES:
+  - getByRole > getByText > getByTestId. Prefer queries that mirror
+    how users find things.
+  - One assertion per test where reasonable. Keep tests readable.
+
+  WHAT YOU JUST LEARNED:
+  Vitest = faster Jest. The runner is incidental — RTL's query
+  philosophy is the actual skill.
+
+
+CHALLENGE 17.2 — Test a leaf component                      Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Write 3 tests for EmployeeRow:
+       - renders the employee name
+       - calls onEdit when Edit clicked
+       - calls onDelete when Delete clicked
+  2. Use userEvent for clicks (more realistic than fireEvent):
+
+       import userEvent from '@testing-library/user-event';
+
+       test('calls onDelete when Delete button clicked', async () => {
+         const onDelete = vi.fn();
+         render(<EmployeeRow ... onDelete={onDelete} />);
+         await userEvent.click(screen.getByRole('button', { name: /delete/i }));
+         expect(onDelete).toHaveBeenCalledOnce();
+       });
+
+  RULES:
+  - vi.fn() = mock function (like Jest's jest.fn()).
+  - userEvent is async — always await.
+  - Don't test implementation details (state names, internal functions) —
+    test what the user sees and does.
+
+  WHAT YOU JUST LEARNED:
+  Component tests describe user-visible behavior. Refactoring the
+  internals shouldn't break the test — that's the discipline.
+
+
+CHALLENGE 17.3 — Test a custom hook                         Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Test useSort:
+
+       import { renderHook, act } from '@testing-library/react';
+       import useSort from '../hooks/useSort';
+
+       test('toggles order when same field is clicked twice', () => {
+         const { result } = renderHook(() => useSort<Employee>('firstName'));
+         expect(result.current[0].order).toBe('asc');
+         act(() => { result.current[1]('firstName'); });
+         expect(result.current[0].order).toBe('desc');
+       });
+
+  2. Test useEmployeeFilter — but it depends on data. Pass a mock array
+     directly to the hook.
+
+  RULES:
+  - act() wraps state-changing calls. Without it, you get a console
+    warning.
+  - For hooks that depend on Context / QueryClient, you need to provide
+    a `wrapper` option to renderHook.
+
+  WHAT YOU JUST LEARNED:
+  Custom hooks are testable in isolation — renderHook treats the hook
+  like a tiny component. The state machine of the hook becomes the
+  test surface.
+
+
+CHALLENGE 17.4 — Test a form                                Target: 45 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Test EmployeeForm validation:
+       - shows error when firstName is empty
+       - shows error when email is invalid
+       - calls submit handler with the form data on valid submit
+  2. Use userEvent.type for typing into inputs:
+
+       await userEvent.type(screen.getByLabelText(/first name/i), 'Alice');
+       await userEvent.click(screen.getByRole('button', { name: /save/i }));
+       expect(submitMock).toHaveBeenCalledWith(expect.objectContaining({ firstName: 'Alice' }));
+
+  RULES:
+  - getByLabelText for inputs — same as a screen reader would find them.
+  - findByText is async (waits for it to appear). Use it for things
+    that render after a state change.
+
+  WHAT YOU JUST LEARNED:
+  Forms are the highest-value test target. Validation logic + happy-path
+  submit covered = most form regressions caught.
+
+
+CHALLENGE 17.5 — Mock API + integration test                Target: 45 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Mock the api module:
+
+       vi.mock('../services/api', () => ({
+         getEmployees: vi.fn(() => Promise.resolve({ data: [mockEmployee] })),
+         deleteEmployee: vi.fn(() => Promise.resolve()),
+       }));
+
+  2. Render <EmployeeList /> inside a QueryClientProvider with a fresh
+     QueryClient per test.
+  3. Wait for the row to appear, click Delete, click Yes-Delete,
+     assert the row is gone.
+
+  RULES:
+  - Fresh QueryClient per test prevents cross-test cache leaks.
+  - Use findBy* (async waits) for elements that appear after a fetch.
+  - Mock at the module boundary (services/api), not the network layer
+    yet — msw is the next level but unnecessary here.
+
+  WHAT YOU JUST LEARNED:
+  Integration test = render a slice, mock the edges, assert behavior.
+  The shape catches more real bugs than unit tests of small functions.
+
+
+================================================================================
+ROUND 18 — CAPSTONE & POLISH (designed 2026-05-12)
+================================================================================
+
+Pacing: This is the round that measures "comfortable." Each challenge
+adds a piece that enterprise apps have but practice apps usually don't.
+By the end, you have a full-stack project that holds up to a senior
+React engineer's review.
+
+Take this round at your own speed — there's no "next round" pressure.
+
+
+CHALLENGE 18.1 — Code splitting (React.lazy + Suspense)     Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. In App.tsx, lazy-load each route component:
+
+       import { lazy, Suspense } from 'react';
+       const Login = lazy(() => import('./components/Login'));
+       const EmployeeList = lazy(() => import('./components/EmployeeList'));
+       const EmployeeForm = lazy(() => import('./components/EmployeeForm'));
+
+  2. Wrap <Routes> in <Suspense fallback={<div>Loading...</div>}>.
+  3. Open DevTools Network tab. Reload. Confirm separate JS chunks
+     load per route.
+
+  RULES:
+  - lazy() returns a Component. The fallback shows during the chunk
+    download.
+  - ErrorBoundary should still wrap Suspense — chunk loads can fail.
+
+  WHAT YOU JUST LEARNED:
+  Code splitting = ship less JS up front. The pattern is one line per
+  route — but the bundle size win is real, especially as your app grows.
+
+
+CHALLENGE 18.2 — Accessibility pass                         Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Install jsx-a11y eslint plugin and enable a baseline ruleset.
+     Fix any errors it surfaces (missing alt, button vs div, etc.).
+  2. Modal accessibility:
+       - aria-modal="true", role="dialog", aria-labelledby
+       - Trap focus inside when open; restore focus on close
+       - Esc to close
+  3. Keyboard navigation: every row's action should be tab-reachable.
+  4. Run Lighthouse audit (DevTools → Lighthouse → Accessibility).
+     Aim for 95+.
+
+  RULES:
+  - Don't over-engineer focus trap from scratch — use react-focus-lock or
+    similar if you want, or write a simple one.
+  - Skip the screen-reader-only-text patterns until you've hit the basics.
+
+  WHAT YOU JUST LEARNED:
+  Accessibility is mostly small, mechanical wins (use the right element,
+  add aria-label, ensure keyboard nav). Enterprise apps fail audits
+  because nobody runs them — running one once teaches the patterns.
+
+
+CHALLENGE 18.3 — Feature flag pattern                       Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Add an env var: REACT_APP_FEATURE_RECENT_ACTIVITY=true in .env.local.
+  2. Create a tiny useFeatureFlag hook:
+
+       export function useFeatureFlag(name: string): boolean {
+         return process.env[`REACT_APP_FEATURE_${name.toUpperCase()}`] === 'true';
+       }
+
+  3. Gate one component (e.g. the RecentActivity from 13.5):
+
+       const showActivity = useFeatureFlag('recent_activity');
+       return <>{showActivity && <RecentActivity />}...</>;
+
+  4. Toggle the env var and reload. Confirm the component appears/disappears.
+
+  RULES:
+  - Env vars in CRA must start with REACT_APP_. They're inlined at build
+    time — not runtime.
+  - Production-grade flags use LaunchDarkly / GrowthBook / similar.
+    This is the pattern, not the production tool.
+
+  WHAT YOU JUST LEARNED:
+  Feature flags are how production teams ship in progress. Same shape
+  as the .NET feature toggles you've already worked with (Microsoft.
+  FeatureManagement) but client-side.
+
+
+CHALLENGE 18.4 — Performance pass with Profiler             Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Open React DevTools → Profiler tab → Start recording.
+  2. Type a few characters in the search box. Stop recording.
+  3. Inspect the flame graph. Identify which components re-rendered
+     and how long each took.
+  4. Find ONE component re-rendering unnecessarily. Fix it with
+     memo / useCallback / useMemo as appropriate.
+  5. Re-record and confirm the fix.
+
+  RULES:
+  - Profile in dev mode is slower than prod — interpret numbers as
+    relative, not absolute.
+  - Don't optimize speculatively. Profile, fix the worst offender, profile again.
+
+  WHAT YOU JUST LEARNED:
+  Perf work is measurement-driven. Same discipline as .NET BenchmarkDotNet
+  / dotTrace — don't guess, measure.
+
+
+CHALLENGE 18.5 — Capstone: build a new feature end-to-end   Target: 60 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+The "are you comfortable?" test. Build one full feature from scratch,
+end to end, using every pattern you've learned.
+
+  FEATURE SUGGESTION: AUDIT LOG
+  - Backend: new endpoint GET /api/audit/employee/{id} returning a list
+    of { id, action, at } entries for that employee. Stub data is fine —
+    no need to persist.
+  - Domain: AuditEntry interface in models.ts.
+  - Application: AuditService and IAuditService.
+  - Infrastructure: AuditRepository (stub returns fixed data).
+  - API: AuditController.
+  - Client: useAuditLog(employeeId) hook using useQuery, AuditLog
+    component, route /employees/:id/audit, link from EmployeeRow.
+  - Tests: at least one for the component, one for the hook.
+  - Types end-to-end. ErrorBoundary wrap. Accessibility checked.
+
+  RULES:
+  - No reference to other features in this codebase. Build from scratch.
+  - Spec says "audit log" but the FEATURE is yours to design. Pick the
+    shape, the columns, the layout. Senior bar: design, then implement.
+  - Note in YOUR TIME which pieces still needed lookup. After Round 18,
+    that list should be shorter than after 13.5.
+
+  WHAT THIS PROVES:
+  You can ship a vertical slice through 4 .NET projects + a React app,
+  with types, server state, accessibility, and tests. That's the
+  "junior + .NET senior, can be productive on a real team" bar.
+
+  After 18.5:
+  - You've done it. Round 19+ is your call: more features, Next.js
+    migration, real component library, or apply for full-stack roles.
+    Memory entry for the next session: "Round 18 done — comfortable bar
+    reached. Ask user what they want next."
 
 
 ================================================================================
@@ -1910,13 +3261,49 @@ Fill this in as you complete each challenge:
   11.1       | 20 min  | 8 min     | Beat target by 12 min. Logic understood solo; took syntax reference from CHALLENGES.md skeleton and EmployeeList.js. Mental model after: "custom hook = importable JS module." Sharpened to: factory that gives each calling component its own state instance (not a shared utility).
   11.2       | 25 min  | 5 min     | Beat target by 20 min. Excludes side discussion on naming/hook semantics. Copy-pasted filter chain from EmployeeList.js (logic-solo, syntax-referenced). Two senior-level instincts on this challenge: (1) questioned generic hook name → renamed to useEmployeeFilter; (2) moved localStorage useEffect AND lazy initializer into the hook without reading the suggestion (chose option B over recommended option A). Both decisions are architecturally cleaner — feature ownership over minimal scope. Self-articulated: "I know what to do if I understand the question; only syntax has rust." Healthy stage.
   11.3       | 20 min  | ~13 min   | Beat target by ~7 min. Logic-solo, syntax-referenced. Two senior-instinct deviations from spec (dropped setEmployees and fetchEmployees from return — both YAGNI-clean). Surfaced function-identity / useEffect dep gotcha — full explanation given, .NET delegate analogy clicked. Final pass: requested cleanup of unused code and comments across both files.
-  12.1       | 30 min  | ~8 min    | Beat target by ~22 min. Syntax copy-pasted from spec; logic understood solo. Caught spec gap: reset useEffect deps `[search, department, hideBelow50K]` missed minSalary/maxSalary. Refactored to `[filtered.length]` — cleaner, future-filter-safe. 3 minor polish items open (stale comment, totalPages=0 edge case, control placement).
+  12.1       | 30 min  | ~8 min    | Beat target by ~22 min. Syntax copy-pasted from spec; logic understood solo. Caught spec gap: reset useEffect deps `[search, department, hideBelow50K]` missed minSalary/maxSalary. Refactored to `[filtered.length]` — cleaner, future-filter-safe. 3 minor polish items open at the time (stale comment, totalPages=0 edge case, control placement) — all closed during the 12.3 cleanup pass.
   12.2       | 35 min  | ~22 min   | Beat target by ~13 min. Logic-solo: state shape `{open, id, name}` spec-exact, two-step delete (set confirm → onConfirm reads state), picked option B (handlers in hook, render in parent — same feature-ownership instinct as 11.2). Stuck point: tried to render `<ConfirmModal>` inside the hook body — revealed one concept gap (hooks return data, components render JSX). Clicked instantly after explanation. Minor: `onConfirm(id)` took id as param before seeing the wire-up. Lost time to "use Bootstrap" instinct when modal rendered unstyled — root cause was a pre-existing missing `import './App.css'` in App.js, not user's bug. Sharpening note: when stuck, ask "whose responsibility — hook (state/logic) or component (rendering)?"
-  12.3       | 35 min  |           |
+  12.3       | 35 min  | ~6-7 min  | Beat target by ~28 min. Syntax copy-referenced from this challenge's TASK block (user's standing pattern — copies syntax from CHALLENGES.md for most challenges, logic remains solo). Logic-solo on capture-before-remove order and Undo button-in-toast. Stuck point: `toast.dismiss(this.toastId)` — .NET/jQuery reflex; `this` is undefined in arrow-fn-inside-hook. Pattern internalised: `const toastId = toast.success(...)` captures the ID; closure reads it at click time (same shape as captured C# delegate). Cleanup pass: added comments + fixed mixed-indent / object-literal spacing across useEmployees, EmployeeList, ConfirmModal. Caught two real bugs during cleanup: (1) leftover `debugger` in ConfirmModal, (2) `oncancel` vs `onCancel` prop mismatch broke Cancel button. Closed all 3 open 12.1 items in the same pass.
+  13.1       | 30 min  | ~5 min    | Beat target by 25 min. Pure reducer, switch + default, 3 dispatch sites wired. Pattern (state machine) clicked immediately. Caught: 2nd leftover `debugger` statement in 2 challenges — needs to become a CR reflex.
+  13.2       | 45 min  | ~14-15 min| Beat target by ~30 min. Context + Provider + useAuth wired clean. Three syntax/API rust points (treating useAuth as fn, wrong destructure name, name-collision → destructure-rename). Logout crash on null user → fixed with optional chaining in EmployeeList.
+  13.3       | 30 min  | ~20 min   | Beat target by 10, but the most friction-heavy of Round 13. Memo concept clicked; 4 syntax/structural pieces slowed things (implicit-return body vs expression, decl placement inside JSX, prop signature id-vs-object, 3rd `debugger`). Captured mental model in Downloads/react-memo-explained.txt. First challenge requiring 3 interlocking pieces to align (memo + useCallback + child prop usage).
+  13.4       | 25 min  | ~10 min   | Beat target by 15. Clean class-component impl (getDerivedStateFromError, componentDidCatch, handleRetry). Class-with-lifecycle mental model from .NET carried over with zero friction. Minor indent polish opportunities.
+  13.5       | 45 min  |           |  (No-reference capstone)
+  14.1       | 30 min  |           |  TypeScript: install + tsconfig
+  14.2       | 25 min  |           |  TypeScript: domain models
+  14.3       | 30 min  |           |  TypeScript: leaf component
+  14.4       | 35 min  |           |  TypeScript: generic hook
+  14.5       | 40 min  |           |  TypeScript: no-ref capstone
+  15.1       | 30 min  |           |  TypeScript: API service
+  15.2       | 40 min  |           |  TypeScript: useEmployees + discriminated unions
+  15.3       | 35 min  |           |  TypeScript: AuthContext
+  15.4       | 45 min  |           |  TypeScript: form types
+  15.5       | 45 min  |           |  TypeScript: full migration capstone
+  16.1       | 20 min  |           |  React Query: install + setup
+  16.2       | 35 min  |           |  React Query: useQuery
+  16.3       | 40 min  |           |  React Query: useMutation + optimistic delete
+  16.4       | 40 min  |           |  React Query: create + edit mutations
+  16.5       | 45 min  |           |  React Query: no-ref capstone (new resource)
+  17.1       | 25 min  |           |  Testing: Vitest + RTL setup
+  17.2       | 35 min  |           |  Testing: leaf component
+  17.3       | 35 min  |           |  Testing: custom hook
+  17.4       | 45 min  |           |  Testing: form
+  17.5       | 45 min  |           |  Testing: integration + mocked API
+  18.1       | 30 min  |           |  Capstone: code splitting
+  18.2       | 35 min  |           |  Capstone: accessibility
+  18.3       | 30 min  |           |  Capstone: feature flag
+  18.4       | 35 min  |           |  Capstone: Profiler perf pass
+  18.5       | 60 min  |           |  Capstone: full feature end-to-end (the "comfortable" test)
 
-  Total target time: ~10h (Rounds 1–7: ~5h | Round 8: 45m | Round 9: 35m |
-                           Round 10: 50m | Round 11: 65m | Round 12: 100m)
-  Your total time:   ~4h 30m through 12.2 (vs. ~9h 25m target for the same scope — ~52% under)
+  Total target time: ~28h (Rounds 1–12: ~10h | Round 13: ~3h |
+                           Round 14: ~2h 40m | Round 15: ~3h 15m |
+                           Round 16: ~3h     | Round 17: ~3h 5m |
+                           Round 18: ~3h 10m)
+  Your total time:   ~4h 37m through 12.3 (vs. ~10h target for the same scope — ~54% under).
+                     Round 12 complete; Rounds 13–18 designed (2026-05-12).
+                     Path: Round 13 (advanced JS React) → Rounds 14-15 (TypeScript) →
+                           Round 16 (React Query) → Round 17 (Testing) → Round 18 (Capstone).
+                     Pacing: ~1 round per week. Round 18 = the "comfortable" bar.
 
 After you finish all challenges, you will understand:
   - How .NET Clean Architecture works (layers, DI, interfaces)
