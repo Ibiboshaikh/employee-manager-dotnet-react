@@ -2172,7 +2172,89 @@ the hook API doesn't expose `componentDidCatch`.
 
 CHALLENGE 13.5 — No-Reference Capstone                       Target: 45 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~75 min (2026-05-13) — over target by ~30 min.
+
+[Claude — opener]: This was the right test of integration. Context +
+custom hook + Modal + EmployeeList wiring all designed solo, in plain
+English over Q&A, BEFORE writing a line of code. Architectural
+decisions were senior-tier. The 30-min overrun was syntax-recall and a
+try/catch logic gap — not unclear thinking.
+
+What was built (self-designed, no spec; broader scope than the
+original 13.5 brief — added cross-page state and a modal viewer):
+  - RecentActivityContext.js — Context + Provider holding the activity
+    list, mirrored on the AuthContext pattern user already had.
+  - useRecentActivity custom hook — ergonomic accessor over the
+    Context, exposes addActivity + the entries list.
+  - RecentActivityModal.js — modal showing the last 5 entries, receives
+    list + onClose as props.
+  - EmployeeList wiring — useState boolean for modal visibility, "View
+    Recent Activities" button toggles it, conditional render mirroring
+    ConfirmModal's shape.
+  - addActivity wired into useEmployees on both delete and undo paths
+    (cap-at-5 by dropping the oldest).
+
+Logic decisions made solo before code (all correct on first pass):
+  - Context for shared state (not prop-drilling — matched auth pattern).
+  - Modal visibility state in EmployeeList, NOT in the hook. Diagnostic
+    "whose responsibility — hook or component?" applied correctly: hook
+    returns data, component owns UI state.
+  - Custom hook wraps Context (same shape a useAuth would have).
+  - Files named recentActivityContext, useRecentActivity,
+    RecentActivityModal — picked solo, confirmed before writing.
+
+Stuck point 1 — inline onClick syntax: user found the ConfirmModal
+mirror in the same file but couldn't reconstruct the
+`onClick={() => setX(true)}` line from memory. Claude provided the one
+line. Real diagnosis: VS Code autocomplete had been silently filling
+the syntax-scaffolding role that the CHALLENGES.md TASK block plays in
+formal challenges — when AC didn't carry this specific spot, recall hit
+zero. Documented in the autocomplete-dependency memory.
+
+Stuck point 2 — undo was a soft undo: refresh wiped the restored row
+because handleUndo only updated React state, never re-created the
+employee on the server. User added a POST /api/employee call. First
+try/catch attempt placed the success-path (setEmployees + "Delete
+undone" toast + addActivity) inside `finally` — which always runs.
+Net effect would have been: on failure, error toast fires AND success
+toast fires AND row reappears in UI AND activity log records success.
+Concept reinforced (same as .NET): `finally` is for cleanup that must
+run regardless of outcome; the success path goes in `try` after the
+`await`. Fixed on second pass.
+
+Backend ID-mismatch bug surfaced during review: EmployeeRepository
+.CreateAsync overwrites the incoming Id with Guid.NewGuid(), so after
+undo the server holds the employee under a NEW id while local state
+still has the OLD id. Subsequent delete/edit on the undone row would
+target a non-existent server id → 404. User noted and deferred the
+fix to a backend-focused pass (will likely add an "if Id provided,
+honor it" branch in CreateAsync).
+
+Cleanup pass (same session):
+  - Removed 5th leftover `debugger` statement. Habit watch is now a
+    confirmed pattern, not a one-off.
+  - Removed dead `const employeeData = { ...employee }` shallow copy
+    (passed straight to createEmployee, never modified).
+  - Combined two `from "../services/api"` imports into one line.
+  - Updated stale comment "No API call — purely client-side" — the
+    function does call the API now.
+  - Fixed indentation drift in handleUndo (6-space inside try,
+    `} catch (error) {` same-line to match the rest of the file,
+    removed empty `finally {}` block).
+
+User's own reflection mid-session: *"syntax rust is fine but I am
+happy that I am logically improving in react.js"*. Later endorsed as
+long-term strategy: *"I think I am bad in raw syntax recall from very
+long, currently the focus should be on understanding react not
+syntax."*
+
+[Claude — closer]: Counting this as 13.5 done. Logic and architecture
+were the wins; raw recall stalled in two predictable spots. AC-off
+capstone idea retracted — would test the wrong thing. Round 13 is
+fully closed. Real signal forward: in Rounds 14–18, time-over-target
+on pure syntax-stall is expected and acceptable; the bar is whether
+architectural decisions land correctly *before* writing code. They
+did here.
 
 This is the syntax-recall test. The goal isn't to build something
 complicated — it's to find out which patterns your fingers actually
@@ -2230,7 +2312,38 @@ natural before Round 15 piles on more.
 
 CHALLENGE 14.1 — Add TypeScript to the project              Target: 30 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~24 min (done 2026-05-13). Beat target by 6 min.
+
+  [Claude — notes]:
+  Setup landed clean, but with one real-world snag worth recording.
+
+  CRA peer-dep conflict: `npm install --save-dev typescript` pulled
+  typescript@6.0.3 (latest), but `react-scripts@5.0.1` declares a peer
+  dep of `typescript@"^3.2.1 || ^4"`. Install failed with ERESOLVE.
+  Fix: pinned `typescript@4.9.5` (last v4 release, fully compatible
+  with CRA 5). Reasonable because CRA is in maintenance — chasing the
+  latest TS would require ejecting or migrating to Vite, neither of
+  which fits this round.
+
+  `npm audit fix` ran into the same conflict and was skipped. The 31
+  CRA-stack vulns are background noise for a learning repo (no prod
+  exposure, no secrets in deps) — accepted, not ignored.
+
+  tsconfig.json created at Client root with the canonical settings
+  from the spec block above. `strict: true` is on. `isolatedModules`
+  is on (required because CRA's babel transpiler can't see across
+  files — every .ts/.tsx must be a valid module on its own, hence the
+  `export {}` trick when a file has nothing else to export).
+  `jsx: "react-jsx"` is the new (React 17+) transform — no need for
+  `import React from 'react'` at the top of every component.
+
+  StatusBadge.js → StatusBadge.tsx rename verified — `npm start`
+  compiled clean, `npx tsc --noEmit` reported zero errors.
+
+  Pattern internalised: TypeScript bolts onto a CRA project without a
+  big-bang rewrite. .js and .tsx coexist; the bundler reads both. File-
+  by-file migration is the right move, and the order should be leaves
+  first (StatusBadge) → hooks → containers → entry points.
 
 Install TypeScript, generate tsconfig.json, rename one file to .tsx, and
 get a clean build. The smallest possible win — but the setup is real and
@@ -2275,7 +2388,82 @@ needs to work before anything else.
 
 CHALLENGE 14.2 — Type the domain models                     Target: 25 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~15 min (done 2026-05-14). Beat target by 10 min.
+
+  [Claude — notes]:
+  Step 1 (Models.ts) was the cleaner half; step 2 (StatusBadge refactor)
+  is where the real learning happened. Three syntax/concept bugs and one
+  pattern-level lapse surfaced — all worth the time.
+
+  Models.ts bugs surfaced during review (all fixed):
+    1. `id: Number` (capital N) — the boxed JS wrapper class, not the
+       primitive. TS allows it but it's wrong: you'd rarely want to type
+       `id` as `new Number(5)`. Fixed to lowercase `number`. Same
+       distinction as C# `Int32` vs `int` — primitives are what you want
+       99% of the time.
+    2. `userName` on User vs `username` on LoginRequest — inconsistent
+       casing for the same field across two domain types. Picked lowercase
+       `username` to match what ASP.NET Core actually serializes (camelCase
+       JSON output). Domain types should match the wire format, not the
+       C# property casing.
+    3. `role: user[role]` — two errors in one line. The C# equivalent is
+       `nameof(User.Role)`; the TS equivalent is `User['role']` — capital U
+       (type reference), square brackets, **quoted string literal** for the
+       field name. `user[role]` would mean "the type of the `role` property
+       on the value named `user`" — but `user` is not a value in scope, and
+       even if it were, this is type-position syntax. Fixed to `User['role']`.
+
+  Concept gap surfaced — over-correction loop on case sensitivity:
+  After the line-29 fix, user tried referencing `user` (lowercase) elsewhere
+  and got TS error "cannot find name user, did you mean User?". Read that
+  as "lowercase is wrong everywhere" → lowercased all four interface
+  declarations (`employee`, `user`, `loginRequest`, `loginResponse`) to
+  make the references compile. That's exactly inverted. The rule is the
+  same as C#: types are PascalCase, values are camelCase. The TS error was
+  telling user the *reference* needed a capital U, not that *declarations*
+  should match the broken reference. Reverted to PascalCase. Cost ~3-4 min
+  to untangle. False-friend lesson reinforced: don't change the
+  declaration to match a broken consumer — change the consumer to match
+  the declaration.
+
+  StatusBadge.tsx refactor (step 2) — first real cross-file TS dependency
+  in the codebase. Pattern internalised: import Employee from Models, type
+  prop as `employee: Employee`, access fields off the object. The value of
+  this only becomes visible later when renaming a field in Models.ts will
+  red-squiggle every consumer instantly — same flow as renaming a C#
+  property and watching the compiler light up call sites.
+
+  Design trade-off recorded in the spec (step 2 NOTE block): `employee:
+  Employee` is intentionally worse design than `isActive: boolean` for
+  this exercise — leaf components should ask for the smallest data they
+  need. We accepted the worse design here as TS-practice scaffolding,
+  not as a pattern to copy in real code.
+
+  Two-sided refactor caller-side miss — the pattern-level lapse:
+  After refactoring StatusBadge.tsx to take `employee` instead of `isActive`,
+  the caller in EmployeeRow.js got partially updated:
+        BEFORE:  <StatusBadge isActive={employee.isActive} />
+        DONE:    <StatusBadge isActive={employee} />               ← stale name
+        SHOULD:  <StatusBadge employee={employee} />               ← correct
+  The right-hand side (value) got fixed, the left-hand side (prop name)
+  stayed stale. TS stayed silent because EmployeeRow is still `.js` — no
+  caller-side type checking on JSX prop names from a JS file. Runtime
+  blew up on `employee.isActive` against undefined. This is the **second**
+  incident of this exact shape (first was `oncancel` vs `onCancel` in 12.3
+  cleanup). Memory saved: see feedback_two_sided_refactor.md. Future cue
+  before any prop-API refactor: "prop name first, then value — every
+  caller's left-hand side is now suspect." Same flow as C# F12 / find-
+  usages after a method-signature rename, except JS-side callers need to
+  be walked by hand until Round 14-15 converts them all to .tsx.
+
+  Stray file at session end: src/Types/Employee.ts (empty
+  `export interface Employee {}` body) still exists alongside Models.ts.
+  Leftover from 2026-05-13 session — should be deleted to close out 14.2
+  fully.
+
+  Verify status: `npm start` working, badges render correctly. Recommend
+  also running `npx tsc --noEmit` before marking truly done, to confirm
+  no type errors in the Models.ts / StatusBadge.tsx pair.
 
 Create TypeScript interfaces that match the shape of Employee and User
 returned by your .NET API. These types become the contract every component
@@ -2315,10 +2503,68 @@ and hook reads from.
          role: User['role'];
        }
 
-  2. Import Employee into your StatusBadge.tsx and type the prop:
+  2. Refactor StatusBadge.tsx to take the full Employee object as a prop
+     instead of `isActive: boolean`. This is the cross-file type-dependency
+     practice — the whole point of step 2.
 
-       interface Props { employee: Employee }
-       function StatusBadge({ employee }: Props) { ... }
+     Two files change:
+
+     A) StatusBadge.tsx — change the prop shape and the body:
+
+        - Add the import at the top of the file:
+            import { Employee } from "../Types/Models";
+
+        - Change the prop interface body:
+            BEFORE:  export interface StatusBadgeProps { isActive: boolean }
+            AFTER:   export interface StatusBadgeProps { employee: Employee }
+
+        - Change the destructure on the component signature:
+            BEFORE:  const StatusBadge = ({ isActive }: StatusBadgeProps) => (
+            AFTER:   const StatusBadge = ({ employee }: StatusBadgeProps) => (
+
+        - Update the two `isActive` references inside the JSX body:
+            BEFORE:  backgroundColor: isActive ? "#4caf50" : "#f44336",
+            AFTER:   backgroundColor: employee.isActive ? "#4caf50" : "#f44336",
+
+            BEFORE:  {isActive ? "Active" : "Inactive"}
+            AFTER:   {employee.isActive ? "Active" : "Inactive"}
+
+     B) EmployeeRow.js — update the caller. The prop API just changed,
+        so every site that renders <StatusBadge /> needs to pass the new
+        prop shape:
+
+            BEFORE:  <StatusBadge isActive={employee.isActive} />
+            AFTER:   <StatusBadge employee={employee} />
+
+        EmployeeRow already has the full `employee` object in scope
+        (it's the row's own prop), so no other wiring changes.
+
+  VERIFY:
+  - Run `npx tsc --noEmit` — must report zero errors. If `Employee` import
+    fails, check the relative path (`../Types/Models`, capital T to match
+    the folder name on disk).
+  - Run `npm start` and confirm the badge still renders "Active" / "Inactive"
+    correctly for each row.
+
+  NOTE ON THE DESIGN TRADE-OFF (read this — it's the actual lesson):
+  Passing `employee: Employee` is a worse design in isolation than the
+  original `isActive: boolean`. A leaf component should ask for the smallest
+  data it needs (props minimalism), and `isActive` is one field — making
+  StatusBadge depend on the full 10-field Employee shape locks it to one
+  domain and bloats the test surface. The .NET equivalent: you would not
+  pass a whole `Employee` entity to a method that only reads `IsActive`.
+
+  We do it here anyway for one specific reason: TypeScript practice. The
+  spec wants you to feel a real cross-file type dependency — Employee
+  defined in Models.ts, imported by StatusBadge.tsx — so that when you
+  later rename `isActive` → `active` in Models.ts, every consumer lights
+  up in red. That refactor-safety is the autocomplete-payoff TS gives you,
+  and it's hard to feel until you wire one of these end-to-end.
+
+  In a real codebase you'd keep StatusBadge as `isActive: boolean` and
+  practice the Employee import on EmployeeRow / EmployeeForm / useEmployees
+  instead. Noting this so future you doesn't take the shortcut as a
+  pattern.
 
   RULES:
   - Use `interface` not `type` for object shapes — extension is cleaner.
@@ -3268,9 +3514,9 @@ Fill this in as you complete each challenge:
   13.2       | 45 min  | ~14-15 min| Beat target by ~30 min. Context + Provider + useAuth wired clean. Three syntax/API rust points (treating useAuth as fn, wrong destructure name, name-collision → destructure-rename). Logout crash on null user → fixed with optional chaining in EmployeeList.
   13.3       | 30 min  | ~20 min   | Beat target by 10, but the most friction-heavy of Round 13. Memo concept clicked; 4 syntax/structural pieces slowed things (implicit-return body vs expression, decl placement inside JSX, prop signature id-vs-object, 3rd `debugger`). Captured mental model in Downloads/react-memo-explained.txt. First challenge requiring 3 interlocking pieces to align (memo + useCallback + child prop usage).
   13.4       | 25 min  | ~10 min   | Beat target by 15. Clean class-component impl (getDerivedStateFromError, componentDidCatch, handleRetry). Class-with-lifecycle mental model from .NET carried over with zero friction. Minor indent polish opportunities.
-  13.5       | 45 min  |           |  (No-reference capstone)
-  14.1       | 30 min  |           |  TypeScript: install + tsconfig
-  14.2       | 25 min  |           |  TypeScript: domain models
+  13.5       | 45 min  | ~75 min   | Over target by ~30 min — first self-designed capstone (no spec). **[Claude — opener]:** Right test of integration. Context + custom hook + Modal + EmployeeList wiring all designed solo before code. Architectural choices were senior-tier; the overrun was syntax-recall and a try/catch logic gap, not unclear thinking. **What was built:** RecentActivity feature — Context (RecentActivityContext.js) + custom hook (useRecentActivity) + Modal (RecentActivityModal.js) + "View Recent Activities" button in EmployeeList; tracks last 5 delete/undo actions, cap-at-5 by dropping oldest. Logic-solo: Context for shared state (mirrored auth pattern), modal visibility state placed in EmployeeList not in the hook (correct ownership), `onClose` callback passed down. Stuck point 1 — inline onClick syntax: found the ConfirmModal mirror but couldn't reconstruct the line without help (AC didn't carry this specific spot; see autocomplete-dependency memory). Stuck point 2 — undo was a soft undo (state-only; record disappeared on refresh): user added POST /api/employee call to persist; first try/catch put success-path (setEmployees, success toast, addActivity) inside `finally` — would have shown contradictory toasts and faked success on failure. Concept reinforced: `finally` always runs; success path belongs in `try` after `await`. Bug caught in review, fixed on second pass. Cleanup: removed 5th leftover `debugger` (habit watch confirmed), dead `{...employee}` shallow copy, duplicate `../services/api` imports, stale "No API call — purely client-side" comment. Backend ID-mismatch bug also surfaced (EmployeeRepository.CreateAsync overwrites incoming Id with Guid.NewGuid) — user noted, deferred fix to a backend pass. **[Claude — closer]:** Logic and architecture were the win; raw recall stalled twice. User affirmed long-term direction: "syntax rust is fine, focus on understanding React" — endorsed as Round 14–18 strategy. AC-off capstones retracted. Counts as 13.5 done.
+  14.1       | 30 min  | ~24 min   | Beat target by ~6 min. CRA peer-dep conflict surfaced: react-scripts@5.0.1 caps typescript at ^4, so the default `npm install typescript` (v6.0.3) failed ERESOLVE. Pinned typescript@4.9.5 — correct call (CRA is maintenance-mode; eject/Vite migration is out of scope here). `npm audit fix` skipped (same conflict, 31 CRA-stack vulns are background noise for a learning repo). tsconfig.json clean with strict + isolatedModules + jsx:react-jsx. StatusBadge.js → .tsx verified via `npm start` + `npx tsc --noEmit`. Pattern internalised: TS bolts on file-by-file, .js + .tsx coexist; leaves-first migration order is the right path.
+  14.2       | 25 min  | ~15 min   | Beat target by ~10 min. Step 1 (Models.ts: Employee, User, LoginRequest, LoginResponse) — 3 syntax bugs surfaced in review: `Number`→`number` (boxed vs primitive, same as C# Int32 vs int); `userName` vs `username` inconsistency (matched lowercase to ASP.NET Core camelCase JSON output); `user[role]` → `User['role']` (indexed access needs type ref + quoted string, C# equivalent: `nameof(User.Role)`). Concept gap: over-correction loop on case sensitivity — lowercased all four interface declarations after misreading the "cannot find name user, did you mean User?" error as "lowercase is wrong everywhere"; reverted to PascalCase. False-friend reinforced: types are PascalCase, references must match the declaration (don't change the declaration to satisfy a broken consumer). Step 2 (StatusBadge.tsx refactor) — first real cross-file TS dependency; `employee: Employee` intentionally accepted as worse design than `isActive: boolean` (TS practice scaffolding, not a real-code pattern; props minimalism still the rule). Two-sided refactor caller-miss: updated value on EmployeeRow.js but left prop name `isActive=` stale — 2nd incident of this shape (1st was 12.3 oncancel/onCancel); memory saved (feedback_two_sided_refactor). JS-file caller silenced TS; runtime blew up on undefined. Future cue: "prop name first, then value." Stray empty src/Types/Employee.ts still on disk — needs delete to close out fully.
   14.3       | 30 min  |           |  TypeScript: leaf component
   14.4       | 35 min  |           |  TypeScript: generic hook
   14.5       | 40 min  |           |  TypeScript: no-ref capstone

@@ -29,7 +29,7 @@ const EmployeeRow = ({ employee, onEdit, onDelete, onSelect, selected }) => (
     <td>{employee.phoneNumber}</td>
     <td>{employee.salary.toLocaleString("en-US", { style: "currency", currency: "USD" })}</td>
     <td>{new Date(employee.dateOfJoining).toLocaleDateString()}</td>
-    <td><StatusBadge isActive={employee.isActive} /></td>
+    <td><StatusBadge employee={employee} /></td>
     <td>
       <button onClick={() => onEdit(employee.id)}>Edit</button>
       <button onClick={() => onDelete(employee.id, `${employee.firstName} ${employee.lastName}`)}>

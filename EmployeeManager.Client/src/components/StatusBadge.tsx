@@ -5,19 +5,21 @@
 // Color is derived from the prop — no state needed.
 //
 // PROPS:
-//   isActive (bool) — true → green "Active", false → red "Inactive"
+//   employee (Employee) — The employee object containing the isActive status
 // ============================================================================
+import { Employee } from "../Types/Models";
 
-import React from "react";
-
+export interface StatusBadgeProps {
+    employee: Employee;
+}
 // Spreads shared badge styles, then overrides backgroundColor per status.
 // JS equivalent of: class="badge active" or class="badge inactive"
-const StatusBadge = ({ isActive }) => (
+const StatusBadge = ({ employee }: StatusBadgeProps) => (
     <span style={{
         ...styles.badge,
-        backgroundColor: isActive ? "#4caf50" : "#f44336",
+        backgroundColor: employee.isActive ? "#4caf50" : "#f44336",
     }}>
-        {isActive ? "Active" : "Inactive"}
+        {employee.isActive ? "Active" : "Inactive"}
     </span>
 );
 

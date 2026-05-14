@@ -8,7 +8,7 @@
 
 import { useState, useEffect, useReducer } from "react";
 import { toast } from "react-toastify";
-import { getEmployees, deleteEmployee } from "../services/api";
+import { createEmployee, getEmployees, deleteEmployee } from "../services/api";
 import { useRecentActivity } from "../Context/RecentActivityContext";
 
 function confirmReducer(state, action) {
@@ -65,7 +65,6 @@ function useEmployees() {
 
       // Capture the full employee BEFORE removing — Undo needs to restore it.
       const deletedEmployee = employees.find((e) => e.id === confirm.id);
-      debugger
       addActivity(`Deleted: ${deletedEmployee.firstName} ${deletedEmployee.lastName}`);
       // Toast holds an inline Undo button. Capture the toastId so the button
       // can dismiss the toast on click (closure reads it at click time, by
@@ -94,12 +93,17 @@ function useEmployees() {
     }
   };
 
-  // Restore a deleted employee to local state. No API call — purely client-side.
-  function handleUndo(employee) {
-    setEmployees((prev) => [...prev, employee]);
-    toast.success("Delete undone.");
-    addActivity(`Undo delete: ${employee.firstName} ${employee.lastName}`);
-  }
+  // Restore a deleted employee by re-creating it on the server and re-adding to local state.
+  const handleUndo = async (employee) => {
+    try {
+      await createEmployee(employee);
+      setEmployees((prev) => [...prev, employee]);
+      toast.success("Delete undone.");
+      addActivity(`Undo delete: ${employee.firstName} ${employee.lastName}`);
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Failed to save employee");
+    }
+  };
 
   // Close the modal without deleting.
   function onCancel() {
