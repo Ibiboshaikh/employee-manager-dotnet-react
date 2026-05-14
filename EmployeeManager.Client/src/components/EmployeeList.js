@@ -19,6 +19,7 @@ import useEmployees from '../hooks/useEmployees';
 import ConfirmModal from "./ConfirmModal";
 import { useAuth } from "../Context/AuthContext";
 import RecentActivityModal from "./RecentActivityModal";
+// import { Employee } from "../Types/Models";
 
 const EmployeeList = () => {
   // ── HOOKS ──────────────────────────────────────────────────────────────

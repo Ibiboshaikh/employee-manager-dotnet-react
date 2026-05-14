@@ -13,8 +13,16 @@
 
 import { memo } from "react";
 import StatusBadge from "./StatusBadge";
+import { Employee } from "../Types/Models";
+export interface EmployeeRowProps {
+    employee: Employee;
+    onEdit: (id: number) => void;
+    onDelete: (id: number, name: string) => void;
+    onSelect: (id: number) => void;
+    selected: number | null;
+}
 
-const EmployeeRow = ({ employee, onEdit, onDelete, onSelect, selected }) => (
+const EmployeeRow = ({ employee, onEdit, onDelete, onSelect, selected }: EmployeeRowProps) => (
   <tr
     onClick={() => onSelect(employee.id)}
     style={{

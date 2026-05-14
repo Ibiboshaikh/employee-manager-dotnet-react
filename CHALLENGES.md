@@ -2581,7 +2581,7 @@ and hook reads from.
 
 CHALLENGE 14.3 — Type a leaf component                      Target: 30 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 5 Min
 
 Convert EmployeeRow.js → EmployeeRow.tsx. Leaf component, only props
 to type. Best place to feel out React + TS without complexity.
