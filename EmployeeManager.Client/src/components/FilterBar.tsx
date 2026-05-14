@@ -21,10 +21,24 @@
 //   onHideBelow50KChange(checked)
 //   onViewChange(updater)
 // ============================================================================
-
-import React from "react";
-
+export interface FilterBarProps {
+    search: string;
+    onSearchChange: (value: string) => void;
+    department: string;
+    onDepartmentChange: (value: string) => void;
+    hideBelow50K: boolean;
+    onHideBelow50KChange: (checked: boolean) => void;
+    view: number;
+    onViewChange: (updater: (prev: number) => number) => void;
+    departments: string[];
+    onClear: () => void;
+    minSalary: string;
+    onMinSalaryChange: (value: string) => void;
+    maxSalary: string;
+    onMaxSalaryChange: (value: string) => void;
+}
 // FilterBar never calls useState — EmployeeList owns all filter state.
+
 const FilterBar = ({
     search,
     onSearchChange,
@@ -40,7 +54,7 @@ const FilterBar = ({
     onMinSalaryChange,
     maxSalary,
     onMaxSalaryChange
-}) => (
+}: FilterBarProps) => (
     <>
         {/* Department dropdown — value is controlled by prop */}
         <select value={department} onChange={e => onDepartmentChange(e.target.value)}>
