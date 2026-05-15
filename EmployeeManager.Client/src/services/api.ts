@@ -24,8 +24,8 @@
 // Axios is an HTTP client library — similar to HttpClient in C#.
 // It makes HTTP requests (GET, POST, PUT, DELETE) and returns promises.
 // Advantages over browser's fetch(): automatic JSON parsing, interceptors, cleaner API.
-import axios from "axios";
-
+import axios, { AxiosResponse } from "axios";
+import { Employee, LoginRequest, LoginResponse } from "../Types/Models";
 // ── CREATE AXIOS INSTANCE ──────────────────────────────────────────────────
 // axios.create() creates a custom instance with pre-configured settings.
 // All requests made through this instance will use these settings.
@@ -119,7 +119,7 @@ api.interceptors.response.use(
  * Maps to: POST http://localhost:5000/api/auth/login
  * .NET endpoint: AuthController.Login()
  */
-export const login = (credentials) => api.post("/auth/login", credentials);
+export const login = (credentials: LoginRequest): Promise<AxiosResponse<LoginResponse>> => api.post<LoginResponse>("/auth/login", credentials);
 
 // ── EMPLOYEE CRUD API CALLS ────────────────────────────────────────────────
 // Each function maps to one REST endpoint on the .NET EmployeeController.
@@ -134,7 +134,7 @@ export const login = (credentials) => api.post("/auth/login", credentials);
  * Maps to: GET http://localhost:5000/api/employee
  * .NET endpoint: EmployeeController.GetAll()
  */
-export const getEmployees = () => api.get("/employee");
+export const getEmployees = (): Promise<AxiosResponse<Employee[]>> => api.get<Employee[]>("/employee");
 
 /**
  * Get Single Employee — fetches one employee by ID.
@@ -145,33 +145,34 @@ export const getEmployees = () => api.get("/employee");
  * Maps to: GET http://localhost:5000/api/employee/{id}
  * .NET endpoint: EmployeeController.GetById(Guid id)
  */
-export const getEmployee = (id) => api.get(`/employee/${id}`);
+export const getEmployee = (id: string): Promise<AxiosResponse<Employee>> => api.get<Employee>
+(`/employee/${id}`);
 //                                          ^^^ Template literal — embeds the id variable into the URL string
 
 /**
  * Create Employee — sends a new employee to be saved.
  *
- * @param {Object} employee - { firstName, lastName, email, department, ... }
+ * @param {Employee} employee - { firstName, lastName, email, department, ... }
  * @returns {Promise} - Resolves with { data: Employee } (includes generated ID)
  *
  * Maps to: POST http://localhost:5000/api/employee
  * .NET endpoint: EmployeeController.Create(Employee employee)
  */
-export const createEmployee = (employee) => api.post("/employee", employee);
+export const createEmployee = (employee: Omit<Employee, 'id'>): Promise<AxiosResponse<Employee>> => api.post<Employee>("/employee", employee);
 //                                                    ^^^ URL     ^^^ request body (sent as JSON automatically)
 
 /**
  * Update Employee — sends updated data for an existing employee.
  *
  * @param {string} id - The employee's GUID
- * @param {Object} employee - Updated employee data
+ * @param {Employee} employee - Updated employee data
  * @returns {Promise} - Resolves with { data: Employee }
  *
  * Maps to: PUT http://localhost:5000/api/employee/{id}
  * .NET endpoint: EmployeeController.Update(Guid id, Employee employee)
  */
-export const updateEmployee = (id, employee) =>
-  api.put(`/employee/${id}`, employee);
+export const updateEmployee = (id: string, employee: Omit<Employee, 'id'>):  Promise<AxiosResponse<Employee>> =>
+  api.put<Employee>(`/employee/${id}`, employee);
 
 /**
  * Delete Employee — removes an employee by ID.
@@ -182,7 +183,7 @@ export const updateEmployee = (id, employee) =>
  * Maps to: DELETE http://localhost:5000/api/employee/{id}
  * .NET endpoint: EmployeeController.Delete(Guid id)
  */
-export const deleteEmployee = (id) => api.delete(`/employee/${id}`);
+export const deleteEmployee = (id: string): Promise<AxiosResponse<void>> => api.delete(`/employee/${id}`);
 
 // Export the axios instance as default (in case someone needs direct access)
 export default api;

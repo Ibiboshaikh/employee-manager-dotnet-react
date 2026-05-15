@@ -16,10 +16,10 @@ import StatusBadge from "./StatusBadge";
 import { Employee } from "../Types/Models";
 export interface EmployeeRowProps {
     employee: Employee;
-    onEdit: (id: number) => void;
-    onDelete: (id: number, name: string) => void;
-    onSelect: (id: number) => void;
-    selected: number | null;
+    onEdit: (id: string) => void;
+    onDelete: (id: string, name: string) => void;
+    onSelect: (id: string) => void;
+    selected: string | null;
 }
 
 const EmployeeRow = ({ employee, onEdit, onDelete, onSelect, selected }: EmployeeRowProps) => (

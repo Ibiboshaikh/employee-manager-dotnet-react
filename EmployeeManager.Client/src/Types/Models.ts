@@ -1,5 +1,5 @@
 export interface Employee {
-    id: number;
+    id: string;
     firstName: string;
     lastName: string;
     email: string;
@@ -12,7 +12,7 @@ export interface Employee {
 }
 
 export interface User {
-    id: number;
+    id: string;
     username: string;
     fullName: string;
     role: 'Admin' | 'User';

@@ -2583,6 +2583,31 @@ CHALLENGE 14.3 — Type a leaf component                      Target: 30 min
 --------------------------------------------------------------------------
 YOUR TIME: 5 Min
 
+  [Claude — notes]:
+  Clean conversion. Props interface (EmployeeRowProps) co-located at the
+  top of the file — correct placement, matches the rule from 14.3 follow-up
+  in 14.2's notes ([[feedback_csharp_ts_interface_false_friend]]). The
+  destructure `({ employee, onEdit, onDelete, onSelect, selected }:
+  EmployeeRowProps)` is the standard TS form — no React.FC, as the spec
+  RULES required.
+
+  One real bug to flag (not breaking yet, but will bite):
+    onEdit: (id: number) => void
+    onDelete: (id: number, name: string) => void
+    onSelect: (id: number) => void
+    selected: number | null
+  But Employee.id is `string` (a GUID) — see api.ts:148 and the .NET
+  backend. So the row's callback signatures expect `number` but the
+  values being passed (`employee.id`) are strings. TS isn't catching it
+  *yet* because EmployeeList is still .js — once 15.5 converts it, every
+  one of these `id: number` will red-squiggle.
+  Fix when you get there: change to `id: string` and `selected: string | null`.
+  Same in any other component that took its lead from this spec.
+
+  Inherited from the spec — the original CHALLENGE 14.3 task block above
+  has `id: number` baked in. That was wrong for this codebase (GUIDs, not
+  ints). Noted, not a knock on the user.
+
 Convert EmployeeRow.js → EmployeeRow.tsx. Leaf component, only props
 to type. Best place to feel out React + TS without complexity.
 
@@ -2622,10 +2647,49 @@ to type. Best place to feel out React + TS without complexity.
 
 CHALLENGE 14.4 — Type a custom hook (generic intro)         Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 5 Min
+
+  [Claude — notes]:
+  Clean implementation. All three TS pieces from the spec landed:
+    - Generic `<T>` declared on the function signature.
+    - `keyof T` constrains the field arg — typo-proof.
+    - Tuple return `[SortState<T>, (field: keyof T) => void]` matches
+      the destructure call site shape.
+  The setter uses the functional update form (`setSort(prev => ...)`)
+  with the toggle/reset logic intact from the .js version — a clean
+  port, no logic changes. `SortState<T>` is exported (interface), which
+  is the right call: any component that wants to type its own sort
+  state can import it.
+
+  Minor formatting nit only — extra blank line on line 16 between the
+  useState block and `const handleSort`. Doesn't matter for correctness;
+  flag only if portfolio-polish pass is on (see
+  [[project_employeemanager_is_portfolio]]).
+
+  This was the FIRST encounter with TS generics + `keyof`. Pattern test:
+  in 15.2 (your current challenge) the discriminated union is the next
+  TS-only concept — should feel similar (new vocabulary, familiar idea).
 
 Convert useSort.js → useSort.ts. This is your first generic hook — it can
 sort an array of any T with a key. Same shape as a C# generic method.
+
+  NEW HERE — read this before TASK:
+  - `<T>` (generic type parameter): same idea as C# `<T>` — a placeholder
+    for "whatever type the caller passes in." `function useSort<T>(...)`
+    means useSort works for Employee[], User[], anything. The caller
+    pins it: `useSort<Employee>('firstName')`.
+  - `keyof T`: a built-in TS operator. If `T = Employee`, then `keyof T`
+    is the union `'id' | 'firstName' | 'lastName' | ...` — every property
+    name of T as a string literal. C# analogy: `nameof(Employee.FirstName)`,
+    except TS knows ALL property names at compile time, not just one.
+    Why we use it: typo-proof field names. `useSort<Employee>('frstName')`
+    becomes a compile error, not a runtime undefined.
+  - String literal union (`'asc' | 'desc'`): the type is exactly those two
+    strings, nothing else. Same as a C# enum but written inline.
+  - Tuple return type `[SortState<T>, (field: keyof T) => void]`: TS for
+    "this function returns an array of EXACTLY two items, item 0 is a
+    SortState<T> and item 1 is a function." Same shape useState uses.
+    C# analogy: `(SortState<T>, Action<string>)` tuple return.
 
   TASK:
   1. Rename useSort.js → useSort.ts.
@@ -2681,11 +2745,57 @@ sort an array of any T with a key. Same shape as a C# generic method.
 
 CHALLENGE 14.5 — No-reference TS challenge                  Target: 40 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 5 Min
+
+  [Claude — notes]:
+  Pattern-(b) callbacks across the board — `(value: string) => void`
+  rather than raw event types. That's the cleaner choice for this code,
+  and it lines up with how the rest of the project communicates with
+  FilterBar already. Good instinct.
+
+  FilterBarProps covers all 13 props the JS version had:
+    search/department/hideBelow50K + their 3 setters,
+    view + onViewChange (with the trickier `(updater: (prev: number) => number)`
+    signature — that's the prev-state-updater form of setState; nailed it),
+    departments: string[], onClear, minSalary/maxSalary + 2 setters.
+  Nothing missing, nothing typed as `any`. Interface co-located at top
+  of file — correct per the false-friend rule.
+
+  One subtle thing worth recording — onViewChange is typed as
+    `(updater: (prev: number) => number) => void`
+  not the simpler `(view: number) => void`. That's because EmployeeList
+  calls it as `onViewChange(v => v + 1)` (the prev-state updater pattern,
+  same shape as `setX(prev => prev + 1)`). The TS signature has to match
+  *how the parent uses it*, not just "it sets a number." This is a
+  pattern-recognition win — easy to mistype as `(v: number) => void` and
+  have TS complain at the EmployeeList call site once .tsx-ified.
+
+  No-reference rule check: file body has no copy/paste structure from
+  EmployeeRow.tsx — the interface order and the inline `<input>` types
+  are FilterBar's own. If you DID lean on EmployeeRow / StatusBadge,
+  note it in YOUR TIME — same measurement discipline as 13.5.
 
 Convert FilterBar.js → FilterBar.tsx with NO reference to this challenge
 file. You may look at react.dev / typescriptlang.org / TS error messages —
 but not at the other .tsx files you've already converted.
+
+  NEW HERE — event handler types:
+  - `React.ChangeEvent<HTMLInputElement>`: TS type for the `e` parameter
+    inside `onChange={e => ...}` on an <input>. The `<HTMLInputElement>`
+    part tells TS what `e.target` is — so `e.target.value` and
+    `e.target.checked` autocomplete correctly. C# analogy: an EventArgs
+    subclass — same idea, more specific per element type.
+  - `React.ChangeEvent<HTMLSelectElement>`: same shape but for <select>.
+    A handler used on BOTH must union them:
+    `React.ChangeEvent<HTMLInputElement | HTMLSelectElement>`.
+  - Two valid prop signatures for a callback:
+      (a) `onChange: (e: React.ChangeEvent<HTMLInputElement>) => void`
+          — child passes the raw event up.
+      (b) `onChange: (value: string) => void`
+          — child unwraps `e.target.value` and only sends the value.
+    (b) is cleaner — parent doesn't need to know DOM event types.
+    Use (b) when the parent only cares about the value. Most of this
+    project uses (b).
 
   SCOPE:
   - Define the props interface for FilterBar based on what EmployeeList
@@ -2719,11 +2829,85 @@ silently shipped. Don't rush. The goal of Round 15 is "TS feels normal."
 
 CHALLENGE 15.1 — Type the API service                       Target: 30 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 5 Min
+
+  [Claude — notes]:
+  Every export is typed with the full `Promise<AxiosResponse<T>>` return.
+  That's MORE explicit than the spec asked for — the spec had several
+  functions returning the bare axios call with no explicit return type
+  (which TS would infer fine). Going explicit is enterprise-style and
+  the right call for a portfolio file. Examples:
+    getEmployees(): Promise<AxiosResponse<Employee[]>>
+    createEmployee(employee: Omit<Employee, 'id'>): Promise<AxiosResponse<Employee>>
+    deleteEmployee(id: string): Promise<AxiosResponse<void>>
+  All 6 endpoints typed. `Omit<Employee, 'id'>` used for create + update
+  payloads — correct (server assigns the id).
+
+  Deviation from spec worth calling out as a WIN:
+  The spec block had `id: number` on getEmployee / updateEmployee /
+  deleteEmployee. User correctly used `id: string` — matching the .NET
+  backend (employee ids are GUIDs). This was an unprompted correction
+  against the spec, based on knowing the backend. Senior-instinct call.
+  See [[feedback_architectural_instincts]].
+
+  Side effect: EmployeeRow.tsx (14.3) still has `id: number` callbacks
+  inherited from its own spec. Those will conflict with api.ts once
+  EmployeeList is .tsx-ified in 15.5 — flagged in 14.3's notes above.
+
+  Three small things to note (none are bugs — keep them in mind):
+  1. Line 27 import order — `axios` before `Employee/...` is fine.
+     TS / ESLint don't enforce; just consistency.
+  2. Line 148-149 has the arrow split across lines awkwardly
+     (`api.get<Employee>` on one line, the URL on the next). Reads fine,
+     just cosmetic. VS Code's formatter on save would tighten it.
+  3. The JSDoc comments (`@param {string} id`) are leftover from the .js
+     version — they say `{string}` and `{Object}`. In TS, the type
+     annotations on the function signature ARE the source of truth;
+     JSDoc types become redundant and can drift. Two options:
+        (a) keep JSDoc but drop the `{type}` part — keep only the
+            description: `@param id - The employee's GUID`
+        (b) delete the @param lines entirely and rely on the TS types.
+     Either is fine. Both > leaving the JSDoc types as they are.
 
 Convert api.js → api.ts. Type each function's request and response shape.
 This is where TS catches "called the wrong endpoint" / "passed wrong field"
 bugs at compile time instead of runtime.
+
+  NEW HERE — read this before TASK:
+  - `axios`: a third-party HTTP client library. Same role as
+    `HttpClient` in .NET — it sends GET/POST/PUT/DELETE requests and
+    returns the response. We use it instead of the browser's built-in
+    `fetch()` because: automatic JSON parsing, interceptors (auth token
+    injection, 401 handling), and a cleaner API.
+  - `axios.create({ baseURL: '/api' })`: returns a configured axios
+    instance — every call made through it prefixes `/api`. Same as
+    `new HttpClient { BaseAddress = new Uri("/api") }` in .NET.
+  - `AxiosResponse<T>`: the SHAPE of the value axios resolves with.
+    It's an object like `{ data: T, status: number, headers: ... }`.
+    The `<T>` is what `.data` is typed as. So when you write
+    `const res = await getEmployees()`, `res.data` is `Employee[]`,
+    not `any`. C# analogy: `HttpResponseMessage` with a typed body.
+  - `api.get<Employee[]>('/employee')`: the `<Employee[]>` tells axios
+    "the response body will be an Employee array — type `.data`
+    accordingly." Same shape as `httpClient.GetFromJsonAsync<List<Employee>>()`
+    in .NET.
+  - `Omit<Employee, 'id'>`: a TS UTILITY TYPE. Means "the Employee
+    interface but WITHOUT the `id` field." Used for create payloads
+    because the server assigns the id — the client should never send
+    one. C# analogy: a DTO without the Id property — but in TS you
+    don't have to write a separate type, you derive it from Employee.
+    Family of utility types worth knowing:
+       Omit<T, K>      — T minus the K fields
+       Pick<T, K>      — T with ONLY the K fields
+       Partial<T>      — every field of T becomes optional
+       Required<T>     — every optional field of T becomes required
+       Record<K, V>    — an object whose keys are K and values are V
+    Memorize these — they appear constantly in real TS codebases.
+  - `Promise<AxiosResponse<Employee[]>>`: full return type. Read it
+    right-to-left: "a Promise that resolves to an AxiosResponse whose
+    `.data` is an Employee array." Spelling it out at the function
+    signature is enterprise-style; TS could infer it, but explicit is
+    clearer at API boundaries.
 
   TASK:
   1. Rename api.js → api.ts.
@@ -2774,6 +2958,40 @@ Convert useEmployees.js → useEmployees.ts. Type the state, the reducer
 (if you did 13.1), and the return value. This is the hook that everything
 else depends on — getting its types right unlocks the rest.
 
+  NEW HERE — read this before TASK:
+  - `type` vs `interface`: in TS, `type` and `interface` are mostly
+    interchangeable for object shapes. The split:
+       interface  — preferred for object shapes you'll extend / implement.
+                    Closer to a C# interface.
+       type       — required for unions, intersections, primitives,
+                    tuples, mapped types. The "everything else" keyword.
+    Rule of thumb: `interface` for component props / domain models;
+    `type` for unions and computed types.
+  - DISCRIMINATED UNION (the big concept here):
+       type ConfirmAction =
+         | { type: 'open'; id: number; name: string }
+         | { type: 'close' };
+    This is "ConfirmAction is EITHER an open-action OR a close-action."
+    The shared `type` field is the DISCRIMINATOR — TS uses it to know
+    which branch you're in. Inside a switch:
+       case 'open':   // here TS KNOWS action has id and name
+       case 'close':  // here TS KNOWS action only has type
+    C# analogy: closest thing is pattern-matched records / a sealed
+    class hierarchy with `switch` expressions. F# / Rust call this an
+    "algebraic data type" — that's the same idea.
+  - EXHAUSTIVENESS: if you add a third action type later and forget to
+    handle it in the switch, TS warns (when `strict` is on). That's the
+    safety — your state machine cannot drift. Compare to a C# switch
+    that silently runs no branch and falls through.
+  - `useReducer`'s type signature: `useReducer<Reducer<State, Action>>`
+    or just let inference work: `useReducer(confirmReducer, initialState)`
+    once the reducer's types are pinned, the rest infers.
+  - Interface return types on hooks (`function useEmployees(): UseEmployeesReturn`):
+    pinning the return type makes the hook a CONTRACT. Consumers can
+    rely on it; reordering / renaming fields inside the hook becomes
+    a compiler check, not a manual grep. C# analogy: a method that
+    returns an interface (IEmployeeService) instead of a concrete class.
+
   TASK:
   1. Define the action union for the confirm reducer:
 
@@ -2822,6 +3040,28 @@ YOUR TIME:
 
 Convert your AuthContext (from 13.2) to TS. Force consumers to handle
 "no provider" cases at compile time — the most common Context bug.
+
+  NEW HERE — read this before TASK:
+  - `createContext<T>(defaultValue)`: the `<T>` pins what's stored in the
+    Context. `createContext<AuthContextValue | null>(null)` means "the
+    Context holds either an AuthContextValue or null." The `| null` is
+    intentional — it forces consumers to handle the "no Provider above
+    me" case.
+  - `ReactNode`: TS type for "anything React can render" — strings,
+    numbers, JSX elements, arrays of them, null, undefined. Used for
+    the `children` prop. NOT the same as `JSX.Element` (which is just
+    one element). For `children`, always `ReactNode`.
+  - The narrowing guard pattern:
+       const ctx = useContext(AuthContext);
+       if (!ctx) throw new Error('...');
+       return ctx;   // <-- here TS knows ctx is non-null
+    This is TS "narrowing" — after the `if (!ctx) throw`, TS removes
+    `null` from the type for the rest of the function. C# analogy:
+    `ArgumentNullException.ThrowIfNull(ctx)` + nullable reference
+    type tracking — except TS does it automatically.
+  - Why throw and not return null: every consumer of useAuth() now
+    gets `AuthContextValue` (not nullable) — no more `if (auth?.user)`
+    sprinkled everywhere. The Provider boundary IS the contract.
 
   TASK:
   1. Define the context value shape and create with explicit type:
@@ -2873,6 +3113,30 @@ YOUR TIME:
 The form is where TS truly earns its place. Event types, controlled
 inputs, errors-as-record types — all the syntax that previously felt
 fuzzy snaps into place.
+
+  NEW HERE — read this before TASK:
+  - `Partial<T>`: every field of T becomes optional. Useful for "errors
+    object where most fields have no error." `Partial<Employee>` =
+    `{ id?, firstName?, lastName?, ... }`.
+  - `Record<K, V>`: an object whose keys are of type K and values are
+    of type V. `Record<string, number>` = `{ [key: string]: number }`.
+    Used when you don't know the keys upfront but they're all the
+    same shape. C# analogy: `Dictionary<K, V>` but as an object type.
+  - `Partial<Record<keyof EmployeeFormData, string>>`: read it inside-
+    out: "an object whose keys are the field names of EmployeeFormData,
+    values are strings, but every key is optional." Translation: "the
+    errors map — keys are field names, values are error messages, and
+    most fields have no entry most of the time." This combo (Partial
+    + Record + keyof) is the canonical TS form-errors type. Memorize it.
+  - `React.FormEvent<HTMLFormElement>`: TS type for the `e` in
+    `onSubmit={e => ...}`. The `<HTMLFormElement>` makes `e.target`
+    typed as the form element. C# analogy: `EventArgs` subclass with
+    a typed sender.
+  - `as HTMLInputElement` (type assertion): tells TS "trust me, treat
+    this value as type X." Used in `const { name, value, type, checked }
+    = e.target as HTMLInputElement` because TS can't infer that the
+    event target has a `checked` field. Use SPARINGLY — every cast is
+    a compiler bypass. C# analogy: `(MyType)obj` hard-cast.
 
   TASK:
   1. Convert EmployeeForm.js → EmployeeForm.tsx.
@@ -2947,515 +3211,5196 @@ index.tsx, reportWebVitals.ts (or delete it — CRA cruft).
 
 
 ================================================================================
-ROUND 16 — REACT QUERY / SERVER STATE (designed 2026-05-12)
+ROUND 16 — TYPESCRIPT HARDENING (designed 2026-05-15, redesigned)
 ================================================================================
 
-Pacing: One challenge per day. React Query has its own vocabulary
-(queryKey, queryFn, isStale, isFetching, optimistic updates). Each
-challenge focuses on one concept. Don't pile them.
-
-The mental shift: your useEffect-fetch pattern was "imperatively fetch
-data on mount." React Query is "declare what data you need; the library
-fetches, caches, refetches, and invalidates." Same shape as caching
-attributes / response caching in .NET — but client-side.
+Pacing: One challenge per day. After 15.5 the codebase is fully TS but
+"loose" — `any` here, an inferred type there, a few `as` casts. This
+round eliminates each one. The goal is not to learn new TS; it's
+repetition so your fingers stop hesitating on syntax. Muscle-memory
+round.
 
 
-CHALLENGE 16.1 — Install TanStack Query + setup             Target: 20 min
+CHALLENGE 16.1 — Eliminate every `any`                      Target: 30 min
 --------------------------------------------------------------------------
 YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `any` is the TypeScript escape hatch: it disables all type
+    checking on that value. Useful for migrations, but every `any`
+    left in finished code is a bug waiting to happen.
+  - `unknown` is the safe alternative: like `any` but FORCES you to
+    narrow the type before using it. Use `unknown` at the boundary
+    (API responses, JSON.parse) and narrow inside.
+
+  TASK:
+  1. Run `npx tsc --strict --noEmit` and grep for `any` in src/.
+  2. For each `any`: find the real type, replace it. If you don't
+     know the shape (boundary code), use `unknown` + a type guard.
+  3. List in YOUR TIME how many `any`s you removed — that's the
+     debt repayment.
+
+  RULES:
+  - No `as any` or `@ts-ignore` to "fix" errors. Find the real type.
+  - The errors-object in EmployeeForm, the params in axios interceptors,
+    and reducer cases are the usual offenders.
+
+  WHAT YOU JUST LEARNED:
+  Strict TS forces you to KNOW your types. Loose TS is JS with extra
+  syntax. The discipline is the value.
+
+
+CHALLENGE 16.2 — Branded types for IDs                      Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Branded type (nominal type): `type EmployeeId = string & { __brand:
+    'EmployeeId' }`. At runtime it's just a string; at compile time
+    it's distinct from any other string. Pass a UserId where EmployeeId
+    is expected → compile error.
+  - Constructor function: `const employeeId = (s: string): EmployeeId
+    => s as EmployeeId`. Cast once at the API boundary; never elsewhere.
+
+  TASK:
+  1. Add `EmployeeId`, `UserId` branded types in src/Types/Ids.ts.
+  2. Change Employee.id, User.id to use the branded type.
+  3. Walk every function that takes an id — type the parameter as
+     EmployeeId / UserId instead of string.
+  4. Add the constructor at the API parse boundary.
+
+  RULES:
+  - Brands are compile-time only — zero runtime cost.
+  - One place that casts (the constructor); everywhere else uses the
+    branded type.
+
+  WHAT YOU JUST LEARNED:
+  Nominal typing in a structural language. The .NET equivalent is just
+  using distinct ID record types — TS has to fake it via brands. Same
+  guarantee.
+
+
+CHALLENGE 16.3 — Discriminated unions for reducers          Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Every useReducer in your codebase should have an action union
+    typed as a discriminated union (one `type` field per variant).
+    TS will then narrow each case in the switch and warn if you
+    forget one.
+
+  TASK:
+  1. Walk every reducer (confirm reducer, recent-activity reducer,
+     any others). Type the State and Action explicitly.
+  2. Remove any `default:` case that swallows unknown actions. Let
+     TS warn you if you miss one.
+  3. Reducer return type pinned: `function reducer(s: State, a:
+     Action): State`.
+
+  RULES:
+  - Discriminator name doesn't have to be `type` — but stick to one
+    name across the codebase.
+  - Use `never` in unreachable branches if you want to enforce
+    exhaustiveness explicitly:
+       const _: never = action; throw new Error('unreachable');
+
+  WHAT YOU JUST LEARNED:
+  Exhaustive state machines. TS proves at compile time that you
+  handled every case. Same shape as F#/Rust match on a sum type.
+
+
+CHALLENGE 16.4 — Tighten event handler types                Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Find every onClick / onChange / onSubmit with an untyped
+     parameter (`e` defaults to `any` in some setups).
+  2. Replace with the specific event type:
+       `React.MouseEvent<HTMLButtonElement>`,
+       `React.ChangeEvent<HTMLInputElement>`,
+       `React.FormEvent<HTMLFormElement>`.
+  3. For handlers passed as props, type the callback shape:
+       `onClick: (e: React.MouseEvent<HTMLButtonElement>) => void`.
+
+  RULES:
+  - Don't use the generic `Event` — use the React event type.
+  - For handlers that don't need the event, type as `() => void`.
+
+  WHAT YOU JUST LEARNED:
+  Specific event types mean autocomplete works inside the handler.
+  No more `e.target.value` returning `any`.
+
+
+CHALLENGE 16.5 — Strict-mode pass                           Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - tsconfig.json `strict: true` is an UMBRELLA flag enabling 7+
+    individual strict flags. Some projects enable strict but disable
+    one sub-flag — defeats the purpose.
+  - Key strict sub-flags:
+    * `strictNullChecks` — null and undefined are separate types.
+    * `noImplicitAny` — variables without a type default to error.
+    * `strictFunctionTypes` — function parameter variance is checked.
+    * `noImplicitReturns` — every branch must return.
+    * `noUnusedLocals`, `noUnusedParameters` — flags dead code.
+
+  TASK:
+  1. Add to tsconfig.json compilerOptions:
+       "noUnusedLocals": true,
+       "noUnusedParameters": true,
+       "noImplicitReturns": true,
+       "noFallthroughCasesInSwitch": true,
+       "exactOptionalPropertyTypes": true
+  2. Run `npx tsc --noEmit`. Fix every new error.
+  3. Commit.
+
+  RULES:
+  - Don't disable a strict flag to pass. Find the real fix.
+  - `exactOptionalPropertyTypes` is the strictest; turn off if it's
+    too noisy on third-party types, but try it first.
+
+  WHAT YOU JUST LEARNED:
+  Strict TS is a spectrum. The default `strict: true` is good; the
+  extra flags catch more. Each one is one less class of bug.
+
+
+================================================================================
+ROUND 17 — REACT QUERY / SERVER STATE (designed 2026-05-15, redesigned)
+================================================================================
+
+Pacing: One challenge per day. Server state ≠ client state. React
+Query (TanStack Query) is the standard tool. You'll use it in EVERY
+feature from Round 23 onwards — internalising it now pays compound
+interest.
+
+.NET analogy: IMemoryCache + a DelegatingHandler pipeline, but with
+deduplication, automatic refetch on focus, optimistic updates, and
+mutation state baked in.
+
+
+CHALLENGE 17.1 — Install + QueryClientProvider              Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `QueryClient`: the cache object that holds every cached query
+    result. One instance per app.
+  - `QueryClientProvider`: a React Context provider that hands the
+    QueryClient to every component.
+  - `staleTime`: how long cached data is considered "fresh."
+    `staleTime: 30_000` = 30 seconds. Underscore in numbers is JS
+    separator syntax — same as `30000`.
+  - `refetchOnWindowFocus`: by default React Query refetches when you
+    tab back. Useful in prod, noisy in dev — turn off here.
 
   TASK:
   1. npm install @tanstack/react-query @tanstack/react-query-devtools
-  2. In src/index.tsx, wrap <App /> in a QueryClientProvider:
-
-       import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-       import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
-
-       const queryClient = new QueryClient({
-         defaultOptions: {
-           queries: { staleTime: 30_000, refetchOnWindowFocus: false },
-         },
-       });
-
-       root.render(
-         <QueryClientProvider client={queryClient}>
-           <AuthProvider>
-             <App />
-           </AuthProvider>
-           <ReactQueryDevtools />
-         </QueryClientProvider>
-       );
+  2. In src/index.tsx, wrap <App /> in QueryClientProvider with a
+     QueryClient configured: staleTime 30_000, refetchOnWindowFocus
+     false.
+  3. Add <ReactQueryDevtools /> inside the provider.
 
   RULES:
-  - QueryClient is created ONCE, top-level. Never inside a component
-    (would reset cache on every render).
-  - staleTime defaults to 0 — leave at default unless you understand the
-    trade-off. 30s is a reasonable starting point.
-  - Devtools is dev-only by default. Leave it on.
+  - QueryClient created ONCE at the top level. Never inside a
+    component (would reset the cache on every render).
+  - Devtools is dev-only by default.
 
   WHAT YOU JUST LEARNED:
-  React Query is the cache. QueryClientProvider is the cache scope.
-  Same mental model as IMemoryCache in .NET, but with deduplication,
-  staleness, and refetching baked in.
+  Cache scope is set by the Provider boundary. Same idea as a DI
+  scope in .NET.
 
 
-CHALLENGE 16.2 — Convert useEmployees to useQuery           Target: 35 min
+CHALLENGE 17.2 — Convert useEmployees to useQuery           Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-Replace the useEffect-based fetch in useEmployees with useQuery. The
-hook becomes shorter and more capable in one stroke.
+  NEW HERE — read this before TASK:
+  - `useQuery({ queryKey, queryFn })`: the read-side hook. Returns
+    `.data`, `.isLoading`, `.isFetching`, `.error`.
+  - `queryKey`: a UNIQUE identifier (array convention). Two components
+    using the same key share one cached result.
+  - `queryFn`: an async function returning the data. Convention:
+    `async () => (await api.get(...)).data`.
+  - `isLoading` vs `isFetching`: isLoading is true only on the first
+    fetch; isFetching includes background refetches. Use isLoading
+    for full-page spinners.
+  - `?? []`: nullish-coalescing. Use because `data` is undefined while
+    loading.
 
   TASK:
-  1. Inside useEmployees, replace the state + useEffect block with:
-
-       import { useQuery } from '@tanstack/react-query';
-
+  1. In useEmployees.ts, replace the manual useState + useEffect fetch
+     with:
        const employeesQuery = useQuery({
          queryKey: ['employees'],
          queryFn: async () => (await getEmployees()).data,
        });
-
+  2. Derived values:
        const employees = employeesQuery.data ?? [];
        const loading = employeesQuery.isLoading;
-       const fetchedAt = employeesQuery.dataUpdatedAt
-         ? new Date(employeesQuery.dataUpdatedAt).toLocaleTimeString()
-         : null;
-
-  2. Delete the manual useState<Employee[]>, useState(loading=true),
-     fetchedAt state, and the useEffect that called fetchEmployees().
+  3. Delete the manual state and the useEffect.
 
   RULES:
-  - queryKey is a unique identifier. Array form is convention.
-  - The data is undefined while loading — always default with `?? []`.
-  - Don't add a useEffect for fetch — React Query handles that.
+  - Never wrap useQuery in a useEffect.
+  - Default `data` with `?? []` to keep call-sites simple.
 
   WHAT YOU JUST LEARNED:
-  useQuery replaces 80% of your data-fetching code with one hook. The
-  cache shares state across components — two components calling
-  useQuery(['employees']) get the same data without prop drilling.
+  useQuery replaces ~80% of data-fetching code with one hook. The
+  cache shares state across components automatically.
 
 
-CHALLENGE 16.3 — Convert delete to useMutation              Target: 40 min
+CHALLENGE 17.3 — Convert delete to useMutation (optimistic) Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-useMutation is the write-side counterpart. For delete, we add optimistic
-update — remove the row locally before the server confirms, restore on error.
+  NEW HERE — read this before TASK:
+  - `useMutation`: the write-side hook. Returns `.mutate(args)`,
+    `.isPending`, `.isError`. You CALL .mutate on the click.
+  - `onMutate(args)`: fires BEFORE the request — optimistic update
+    goes here. Returns a context object passed to onError for rollback.
+  - `onError(err, args, context)`: fires on failure. Roll back using
+    `context.prev`.
+  - `onSettled`: fires on success OR failure. Use it to
+    `invalidateQueries` — forces a refetch.
+  - `queryClient.cancelQueries`: stops in-flight refetches from
+    overwriting your optimistic update.
+  - `queryClient.setQueryData(key, updater)`: writes to cache directly,
+    no HTTP call.
+  - `queryClient.invalidateQueries({ queryKey })`: marks stale,
+    triggers refetch.
 
   TASK:
-  1. Inside useEmployees, add:
-
-       import { useMutation, useQueryClient } from '@tanstack/react-query';
-
-       const queryClient = useQueryClient();
-
-       const deleteMutation = useMutation({
-         mutationFn: (id: number) => deleteEmployee(id),
-         onMutate: async (id) => {
-           await queryClient.cancelQueries({ queryKey: ['employees'] });
-           const prev = queryClient.getQueryData<Employee[]>(['employees']);
-           queryClient.setQueryData<Employee[]>(['employees'], old =>
-             old?.filter(e => e.id !== id) ?? []
-           );
-           return { prev };
-         },
-         onError: (_err, _id, context) => {
-           if (context?.prev) queryClient.setQueryData(['employees'], context.prev);
-           toast.error('Failed to delete employee');
-         },
-         onSettled: () => queryClient.invalidateQueries({ queryKey: ['employees'] }),
-       });
-
-  2. onConfirm becomes:
-       const deletedEmployee = employees.find(e => e.id === confirm.id);
-       deleteMutation.mutate(confirm.id);
-       // show toast as before (sync — fires immediately)
+  1. Add useMutation for delete with optimistic update + rollback +
+     onSettled invalidation. See the canonical pattern in the existing
+     spec from earlier 16.3 (now 17.3).
+  2. Wire onConfirm to call deleteMutation.mutate(confirm.id).
 
   RULES:
-  - onMutate runs BEFORE the mutation fires — that's where optimistic
-    updates go. It returns a context object (here `{ prev }`) that's
-    passed to onError for rollback.
-  - cancelQueries prevents an in-flight refetch from overwriting the
-    optimistic update.
-  - invalidateQueries in onSettled forces a refetch — server is truth.
+  - Optimistic update for delete is safe (remove from cache before
+    the server confirms).
+  - Optimistic update for create is NOT safe (server-assigned id is
+    unknown) — skip it for create.
 
   WHAT YOU JUST LEARNED:
-  Optimistic UI with rollback. The shape: optimistic write → mutate →
-  on error, restore previous → on settled, sync with server. This is
-  the gold-standard write pattern in modern React.
+  Gold-standard write pattern: optimistic → mutate → rollback on
+  error → invalidate on settled. Reapply this in every feature.
 
 
-CHALLENGE 16.4 — Create + Edit mutations                    Target: 40 min
+CHALLENGE 17.4 — Create + Edit mutations                    Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
   TASK:
-  1. Add useCreateEmployee and useUpdateEmployee mutations (in useEmployees
-     or a new file useEmployeeMutations.ts).
-  2. In EmployeeForm, replace the manual try/catch + state updates with
-     these mutations.
-  3. Use mutation.isPending to disable the submit button while in-flight
-     (replaces your isSubmitting useState).
-  4. On success, invalidate ['employees'] and navigate back to /employees.
+  1. Add useCreateEmployee + useUpdateEmployee mutations.
+  2. EmployeeForm uses them — submit calls mutation.mutate(formData).
+  3. mutation.isPending replaces your hand-rolled isSubmitting.
+  4. On success: invalidateQueries(['employees']), navigate back.
 
   RULES:
-  - Don't optimistically update on create — you don't know the server-
-    assigned id until the response. Optimistic update for create is an
-    advanced pattern, skip it here.
-  - For edit, optimistic update IS worth doing — the data already exists,
-    just patch the cached entry.
+  - Optimistic update IS worth it for edit (data is in cache; patch it).
+  - Skip optimistic for create.
 
   WHAT YOU JUST LEARNED:
-  All your fetch+useState+useEffect+isSubmitting code collapses into
-  declarative useQuery / useMutation. Component code becomes purely
-  about UI, not data plumbing.
+  All the fetch+useState+useEffect+isSubmitting collapses into one
+  mutation hook. Component code becomes UI, not plumbing.
 
 
-CHALLENGE 16.5 — No-reference capstone: new resource        Target: 45 min
+CHALLENGE 17.5 — Query keys hierarchy + capstone            Target: 30 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-Add a new resource end-to-end with no syntax reference: a Departments
-list that fetches /api/departments (you'll need to add the endpoint
-to the .NET API too — or stub it client-side).
+  NEW HERE — read this before TASK:
+  - Query key hierarchy: `['employees']` (list), `['employees', id]`
+    (one item). `invalidateQueries({ queryKey: ['employees'] })` matches
+    both because of the array prefix match.
+  - Centralize key builders to avoid typos:
+       export const employeeKeys = {
+         all: ['employees'] as const,
+         detail: (id: EmployeeId) => ['employees', id] as const,
+       };
 
-  SCOPE:
-  - Add API client function (api.ts).
-  - Add useDepartments() hook using useQuery.
-  - Add a DepartmentList component that renders the list.
-  - Show it somewhere accessible (a sidebar, or a new route /departments).
+  TASK:
+  1. Create src/queries/employeeKeys.ts.
+  2. Refactor every queryKey in the codebase to use the builders.
+  3. Add useEmployee(id) for the detail view.
 
   RULES:
-  - No copying from the existing useEmployees code.
-  - You may look at TanStack Query docs and TS docs.
-  - Note in YOUR TIME which pieces needed lookup — same measurement as
-    13.5 / 14.5.
+  - `as const` on the array makes TS infer a tuple literal type.
+  - Key shape consistency across features is what makes invalidation
+    predictable.
 
   WHAT YOU JUST LEARNED:
-  After 5 React Query challenges, this proves you can spin up a new
-  cached resource from scratch — the exact "I can ship a feature"
-  test for a junior React engineer.
+  Query keys are the public API of your cache. Centralize them like
+  you centralize route strings.
 
 
 ================================================================================
-ROUND 17 — TESTING & QUALITY (designed 2026-05-12)
+ROUND 18 — REACT ROUTER DEEPER (designed 2026-05-15, redesigned)
 ================================================================================
 
-Pacing: One challenge per day. .NET unit testing concepts transfer; the
-new layer is React Testing Library's "query by role / accessible name"
-philosophy and async test patterns.
-
-Testing is not optional at enterprise. Every PR has tests; every refactor
-relies on them. The bar for "comfortable" includes writing tests
-unprompted.
+Pacing: One challenge per day. From Round 22 onwards every feature
+adds 1-2 new routes. The patterns here become rote — that's the goal.
 
 
-CHALLENGE 17.1 — Vitest + RTL setup                         Target: 25 min
+CHALLENGE 18.1 — createBrowserRouter config                 Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `createBrowserRouter([...])`: the v6.4+ way to declare routes as
+    a config array. Each entry: `{ path, element, children? }`.
+  - `RouterProvider router={router}`: replaces <BrowserRouter> +
+    <Routes>. Sits at the app top.
+  - Move providers ABOVE RouterProvider — routing depends on Auth/
+    QueryClient, not the other way around.
+
+  TASK:
+  1. In App.tsx, replace the existing <Routes> with a router config.
+  2. Move QueryClientProvider / AuthProvider above RouterProvider.
+  3. Confirm all current routes still work.
+
+  RULES:
+  - Routes as data are easier to test and to generate (e.g. from
+    user roles).
+
+  WHAT YOU JUST LEARNED:
+  Routes are config, not JSX. Same shape as enumerating endpoints in
+  an ASP.NET Core startup.
+
+
+CHALLENGE 18.2 — URL params with useParams                  Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `useParams<{ id: string }>()`: returns the URL params object. For
+    path `/employees/:id/edit`, returns `{ id: '...' }`.
+  - URL params are always STRINGS. Parse to numbers if needed; for
+    GUIDs/branded types, cast through the constructor (Round 16.2).
+
+  TASK:
+  1. EmployeeForm reads the id from useParams. If id present, fetch
+     via useEmployee(id) and prefill via reset(employee).
+  2. EmployeeList navigates to edit with
+     `navigate(`/employees/${employee.id}/edit`)`.
+
+  RULES:
+  - Single source of truth — don't also keep id in state.
+  - id === undefined ⇒ create mode.
+
+  WHAT YOU JUST LEARNED:
+  URL params let you bookmark / refresh / share state-bearing URLs.
+
+
+CHALLENGE 18.3 — Nested routes + Outlet (AuthLayout)        Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Nested route: parent route's `element` is a layout containing
+    `<Outlet />` — the placeholder for the child route's element.
+  - Reusable chrome (header, nav, footer) goes in the layout once.
+
+  TASK:
+  1. Create AuthLayout.tsx with a header (user menu, logout) + <Outlet />.
+  2. Restructure the router: protected branch with AuthLayout as the
+     parent element and the existing routes as children.
+  3. Confirm header appears on every authenticated page.
+
+  RULES:
+  - Exactly one <main> per page. Put it in the layout.
+  - Multiple layouts can coexist later (PublicLayout, AdminLayout).
+
+  WHAT YOU JUST LEARNED:
+  Layouts via nested routes = DRY chrome. Same idea as MVC layouts.
+
+
+CHALLENGE 18.4 — Search params via useSearchParams          Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `useSearchParams()`: returns `[searchParams, setSearchParams]`.
+    `URLSearchParams` API: `.get('key')`, `.set('key', value)`.
+  - URL example: `/employees?search=alice&dept=Engineering`.
+  - Search params persist across reload + are shareable as links.
+
+  TASK:
+  1. EmployeeList replaces the local search/department/hideBelow50K
+     useState with searchParams.
+  2. Setters update params with `{ replace: true }` (don't push
+     history on each keystroke).
+  3. Empty values delete the key (no `?search=`).
+
+  RULES:
+  - One source of truth. Drop the local state.
+
+  WHAT YOU JUST LEARNED:
+  Query strings = bookmarkable filter state. Standard pattern in
+  enterprise apps.
+
+
+CHALLENGE 18.5 — Typed route helpers                        Target: 25 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
   TASK:
-  1. CRA already ships with Jest + RTL, but Vitest is faster and is the
-     modern default. Install:
-       npm install -D vitest @testing-library/react @testing-library/jest-dom
-                     @testing-library/user-event jsdom
-  2. Add to package.json scripts: `"test": "vitest"`.
-  3. Create vitest.config.ts with jsdom environment and a setup file
-     that imports @testing-library/jest-dom.
-  4. Write one trivial test:
-
-       import { render, screen } from '@testing-library/react';
-       import StatusBadge from '../components/StatusBadge';
-
-       test('renders Active badge for isActive=true', () => {
-         render(<StatusBadge employee={{ ...mockEmployee, isActive: true }} />);
-         expect(screen.getByText(/active/i)).toBeInTheDocument();
-       });
-
-  5. Run `npm test`. Confirm green.
+  1. src/routes.ts:
+       export const routes = {
+         login: () => '/login' as const,
+         employees: () => '/employees' as const,
+         newEmployee: () => '/employees/new' as const,
+         editEmployee: (id: EmployeeId) => `/employees/${id}/edit` as const,
+       };
+  2. Replace every literal route string in the codebase.
 
   RULES:
-  - getByRole > getByText > getByTestId. Prefer queries that mirror
-    how users find things.
-  - One assertion per test where reasonable. Keep tests readable.
+  - One file owns route shape. Every navigator/link imports from it.
 
   WHAT YOU JUST LEARNED:
-  Vitest = faster Jest. The runner is incidental — RTL's query
-  philosophy is the actual skill.
-
-
-CHALLENGE 17.2 — Test a leaf component                      Target: 35 min
---------------------------------------------------------------------------
-YOUR TIME:
-
-  TASK:
-  1. Write 3 tests for EmployeeRow:
-       - renders the employee name
-       - calls onEdit when Edit clicked
-       - calls onDelete when Delete clicked
-  2. Use userEvent for clicks (more realistic than fireEvent):
-
-       import userEvent from '@testing-library/user-event';
-
-       test('calls onDelete when Delete button clicked', async () => {
-         const onDelete = vi.fn();
-         render(<EmployeeRow ... onDelete={onDelete} />);
-         await userEvent.click(screen.getByRole('button', { name: /delete/i }));
-         expect(onDelete).toHaveBeenCalledOnce();
-       });
-
-  RULES:
-  - vi.fn() = mock function (like Jest's jest.fn()).
-  - userEvent is async — always await.
-  - Don't test implementation details (state names, internal functions) —
-    test what the user sees and does.
-
-  WHAT YOU JUST LEARNED:
-  Component tests describe user-visible behavior. Refactoring the
-  internals shouldn't break the test — that's the discipline.
-
-
-CHALLENGE 17.3 — Test a custom hook                         Target: 35 min
---------------------------------------------------------------------------
-YOUR TIME:
-
-  TASK:
-  1. Test useSort:
-
-       import { renderHook, act } from '@testing-library/react';
-       import useSort from '../hooks/useSort';
-
-       test('toggles order when same field is clicked twice', () => {
-         const { result } = renderHook(() => useSort<Employee>('firstName'));
-         expect(result.current[0].order).toBe('asc');
-         act(() => { result.current[1]('firstName'); });
-         expect(result.current[0].order).toBe('desc');
-       });
-
-  2. Test useEmployeeFilter — but it depends on data. Pass a mock array
-     directly to the hook.
-
-  RULES:
-  - act() wraps state-changing calls. Without it, you get a console
-    warning.
-  - For hooks that depend on Context / QueryClient, you need to provide
-    a `wrapper` option to renderHook.
-
-  WHAT YOU JUST LEARNED:
-  Custom hooks are testable in isolation — renderHook treats the hook
-  like a tiny component. The state machine of the hook becomes the
-  test surface.
-
-
-CHALLENGE 17.4 — Test a form                                Target: 45 min
---------------------------------------------------------------------------
-YOUR TIME:
-
-  TASK:
-  1. Test EmployeeForm validation:
-       - shows error when firstName is empty
-       - shows error when email is invalid
-       - calls submit handler with the form data on valid submit
-  2. Use userEvent.type for typing into inputs:
-
-       await userEvent.type(screen.getByLabelText(/first name/i), 'Alice');
-       await userEvent.click(screen.getByRole('button', { name: /save/i }));
-       expect(submitMock).toHaveBeenCalledWith(expect.objectContaining({ firstName: 'Alice' }));
-
-  RULES:
-  - getByLabelText for inputs — same as a screen reader would find them.
-  - findByText is async (waits for it to appear). Use it for things
-    that render after a state change.
-
-  WHAT YOU JUST LEARNED:
-  Forms are the highest-value test target. Validation logic + happy-path
-  submit covered = most form regressions caught.
-
-
-CHALLENGE 17.5 — Mock API + integration test                Target: 45 min
---------------------------------------------------------------------------
-YOUR TIME:
-
-  TASK:
-  1. Mock the api module:
-
-       vi.mock('../services/api', () => ({
-         getEmployees: vi.fn(() => Promise.resolve({ data: [mockEmployee] })),
-         deleteEmployee: vi.fn(() => Promise.resolve()),
-       }));
-
-  2. Render <EmployeeList /> inside a QueryClientProvider with a fresh
-     QueryClient per test.
-  3. Wait for the row to appear, click Delete, click Yes-Delete,
-     assert the row is gone.
-
-  RULES:
-  - Fresh QueryClient per test prevents cross-test cache leaks.
-  - Use findBy* (async waits) for elements that appear after a fetch.
-  - Mock at the module boundary (services/api), not the network layer
-    yet — msw is the next level but unnecessary here.
-
-  WHAT YOU JUST LEARNED:
-  Integration test = render a slice, mock the edges, assert behavior.
-  The shape catches more real bugs than unit tests of small functions.
+  Route helpers turn typo bugs into compile errors. Same idea as
+  `nameof()` in C#.
 
 
 ================================================================================
-ROUND 18 — CAPSTONE & POLISH (designed 2026-05-12)
+ROUND 19 — RHF + ZOD (designed 2026-05-15, redesigned)
 ================================================================================
 
-Pacing: This is the round that measures "comfortable." Each challenge
-adds a piece that enterprise apps have but practice apps usually don't.
-By the end, you have a full-stack project that holds up to a senior
-React engineer's review.
-
-Take this round at your own speed — there's no "next round" pressure.
+Pacing: One challenge per day. Every feature from Round 22+ has a form.
+Internalize the RHF + Zod combo NOW — you'll write it 8+ more times.
 
 
-CHALLENGE 18.1 — Code splitting (React.lazy + Suspense)     Target: 30 min
+CHALLENGE 19.1 — Install RHF + first form                   Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - React Hook Form (RHF): a 3rd-party library that manages form state
+    via refs (uncontrolled inputs). Much less re-rendering than the
+    controlled-input pattern you wrote in Round 10.
+  - `useForm<T>()`: main hook. Returns `{ register, handleSubmit,
+    formState, watch, setValue, reset }`.
+  - `register('fieldName')`: returns props you spread onto an <input>.
+    Wires the input to RHF's internal state.
+  - `handleSubmit(onValid, onInvalid?)`: wraps your submit. Runs
+    validation first, calls onValid with typed data on success.
+
+  TASK:
+  1. npm install react-hook-form
+  2. Create a throwaway TestForm.tsx with one field + register +
+     handleSubmit, log the submitted data.
+  3. Confirm it logs.
+
+  RULES:
+  - `useForm<T>()` where T = form-data shape.
+  - Don't mix RHF with controlled `value=`. Pick one model per form.
+
+  WHAT YOU JUST LEARNED:
+  RHF replaces hand-rolled form state. Faster, less code, fewer
+  re-renders.
+
+
+CHALLENGE 19.2 — Refactor EmployeeForm to RHF               Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
   TASK:
-  1. In App.tsx, lazy-load each route component:
-
-       import { lazy, Suspense } from 'react';
-       const Login = lazy(() => import('./components/Login'));
-       const EmployeeList = lazy(() => import('./components/EmployeeList'));
-       const EmployeeForm = lazy(() => import('./components/EmployeeForm'));
-
-  2. Wrap <Routes> in <Suspense fallback={<div>Loading...</div>}>.
-  3. Open DevTools Network tab. Reload. Confirm separate JS chunks
-     load per route.
+  1. Replace useState + handleChange + validate in EmployeeForm with:
+       const { register, handleSubmit, reset, formState: { errors, isSubmitting } }
+         = useForm<EmployeeFormData>({ defaultValues: {...} });
+  2. Each input: `<input {...register('firstName', { required: true })} />`.
+  3. Edit mode: `reset(employee)` after the data loads.
 
   RULES:
-  - lazy() returns a Component. The fallback shows during the chunk
-    download.
-  - ErrorBoundary should still wrap Suspense — chunk loads can fail.
+  - Don't keep old useState alongside RHF.
+  - `defaultValues` runs once on mount. Use `reset()` for later.
+  - `formState.isSubmitting` replaces hand-rolled isSubmitting.
 
   WHAT YOU JUST LEARNED:
-  Code splitting = ship less JS up front. The pattern is one line per
-  route — but the bundle size win is real, especially as your app grows.
+  ~50% less code, fewer re-renders. The pattern you'll repeat in every
+  feature form.
 
 
-CHALLENGE 18.2 — Accessibility pass                         Target: 35 min
+CHALLENGE 19.3 — Zod schema validation                      Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Zod: a SCHEMA validation library. Declare shape + rules once;
+    get a runtime validator AND an inferred TS type.
+  - `z.object({ ... })`: object schema. Field rules: `.min(1)`,
+    `.email()`, `.regex(...)`, `.optional()`, `.positive()`.
+  - `z.infer<typeof schema>`: derives the TS type from the schema.
+    One source of truth for shape + rules.
+  - C# analogy: FluentValidation + an inferred DTO type.
+
+  TASK:
+  1. npm install zod
+  2. Create src/schemas/employeeSchema.ts with z.object + .min/.email
+     rules + error messages.
+  3. Export `type EmployeeFormData = z.infer<typeof employeeSchema>`.
+
+  RULES:
+  - Error message lives INSIDE the rule: `.email('Invalid email')`.
+  - `z.coerce.number()` if the input is a string-typed number.
+
+  WHAT YOU JUST LEARNED:
+  Schema-first. Type AND rules in one place — change one, both update.
+
+
+CHALLENGE 19.4 — Wire Zod into RHF (resolver)               Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - "Resolver": adapter connecting a validation library to RHF.
+    `@hookform/resolvers/zod` exports `zodResolver(schema)`.
+  - With a resolver, RHF validates the WHOLE FORM against the schema
+    instead of using per-field inline rules.
+
+  TASK:
+  1. npm install @hookform/resolvers
+  2. useForm({ resolver: zodResolver(employeeSchema), defaultValues:
+     {...} }).
+  3. Remove inline { required: true } from register calls — Zod owns
+     rules.
+
+  RULES:
+  - One source of truth: rules in the schema, not in register.
+
+  WHAT YOU JUST LEARNED:
+  Schema-driven validation. Change the schema, type AND rules update,
+  components untouched.
+
+
+CHALLENGE 19.5 — Field UX polish                            Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `formState.touchedFields`: map of `{ field: true }` for fields
+    the user has blurred.
+  - `mode: 'onTouched'`: validate when first blurred, then on every
+    change.
+  - `setError('root', { message })`: form-level error (server-side
+    "email already in use").
+
+  TASK:
+  1. mode: 'onTouched'.
+  2. Show errors only when `touchedFields[field]` is true.
+  3. Disable Submit until `formState.isValid && !isSubmitting`.
+  4. On server error: setError('root', { message }) + render
+     errors.root?.message at the top.
+
+  RULES:
+  - Eager error display is bad UX. Touch-aware is the bar.
+
+  WHAT YOU JUST LEARNED:
+  Form polish: touched-aware errors, disabled-until-valid, root errors.
+  Use this pattern in every feature form.
+
+
+================================================================================
+ROUND 20 — AUTH DEEPER + FIRST-LOGIN PASSWORD (designed 2026-05-15, redesigned)
+================================================================================
+
+Pacing: One challenge per day. Builds on Round 13.2 (Context) + the
+existing JWT login. Adds refresh tokens, role-based guards, and the
+key feature for later: forced password change on first login.
+
+This round directly enables Phase 3 features that need role checks.
+
+
+CHALLENGE 20.1 — Refresh token endpoint (.NET)              Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - REFRESH TOKEN PATTERN: short-lived access token (15 min) + long-
+    lived refresh token (7 days). When access expires, client silently
+    exchanges refresh → new access. User never re-logs in. Standard
+    OAuth2 refresh-grant flow.
+  - Storage: access in memory or short-lived storage; refresh in an
+    httpOnly Secure cookie (JS can't read it — XSS-safe).
+  - Token rotation: every refresh issues a NEW refresh token,
+    invalidates the old one. Anti-replay.
+
+  TASK:
+  1. AuthController.Login returns `{ accessToken, expiresIn: 900 }` in
+     body + sets refresh as httpOnly Secure SameSite=Strict cookie.
+  2. AuthController.Refresh reads the cookie, validates against a
+     simple in-memory store, returns a new access token + rotates the
+     cookie.
+  3. AuthController.Logout invalidates the refresh in the store.
+
+  RULES:
+  - Refresh tokens must rotate. Never reuse.
+  - Cookie flags: HttpOnly + Secure + SameSite=Strict + Path=/api/auth.
+
+  WHAT YOU JUST LEARNED:
+  Standard auth shape. Access in JS-accessible storage; refresh in
+  cookie. Backend-side.
+
+
+CHALLENGE 20.2 — Refresh interceptor on axios               Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Axios response interceptor with silent retry: on 401, call
+    /auth/refresh, retry the original request with the new token.
+    Transparent to component code.
+  - Single-flight: 3 concurrent 401s must call refresh ONCE; the
+    other two wait for the same promise. Use a module-level promise.
+
+  TASK:
+  1. In api.ts, extend the response interceptor:
+     - On 401 (not already retried): set _retry flag, await a shared
+       refreshPromise, retry the original request with the new token.
+     - On 401 after retry: clear localStorage, redirect /login.
+  2. Test by shortening access expiry to 30s; watch silent refresh
+     happen.
+
+  RULES:
+  - `original._retry` flag prevents loops.
+  - `??=` (nullish-coalescing assignment) — share one in-flight
+    promise.
+
+  WHAT YOU JUST LEARNED:
+  Silent refresh is invisible UX. Same shape as a .NET DelegatingHandler
+  that re-attempts on 401.
+
+
+CHALLENGE 20.3 — First-login forced password change         Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - First-login pattern: when an admin creates a user, they set a
+    DEFAULT password (e.g. "user123") and a `mustChangePassword:
+    true` flag on the user record. On first login, the API includes
+    this flag in the response. The client redirects to a forced
+    change-password page and DOESN'T let the user navigate anywhere
+    else until they change it.
+
+  TASK:
+  1. .NET side: User model gains `MustChangePassword: bool`. Login
+     response includes it: `{ accessToken, user: { ..., mustChangePassword } }`.
+  2. Add POST /api/auth/change-password — body `{ oldPassword,
+     newPassword }`. On success: clears `MustChangePassword`.
+  3. Client: store `user.mustChangePassword` in AuthContext.
+  4. Add /auth/force-change-password route — a stripped-down page
+     with only the change-password form.
+  5. App-level redirect: if user.mustChangePassword AND current path
+     ≠ /auth/force-change-password, redirect there. Block all other
+     navigation.
+
+  RULES:
+  - The forced page must NOT have logout-as-cancel — user can't
+    bypass it.
+  - Old password is required even on forced change (defense against
+    session hijack).
+
+  WHAT YOU JUST LEARNED:
+  Forced workflows. The pattern: a server flag + a client redirect
+  guard + a single-purpose page. Reused in many enterprise flows
+  (TOS acceptance, profile completion, etc.).
+
+
+CHALLENGE 20.4 — Role-based route guards                    Target: 25 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
   TASK:
-  1. Install jsx-a11y eslint plugin and enable a baseline ruleset.
-     Fix any errors it surfaces (missing alt, button vs div, etc.).
-  2. Modal accessibility:
-       - aria-modal="true", role="dialog", aria-labelledby
-       - Trap focus inside when open; restore focus on close
-       - Esc to close
-  3. Keyboard navigation: every row's action should be tab-reachable.
-  4. Run Lighthouse audit (DevTools → Lighthouse → Accessibility).
-     Aim for 95+.
+  1. Extend ProtectedRoute to accept `roles?: ('Admin' | 'Manager' |
+     'Employee')[]`.
+  2. Inside: if useAuth().user?.role not in allowed list → redirect
+     /forbidden.
+  3. Add /forbidden page.
+  4. UI hiding: `{user?.role === 'Admin' && <button>Delete</button>}`.
 
   RULES:
-  - Don't over-engineer focus trap from scratch — use react-focus-lock or
-    similar if you want, or write a simple one.
-  - Skip the screen-reader-only-text patterns until you've hit the basics.
+  - Server-side authorization is the SOURCE OF TRUTH. Client hiding is
+    UX, not security.
+  - Pull roles from useAuth() everywhere — never hard-code role
+    strings inline.
 
   WHAT YOU JUST LEARNED:
-  Accessibility is mostly small, mechanical wins (use the right element,
-  add aria-label, ensure keyboard nav). Enterprise apps fail audits
-  because nobody runs them — running one once teaches the patterns.
+  Two layers: route guard + UI hide. Reused in every feature that has
+  manager/admin views.
 
 
-CHALLENGE 18.3 — Feature flag pattern                       Target: 30 min
+CHALLENGE 20.5 — useAuth narrowing + capstone               Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - The narrowing guard: `if (!ctx) throw new Error(...)` — after this
+    line, TS removes null from the type. Every consumer of useAuth()
+    gets a non-null AuthContextValue, no more `auth?.user`.
+
+  TASK:
+  1. Refactor AuthContext: `createContext<AuthContextValue | null>(null)`.
+  2. useAuth throws if outside a Provider.
+  3. Walk every consumer and remove optional-chaining on auth.
+
+  RULES:
+  - Default value of null (not {}) — forces the runtime guard.
+
+  WHAT YOU JUST LEARNED:
+  Context with TS forces a discipline JS lets slide. Same as DI in
+  .NET that fails fast on missing registration.
+
+
+================================================================================
+ROUND 21 — TAILWIND CSS (designed 2026-05-15, redesigned)
+================================================================================
+
+Pacing: One challenge per day. Refactor existing components to Tailwind
+BEFORE features start — every new feature uses Tailwind from day one.
+Tailwind muscle memory builds through this round + every future feature.
+
+
+CHALLENGE 21.1 — Install + config                           Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Tailwind: a UTILITY-first CSS framework. Instead of `.btn { ... }`,
+    you write `<button className="px-2 py-1 bg-blue-500">`.
+  - Generates a small final CSS containing only the utility classes
+    you actually used (PURGE step). Empty class? Doesn't ship.
+  - `tailwind.config.js` `content:` array MUST include every file
+    with Tailwind classes.
+
+  TASK:
+  1. Follow Tailwind's CRA/Vite install: 3 steps (npm install,
+     postcss config, @tailwind directives in index.css).
+  2. Restart dev server.
+  3. Test class on a heading.
+
+  RULES:
+  - content paths matter — wrong glob = purged classes don't ship.
+
+  WHAT YOU JUST LEARNED:
+  Utility CSS lives next to JSX. The mental shift takes 1-2 components.
+
+
+CHALLENGE 21.2 — Refactor StatusBadge + EmployeeRow         Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `clsx`: tiny utility for composing conditional class strings.
+    `clsx('px-2', isActive && 'bg-green-500', isDisabled && 'opacity-50')`
+    builds a clean className.
+  - Use clsx the moment you have 2+ conditional class fragments.
+
+  TASK:
+  1. npm install clsx
+  2. Replace StatusBadge's inline `style` with Tailwind utilities.
+  3. Replace EmployeeRow's inline `style` (selected highlight, cursor)
+     with Tailwind classes.
+
+  RULES:
+  - Don't extract to a CSS class yet. The co-location is the point.
+
+  WHAT YOU JUST LEARNED:
+  Inline-style refactor pattern. Repeat in every component.
+
+
+CHALLENGE 21.3 — Refactor EmployeeList + EmployeeForm       Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
   TASK:
-  1. Add an env var: REACT_APP_FEATURE_RECENT_ACTIVITY=true in .env.local.
-  2. Create a tiny useFeatureFlag hook:
-
-       export function useFeatureFlag(name: string): boolean {
-         return process.env[`REACT_APP_FEATURE_${name.toUpperCase()}`] === 'true';
-       }
-
-  3. Gate one component (e.g. the RecentActivity from 13.5):
-
-       const showActivity = useFeatureFlag('recent_activity');
-       return <>{showActivity && <RecentActivity />}...</>;
-
-  4. Toggle the env var and reload. Confirm the component appears/disappears.
+  1. Replace every inline style and ad-hoc className in EmployeeList
+     and EmployeeForm with Tailwind utilities.
+  2. Tables get `min-w-full divide-y` patterns; forms get `space-y-4
+     max-w-md mx-auto` patterns.
+  3. Buttons get a consistent shape — `px-4 py-2 rounded bg-blue-600
+     text-white hover:bg-blue-700`.
 
   RULES:
-  - Env vars in CRA must start with REACT_APP_. They're inlined at build
-    time — not runtime.
-  - Production-grade flags use LaunchDarkly / GrowthBook / similar.
-    This is the pattern, not the production tool.
+  - Repetition is FINE. We extract via @apply only after 5+ repeats
+    (see 21.5).
 
   WHAT YOU JUST LEARNED:
-  Feature flags are how production teams ship in progress. Same shape
-  as the .NET feature toggles you've already worked with (Microsoft.
-  FeatureManagement) but client-side.
+  More repetition. Tailwind muscle memory builds here.
 
 
-CHALLENGE 18.4 — Performance pass with Profiler             Target: 35 min
+CHALLENGE 21.4 — Design tokens + dark mode                  Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Design tokens: named values (colors, spacing, radii) in
+    `theme.extend`. `colors.brand.500 = '#1976d2'` becomes utility
+    classes `bg-brand-500`, `text-brand-500`, etc.
+  - `darkMode: 'class'`: add `.dark` on `<html>` → `dark:bg-gray-900`
+    utilities apply. Toggle via state or system preference.
+
+  TASK:
+  1. tailwind.config.js: add `theme.extend.colors.brand`,
+     `darkMode: 'class'`.
+  2. Use `bg-brand-*` for buttons / accents throughout.
+  3. Add a dark mode toggle (simple state for now; refactor to
+     Zustand in Round 22).
+  4. Add `dark:` variants on the main palette.
+
+  RULES:
+  - Dark palette must also pass contrast — test in Lighthouse.
+
+  WHAT YOU JUST LEARNED:
+  Design system as config. Same idea as a tokens JSON, but built into
+  the build pipeline.
+
+
+CHALLENGE 21.5 — @apply for repeated patterns               Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `@apply`: extract a utility bundle into a CSS class. Use sparingly.
+  - Right time: when a pattern appears 5+ places AND it's a real
+    design-system component (button, card, input).
+
+  TASK:
+  1. Identify your most-repeated utility bundle (probably button).
+  2. @layer components { .btn-primary { @apply px-4 py-2 ...; } }
+  3. Replace inline usages with `<button className="btn-primary">`.
+
+  RULES:
+  - Default to inline utilities. @apply is an escape hatch, not a
+    starting point.
+
+  WHAT YOU JUST LEARNED:
+  Right level of abstraction — repeated 5+ times AND named component.
+
+
+================================================================================
+ROUND 22 — ZUSTAND (designed 2026-05-15, redesigned)
+================================================================================
+
+Pacing: One challenge per day. Context works but re-renders every
+consumer on every change. Zustand is "Context done right" — selective
+subscriptions, no provider, ~1KB. You'll use it for theme, recent
+activity, notifications, draft form state, etc.
+
+
+CHALLENGE 22.1 — Install + first store                      Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Zustand (German for "state"): a state-management library.
+    A "store" is a hook (`useThemeStore`) that components call to read
+    and update state. No Provider needed.
+  - `create<T>()((set, get) => ({ ... }))`: builds the store.
+  - Selective subscriptions: components pass a SELECTOR
+    (`s => s.mode`) and only re-render when that slice changes.
+
+  TASK:
+  1. npm install zustand
+  2. Create src/stores/themeStore.ts with mode + toggle.
+  3. Use it in your theme toggle button.
+
+  RULES:
+  - Always pass a selector. Without one, the component re-renders on
+    every store change.
+
+  WHAT YOU JUST LEARNED:
+  Global state without Providers, with fine-grained subscriptions.
+
+
+CHALLENGE 22.2 — Migrate RecentActivityContext → Zustand    Target: 30 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
   TASK:
-  1. Open React DevTools → Profiler tab → Start recording.
-  2. Type a few characters in the search box. Stop recording.
-  3. Inspect the flame graph. Identify which components re-rendered
-     and how long each took.
-  4. Find ONE component re-rendering unnecessarily. Fix it with
-     memo / useCallback / useMemo as appropriate.
-  5. Re-record and confirm the fix.
+  1. Create useRecentActivityStore with the same shape (entries, log,
+     clear, cap-at-5).
+  2. Drop the Provider wrapper.
+  3. Update consumers: useContext → useRecentActivityStore(selector).
 
   RULES:
-  - Profile in dev mode is slower than prod — interpret numbers as
-    relative, not absolute.
-  - Don't optimize speculatively. Profile, fix the worst offender, profile again.
+  - Test that the entries list still updates after delete/undo.
 
   WHAT YOU JUST LEARNED:
-  Perf work is measurement-driven. Same discipline as .NET BenchmarkDotNet
-  / dotTrace — don't guess, measure.
+  Migration pattern: Context → Zustand. Same component surface, less
+  boilerplate.
 
 
-CHALLENGE 18.5 — Capstone: build a new feature end-to-end   Target: 60 min
+CHALLENGE 22.3 — Shallow equality for combined selectors    Target: 25 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-The "are you comfortable?" test. Build one full feature from scratch,
-end to end, using every pattern you've learned.
+  NEW HERE — read this before TASK:
+  - Combining slices `s => ({ a: s.a, b: s.b })` returns a NEW object
+    every render — defeats memoization.
+  - `shallow` from zustand/shallow compares object keys/values one
+    level deep.
 
-  FEATURE SUGGESTION: AUDIT LOG
-  - Backend: new endpoint GET /api/audit/employee/{id} returning a list
-    of { id, action, at } entries for that employee. Stub data is fine —
-    no need to persist.
-  - Domain: AuditEntry interface in models.ts.
-  - Application: AuditService and IAuditService.
-  - Infrastructure: AuditRepository (stub returns fixed data).
-  - API: AuditController.
-  - Client: useAuditLog(employeeId) hook using useQuery, AuditLog
-    component, route /employees/:id/audit, link from EmployeeRow.
-  - Tests: at least one for the component, one for the hook.
-  - Types end-to-end. ErrorBoundary wrap. Accessibility checked.
+  TASK:
+  1. Find multi-slice selectors in your codebase.
+  2. Add `shallow` as the second argument:
+       const { a, b } = useStore(s => ({ a: s.a, b: s.b }), shallow);
 
   RULES:
-  - No reference to other features in this codebase. Build from scratch.
-  - Spec says "audit log" but the FEATURE is yours to design. Pick the
-    shape, the columns, the layout. Senior bar: design, then implement.
-  - Note in YOUR TIME which pieces still needed lookup. After Round 18,
-    that list should be shorter than after 13.5.
+  - Single-slice selectors with primitives don't need shallow.
 
-  WHAT THIS PROVES:
-  You can ship a vertical slice through 4 .NET projects + a React app,
-  with types, server state, accessibility, and tests. That's the
-  "junior + .NET senior, can be productive on a real team" bar.
+  WHAT YOU JUST LEARNED:
+  Default equality is `===`. Shallow is the fix for object selectors.
 
-  After 18.5:
-  - You've done it. Round 19+ is your call: more features, Next.js
-    migration, real component library, or apply for full-stack roles.
-    Memory entry for the next session: "Round 18 done — comfortable bar
-    reached. Ask user what they want next."
+
+CHALLENGE 22.4 — Persist middleware (theme + recent)         Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Zustand middleware: `persist(stateCreator, { name })` saves the
+    store to localStorage and rehydrates on load.
+  - `partialize` to persist only some fields.
+
+  TASK:
+  1. Wrap themeStore + recentActivityStore in persist with unique
+     names.
+  2. Verify reload: theme + last 5 activities survive.
+
+  RULES:
+  - Don't persist sensitive data (tokens, PII) in localStorage.
+
+  WHAT YOU JUST LEARNED:
+  Free persistence with zero code in components.
+
+
+CHALLENGE 22.5 — Devtools + slice pattern                   Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `devtools` middleware: wires to Redux DevTools (browser ext) —
+    time-travel debugging, action log.
+  - Slice pattern: split a big store into slices and combine.
+
+  TASK:
+  1. Wrap with `devtools(persist(...))`.
+  2. If any store has 5+ unrelated fields, split into slices.
+
+  RULES:
+  - devtools is a no-op in production.
+
+  WHAT YOU JUST LEARNED:
+  Production-grade Zustand: persistent, debuggable, composable.
+
+
+================================================================================
+ROUND 23 — FEATURE: MY PROFILE (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. First real feature. Warm-up.
+
+Pattern repetition starts HERE. Every feature from now on hits the same
+checklist: types → API → query/mutation hooks → route → page component →
+form → validation → role check → tests. You won't write new patterns;
+you'll re-write Round 17/18/19/20 in new domains. That's the point.
+
+
+CHALLENGE 23.1 — Profile types + .NET endpoint              Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Profile is just "the current user's own Employee record." We add
+    a GET /api/profile that resolves the current user from the JWT
+    and returns their Employee data.
+
+  TASK:
+  1. ProfileController.GetMe(): reads sub claim from JWT, returns
+     EmployeeService.GetByUserId(...).
+  2. (If User doesn't link to Employee yet, add a UserId field on
+     Employee and populate.)
+  3. src/Types/Profile.ts: `export type Profile = Employee` (alias
+     for now; we may diverge later).
+
+  RULES:
+  - Don't add /api/profile/:id. Profile is always "me."
+  - The server resolves the user — never trust a client-sent id.
+
+  WHAT YOU JUST LEARNED:
+  Auth context propagating to the API. The JWT IS the identity.
+
+
+CHALLENGE 23.2 — useProfile query hook                      Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. src/queries/profileKeys.ts: `export const profileKeys = { me:
+     ['profile', 'me'] as const };`
+  2. src/queries/useProfile.ts: useQuery wrapping
+     api.get<Profile>('/profile').
+  3. Default `?? null`.
+
+  RULES:
+  - Same query-key hierarchy convention as employees (Round 17.5).
+  - Repetition. Same pattern.
+
+  WHAT YOU JUST LEARNED:
+  Reapplying Round 17. By Round 30 you'll be writing useX hooks blindly.
+
+
+CHALLENGE 23.3 — Profile page route + display               Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. routes.ts: `profile: () => '/profile' as const`.
+  2. Router config: add /profile inside AuthLayout.
+  3. ProfilePage.tsx: render useProfile().data in a card. Fields:
+     name, email, dept, position, date of joining.
+  4. Header gets a "My Profile" link to /profile.
+
+  RULES:
+  - Tailwind throughout (Round 21 muscle memory).
+  - Loading state, error state — same shape as EmployeeList.
+
+  WHAT YOU JUST LEARNED:
+  Read-only page from a useQuery hook. The simplest possible feature
+  page.
+
+
+CHALLENGE 23.4 — Edit profile (RHF + Zod + mutation)        Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. schemas/profileSchema.ts: Zod schema with editable fields
+     (phoneNumber, address — NOT email or department; those are admin-
+     owned).
+  2. queries/useUpdateProfile.ts: useMutation calling PUT /api/profile.
+     On success: queryClient.setQueryData(profileKeys.me, data) +
+     toast.
+  3. ProfileEditPage.tsx: RHF + zodResolver + reset(profile) on load
+     + onSubmit calls updateMutation.mutate(data).
+  4. Submit button disabled until isValid + isDirty + !isPending.
+
+  RULES:
+  - `isDirty` (RHF formState) prevents wasted submits when nothing
+    changed.
+  - Optimistic update on profile is fine — single record.
+
+  WHAT YOU JUST LEARNED:
+  Edit form = useQuery + reset + useMutation + RHF + zodResolver.
+  Same five lines you'll reuse in every feature edit form.
+
+
+CHALLENGE 23.5 — Avatar upload (small file)                 Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `FormData`: browser type for multipart bodies.
+    `fd.append('file', file)`.
+  - Axios + FormData: pass the FormData as the body; axios sets
+    Content-Type automatically.
+  - Image preview: `URL.createObjectURL(file)` returns a temporary
+    URL for the selected file before it uploads.
+
+  TASK:
+  1. .NET: POST /api/profile/avatar accepting IFormFile, saves under
+     wwwroot/avatars/{userId}.{ext}, updates Employee.avatarUrl.
+  2. Client: file input with preview + submit-on-change.
+  3. Validate size < 2MB and type starts with image/.
+
+  RULES:
+  - Show preview BEFORE upload starts.
+  - Show progress (Round 28 spec — preview-only here is OK; full
+    progress comes back in 28.2).
+
+  WHAT YOU JUST LEARNED:
+  First file upload. Preview + multipart + axios = ~30 lines.
+
+
+================================================================================
+ROUND 24 — FEATURE: CHANGE PASSWORD (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Builds on Round 20.3 (forced first-login
+flow). This round covers the NORMAL change-password path (already
+logged in, voluntary change).
+
+
+CHALLENGE 24.1 — Change-password endpoint                   Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. POST /api/auth/change-password from Round 20.3 is already there.
+     Verify it works when MustChangePassword is false (normal path).
+  2. Validate password strength server-side: min 8 chars, contains
+     digit + letter + special.
+  3. Return 400 with the specific rule that failed.
+
+  RULES:
+  - Server validation is the gate. Client validation is UX.
+  - Don't return the new password back in any response.
+
+  WHAT YOU JUST LEARNED:
+  One endpoint, two callers: forced flow (Round 20.3) and voluntary
+  flow (this round). Same endpoint, different UX wrappers.
+
+
+CHALLENGE 24.2 — Password strength schema (Zod)             Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Zod refinements: `.refine(predicate, { message })` for cross-
+    field rules.
+  - Match-fields rule example:
+       z.object({ newPassword: z.string().min(8), confirm: z.string() })
+        .refine(d => d.newPassword === d.confirm, { path: ['confirm'],
+           message: 'Passwords do not match' })
+
+  TASK:
+  1. schemas/changePasswordSchema.ts:
+     - oldPassword: string min 1
+     - newPassword: string min 8, regex for letter + digit + special
+     - confirm: string min 1
+     - refine: newPassword === confirm, error on `confirm` path
+  2. Export the inferred type.
+
+  RULES:
+  - Put the error on the `confirm` field so it shows next to that input.
+  - One rule per refinement — chain them for readability.
+
+  WHAT YOU JUST LEARNED:
+  Cross-field validation in Zod. The match-passwords case is one of
+  the top 3 form patterns you'll write.
+
+
+CHALLENGE 24.3 — Change-password form + mutation             Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. queries/useChangePassword.ts: useMutation calling the endpoint.
+     On success: logout + redirect /login + toast "Password changed,
+     please log in again."
+  2. ProfilePage gets a "Change Password" button → opens modal or
+     navigates to /profile/change-password.
+  3. RHF + zodResolver(changePasswordSchema). Three masked inputs.
+
+  RULES:
+  - Force re-login on password change — invalidates other sessions.
+  - On error, show server message on errors.root.
+
+  WHAT YOU JUST LEARNED:
+  Sensitive mutation + side effect (logout + redirect). Pattern:
+  mutate → success callback handles auth state.
+
+
+CHALLENGE 24.4 — Forced flow re-test                        Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Have an admin create a new user with default password "user123".
+  2. Log in as that user; verify forced-change page intercepts.
+  3. Change password; verify navigation unblocks.
+  4. Log out, log in again — no forced flow second time.
+
+  RULES:
+  - The flow tests TWO server states (mustChange = true, false) and
+    TWO client interceptions (active, inactive).
+
+  WHAT YOU JUST LEARNED:
+  End-to-end verification of a multi-step flow. Build the habit of
+  testing both branches.
+
+
+CHALLENGE 24.5 — Capstone: forgot-password (stubbed)        Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Production forgot-password = email a reset link with a token.
+    We won't send email (no SMTP in the learning repo) — stub it:
+    the API returns the reset URL in the response (DEV mode only),
+    the client navigates there.
+
+  TASK:
+  1. POST /api/auth/forgot-password { email } — generates a one-time
+     reset token, stores it (in-memory dict), returns the reset URL
+     (dev only).
+  2. POST /api/auth/reset-password { token, newPassword } — validates
+     token, sets new password, deletes token.
+  3. Client: /forgot-password page → email input → submit → display
+     the reset link (in real life it'd be emailed).
+  4. /reset-password/:token page → new password form → submit →
+     redirect /login.
+
+  RULES:
+  - Tokens are one-shot. Used → deleted.
+  - Tokens expire after 15 min. Store the issued-at and check.
+
+  WHAT YOU JUST LEARNED:
+  Reset flow pattern: tokenize, expire, one-shot. Same shape as the
+  real flow you'd build behind SMTP.
+
+
+================================================================================
+ROUND 25 — FEATURE: DOCUMENTS — FOUNDATION (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Your suggestion. Document upload is a
+self-contained feature touching file IO, role-based access, list/detail
+views. We split it across 3 rounds (25/26/27) because the upload UX
+itself is rich.
+
+
+CHALLENGE 25.1 — Document model + .NET CRUD                 Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Document model: id, ownerUserId, fileName, contentType, sizeBytes,
+    uploadedAt, storagePath (server-relative).
+  - Storage: wwwroot/documents/{ownerUserId}/{guid}.{ext}. Filename on
+    disk is a GUID (anti-collision + anti-traversal); display name
+    comes from the model.
+
+  TASK:
+  1. EmployeeManager.Domain/Models/Document.cs: 7 fields above + DateTime
+     UploadedAt.
+  2. Domain/Interfaces/IDocumentRepository: CRUD signatures.
+  3. Infrastructure/DocumentRepository: JsonDataStore<List<Document>>
+     at documents.json.
+  4. Application/DocumentService: validates size, type; assigns id;
+     places file on disk; returns the model.
+  5. API/DocumentController: 5 endpoints (list-mine, list-all-admin,
+     upload, download, delete) with role checks.
+
+  RULES:
+  - Max 5MB, accept only application/pdf, image/*, text/plain.
+  - DELETE removes file + record. Always check ownership OR admin.
+  - List-all-admin requires Admin role.
+
+  WHAT YOU JUST LEARNED:
+  Clean-arch slice with file storage. The repository hides the file IO.
+
+
+CHALLENGE 25.2 — TS types + query hooks (mine + all)        Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. src/Types/Document.ts: Document interface (camelCase).
+  2. src/queries/documentKeys.ts:
+       all: ['documents'] as const,
+       mine: ['documents', 'mine'] as const,
+       allAdmin: ['documents', 'admin'] as const,
+  3. queries/useMyDocuments.ts → GET /api/documents/mine.
+  4. queries/useAllDocuments.ts → GET /api/documents (admin only —
+     guarded inside the hook OR via route).
+
+  RULES:
+  - Two separate query keys = two cache entries. An admin user can
+    have both populated.
+
+  WHAT YOU JUST LEARNED:
+  Multiple read endpoints for the same domain, separate keys for each.
+
+
+CHALLENGE 25.3 — My Documents page (list + delete)           Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. routes.ts: `myDocuments: () => '/documents' as const`.
+  2. MyDocumentsPage.tsx: table of own documents (fileName, size,
+     uploadedAt, Delete button).
+  3. useDeleteDocument mutation with optimistic remove + rollback.
+  4. ConfirmModal reused from Round 12.2.
+
+  RULES:
+  - Optimistic delete OK (you know the id).
+  - Reuse ConfirmModal — don't write a second one.
+
+  WHAT YOU JUST LEARNED:
+  Round 12.2 + 17.3 patterns reapplied. Confirm modal + optimistic
+  delete + invalidation.
+
+
+CHALLENGE 25.4 — Download flow                              Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Authenticated download = fetch + blob + invisible-anchor click.
+    Browser navigation (`window.location = url`) doesn't send the
+    Authorization header.
+
+  TASK:
+  1. api.ts: downloadDocument(id) — axios GET with responseType:
+     'blob' + Authorization header (interceptor handles).
+  2. On the Download click, call it, get blob, create object URL,
+     trigger an <a download={fileName}>.click(), revoke URL.
+
+  RULES:
+  - Always revokeObjectURL after click (memory leak otherwise).
+  - Filename from the model, not the URL.
+
+  WHAT YOU JUST LEARNED:
+  Auth-protected download in 15 lines. Reused for CSV export (28.4).
+
+
+CHALLENGE 25.5 — Document type/size validation (client)     Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Zod schema for upload form: file (File type), type in [...],
+     size < 5_000_000.
+  2. Show validation errors BEFORE attempting upload.
+  3. Server still validates — defense in depth.
+
+  RULES:
+  - Don't waste bandwidth. Client validation = UX. Server = security.
+
+  WHAT YOU JUST LEARNED:
+  Two-layer validation. Same pattern in every upload feature.
+
+
+================================================================================
+ROUND 26 — FEATURE: DOCUMENTS — UPLOAD UX (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. The upload UI itself — drag-drop,
+progress, errors.
+
+
+CHALLENGE 26.1 — Upload form (basic file input)             Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. UploadDocumentForm.tsx: <input type="file" /> + selected-file
+     preview (name + size).
+  2. useUploadDocument mutation: POST FormData to /api/documents.
+  3. On success: invalidateQueries(documentKeys.mine) + toast.
+
+  RULES:
+  - Disable submit while isPending.
+  - Reset file input after upload.
+
+  WHAT YOU JUST LEARNED:
+  Round 23.5 again, slightly richer.
+
+
+CHALLENGE 26.2 — Upload progress bar                        Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Axios `onUploadProgress: (e) => setProgress(e.loaded / e.total)`
+    fires repeatedly during upload. Drive a progress bar from it.
+  - Mutation `onMutate` receives the same args you passed to .mutate;
+    use it to seed a local "uploading file X" state.
+
+  TASK:
+  1. Local state `progress` (0-100).
+  2. Pass onUploadProgress to axios.post call.
+  3. Render a styled progress bar (Tailwind utility classes).
+
+  RULES:
+  - On upload fail/reset, set progress back to 0.
+
+  WHAT YOU JUST LEARNED:
+  Streaming upload feedback. Same pattern fits any progress UI.
+
+
+CHALLENGE 26.3 — Drag-and-drop zone                         Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Native drag events on a div: onDragEnter / onDragOver / onDragLeave
+    / onDrop. Must `e.preventDefault()` on dragOver or browser won't
+    fire drop.
+  - `e.dataTransfer.files` is a FileList.
+
+  TASK:
+  1. Replace the file input with a drag-drop zone (still has a fallback
+     click-to-browse).
+  2. Visual states: idle, valid-file-hovering, invalid-file-hovering,
+     uploading.
+  3. Multi-file: queue them and upload sequentially.
+
+  RULES:
+  - Use Tailwind state classes (`border-dashed border-2 hover:bg-...`).
+  - Validate type/size on drop, not on upload.
+
+  WHAT YOU JUST LEARNED:
+  Drag events + visual feedback. Reused in any uploadable surface.
+
+
+CHALLENGE 26.4 — Multi-file queue                           Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Queue state: array of `{ file, status: 'pending'|'uploading'|
+     'done'|'error', progress }`.
+  2. Process one at a time (sequential), update status per item.
+  3. Show the queue with per-item progress + retry on error.
+
+  RULES:
+  - Don't parallelize uploads — browser concurrent connection limits.
+  - Keep failed items in the queue with a Retry button.
+
+  WHAT YOU JUST LEARNED:
+  Queue state machines. The pattern fits any batched async operation.
+
+
+CHALLENGE 26.5 — Capstone: paste-from-clipboard              Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Paste event: `onPaste(e)` on window or on a specific element.
+    `e.clipboardData.items` is a list; filter for image/* types and
+    call `.getAsFile()`.
+
+  TASK:
+  1. On the documents page, add a window-level paste listener.
+  2. If user pastes a screenshot (browser converts to a File), add
+     it to the upload queue.
+
+  RULES:
+  - Clean up the listener in useEffect cleanup.
+  - Don't intercept paste on text inputs.
+
+  WHAT YOU JUST LEARNED:
+  Clipboard API for files. Polish that good apps have.
+
+
+================================================================================
+ROUND 27 — FEATURE: DOCUMENTS — ADMIN VIEW (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Role-based view + admin delete.
+
+
+CHALLENGE 27.1 — Admin documents page (list all)            Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. routes.ts: `adminDocuments: () => '/admin/documents' as const`.
+  2. AdminDocumentsPage.tsx — guarded by ProtectedRoute roles=['Admin'].
+  3. Table columns: owner name, fileName, size, uploadedAt, actions
+     (Download, Delete).
+  4. useAllDocuments hook from Round 25.2.
+
+  RULES:
+  - Server-side authorization is the gate. Route guard is UX.
+
+  WHAT YOU JUST LEARNED:
+  Role-based page from existing role-guard infrastructure (Round 20.4).
+
+
+CHALLENGE 27.2 — Filter by owner (admin)                    Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. searchParams: ownerId (optional).
+  2. Filter the list client-side (small dataset) — for prod you'd
+     server-paginate.
+  3. Dropdown of owners (derive from list) + clear filter.
+
+  RULES:
+  - Reapply the search-param-as-state pattern from Round 18.4.
+
+  WHAT YOU JUST LEARNED:
+  URL-driven filter on a new domain. Same pattern as employee filter.
+
+
+CHALLENGE 27.3 — Admin delete with reason                   Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Audit-friendly admin actions need a REASON. Add a `reason: string`
+    parameter to the delete endpoint when called by admin.
+  - We'll wire actual audit logging in Round 34. For now, just
+    capture and store the reason.
+
+  TASK:
+  1. Extend DELETE /api/documents/{id} to accept `{ reason: string }`
+     in the body when caller != owner.
+  2. Server validates: reason required if deleting someone else's doc.
+  3. Client: ConfirmModal variant that includes a reason textarea.
+
+  RULES:
+  - Don't break the existing own-document delete (no reason needed).
+
+  WHAT YOU JUST LEARNED:
+  Same endpoint, branching by caller identity. Common pattern in
+  multi-role APIs.
+
+
+CHALLENGE 27.4 — Bulk download as zip (server)              Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. POST /api/documents/zip { ids: string[] } — streams a ZIP of
+     selected files.
+  2. Use System.IO.Compression.ZipArchive into the response stream.
+  3. Client: select multiple docs (checkboxes), Download Zip button.
+
+  RULES:
+  - Stream, don't buffer. A user could zip 100 files.
+
+  WHAT YOU JUST LEARNED:
+  Server streaming for batch downloads. Memory-safe pattern.
+
+
+CHALLENGE 27.5 — Stats panel (admin)                         Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Top of AdminDocumentsPage: cards showing
+     - Total documents
+     - Total size (formatted MB/GB)
+     - Documents added this week
+  2. Compute client-side from useAllDocuments().data.
+
+  RULES:
+  - Use the same Card component you build for the dashboard in
+    Round 36.2 — extract it now or there.
+
+  WHAT YOU JUST LEARNED:
+  Aggregations from client cache. Same pattern fits any dashboard.
+
+
+================================================================================
+ROUND 28 — FEATURE: LEAVE — BALANCE FOUNDATION (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Your big suggestion. Split across 4
+rounds (28/29/30/31) because the state machine (request → approve →
+reject → cancel → request-rollback) is rich and worth practising.
+
+
+CHALLENGE 28.1 — Leave domain model                         Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Two records:
+    * LeaveRequest: id, employeeId, startDate, endDate, days, type
+      ('Annual'|'Sick'|'Unpaid'), reason, status ('Pending'|
+      'Approved'|'Rejected'|'Cancelled'|'RollbackRequested'|
+      'RolledBack'), createdAt, decidedAt?, decidedByUserId?,
+      decisionNote?, rollbackNote?
+    * LeaveBalance: derived per employee per year — totalAllowance
+      (25), used, pending, remaining.
+  - Balance is COMPUTED from approved+pending requests, not stored.
+    Stored balance gets stale.
+
+  TASK:
+  1. Domain/Models/LeaveRequest.cs + LeaveType enum + LeaveStatus enum.
+  2. Domain/Models/LeaveBalance.cs (DTO, not persisted).
+  3. Repository: LeaveRequestRepository (JSON store).
+  4. Service: LeaveService with GetBalance(employeeId, year) that
+     reads approved+pending for the year and computes.
+
+  RULES:
+  - Status is a discriminated union on the client side — write it
+    as a TS literal union to mirror.
+  - Balance computation: used = sum(days where status=Approved AND
+    year matches); pending = sum where status=Pending.
+
+  WHAT YOU JUST LEARNED:
+  Domain modeling for a status-machine feature. Status drives UI.
+
+
+CHALLENGE 28.2 — TS types + status union                    Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Discriminated union for status:
+       type LeaveStatus =
+         | 'Pending' | 'Approved' | 'Rejected'
+         | 'Cancelled' | 'RollbackRequested' | 'RolledBack';
+  - Helper sets of statuses that share UI treatment:
+       const closed: LeaveStatus[] = ['Approved', 'Rejected',
+         'Cancelled', 'RolledBack'];
+
+  TASK:
+  1. src/Types/Leave.ts: LeaveRequest, LeaveBalance, LeaveType,
+     LeaveStatus.
+  2. Helper functions: isClosed(status), isPending(status),
+     canCancel(status), canRequestRollback(status).
+
+  RULES:
+  - Logic lives in helpers, not inline in components. Reused in
+     multiple pages.
+
+  WHAT YOU JUST LEARNED:
+  State machine helpers. Componentry stays declarative.
+
+
+CHALLENGE 28.3 — Balance endpoint + hook                    Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. GET /api/leave/balance?year=2026 → returns LeaveBalance for the
+     calling user.
+  2. Same endpoint with ?employeeId=... for Admin/Manager.
+  3. queries/leaveKeys.ts hierarchy.
+  4. useLeaveBalance(year?) hook.
+
+  RULES:
+  - Default year = current year (server-side; new DateTime.UtcNow.Year).
+  - Authorization: own balance OR Manager/Admin role.
+
+  WHAT YOU JUST LEARNED:
+  Server resolves "current year" — don't trust client clocks for
+  business logic.
+
+
+CHALLENGE 28.4 — My Leaves page (balance + list)            Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. routes.ts: `myLeaves: () => '/leaves' as const`.
+  2. MyLeavesPage.tsx:
+     - Top: 3 balance cards (Used / Pending / Remaining of 25).
+     - Below: list of own leave requests with status badge.
+  3. StatusBadge generalized for leave statuses (6 colors).
+
+  RULES:
+  - StatusBadge becomes a generic `<StatusBadge status={...} kind="leave"
+    />`. Or per-feature components. Pick one and stick to it.
+
+  WHAT YOU JUST LEARNED:
+  Reusable badge for a multi-state status. UI mirrors the union.
+
+
+CHALLENGE 28.5 — Year selector                              Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Year dropdown on MyLeavesPage (current and previous 2 years).
+  2. searchParams `year=2024`.
+  3. useLeaveBalance(year) + filter list by year.
+
+  RULES:
+  - Default to current year. Allow viewing past years (history).
+
+  WHAT YOU JUST LEARNED:
+  Year scoping = URL param. Same pattern as filter in Round 18.4.
+
+
+================================================================================
+ROUND 29 — FEATURE: LEAVE — REQUEST SUBMISSION (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. The employee's request flow.
+
+
+CHALLENGE 29.1 — Leave request schema                       Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. schemas/leaveRequestSchema.ts:
+       - startDate, endDate (both ISO date strings)
+       - type: z.enum(['Annual','Sick','Unpaid'])
+       - reason: min 5
+       - refine: endDate >= startDate
+       - refine: business days ≥ 1 (no leave for 0 days)
+  2. Export z.infer type.
+
+  RULES:
+  - All date logic in helpers — don't sprinkle Date math.
+
+  WHAT YOU JUST LEARNED:
+  Cross-field date validation. Same shape as match-passwords (Round
+  24.2).
+
+
+CHALLENGE 29.2 — Request endpoint + balance guard           Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. POST /api/leave { startDate, endDate, type, reason }.
+  2. Server-side guard: balance.remaining >= requested days OR type ==
+     'Unpaid'. Otherwise 400.
+  3. Server-side guard: no overlap with existing Pending/Approved
+     requests for the same user.
+
+  RULES:
+  - Days calculation: exclude weekends. (Skip holidays for now;
+    simple business-days = Mon-Fri).
+  - Server is the source of truth for balance + overlap. Client
+    estimates only.
+
+  WHAT YOU JUST LEARNED:
+  Domain rules ALWAYS live server-side. Client checks for UX.
+
+
+CHALLENGE 29.3 — Request form                                Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. /leaves/new route + page.
+  2. RHF + zodResolver(leaveRequestSchema).
+  3. Live computed "days" display (uses business-day helper).
+  4. Live remaining-after-this-request preview.
+  5. useCreateLeaveRequest mutation; on success: navigate /leaves +
+     invalidate balance + list.
+
+  RULES:
+  - Don't submit if computed days > remaining (UX gate).
+  - Server still gates (defense in depth).
+
+  WHAT YOU JUST LEARNED:
+  Live-computed form values (`watch()` in RHF). Lights up the form
+  intelligently.
+
+
+CHALLENGE 29.4 — Date pickers + react-day-picker             Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Native <input type="date"> works but is browser-dependent and
+    can't disable weekends. For ranges + business-day disabling, a
+    library is needed.
+  - `react-day-picker`: small, headless, integrates with RHF via
+    Controller (next challenge teaches that).
+
+  TASK:
+  1. npm install react-day-picker
+  2. Replace start/end date inputs with day pickers.
+  3. Disable Saturdays + Sundays.
+
+  RULES:
+  - Keep the underlying value as an ISO string. Convert at the picker
+    boundary.
+
+  WHAT YOU JUST LEARNED:
+  Date pickers are non-trivial. Reach for a library; don't build one.
+
+
+CHALLENGE 29.5 — RHF Controller for custom inputs            Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - RHF `register` only works on uncontrolled native inputs. Custom
+    components (react-day-picker, react-select) need the `Controller`
+    wrapper:
+       <Controller name="startDate" control={control} render={({ field }) => <DayPicker {...field} />} />
+  - `field` provides value + onChange. The custom component uses them.
+
+  TASK:
+  1. Wrap your day-picker with Controller.
+  2. Same for the type dropdown (if you used a styled <select>).
+
+  RULES:
+  - Use register for native inputs, Controller for custom components.
+
+  WHAT YOU JUST LEARNED:
+  Controller is the "any custom input" escape hatch in RHF. Used in
+  most real-world forms.
+
+
+================================================================================
+ROUND 30 — FEATURE: LEAVE — APPROVAL FLOW (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. The manager view.
+
+
+CHALLENGE 30.1 — Manager role + pending queue endpoint      Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Add 'Manager' role. Seed one user with role=Manager.
+  2. GET /api/leave/pending — returns all Pending requests across
+     direct reports. (For simplicity: Manager sees everyone's pending
+     for now; team-scoping is a later refinement.)
+  3. queries/usePendingLeaveRequests.ts.
+
+  RULES:
+  - Admin can also approve. Authorization: roles in ['Manager',
+    'Admin'].
+
+  WHAT YOU JUST LEARNED:
+  Role-scoped read endpoint. Same shape as admin documents.
+
+
+CHALLENGE 30.2 — Pending queue page                          Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. /manager/leaves/pending route — guarded.
+  2. Table: requester, dates, days, type, reason, actions.
+  3. Empty state: "No pending requests."
+
+  RULES:
+  - Sort by createdAt asc (oldest first).
+  - Reuse Tailwind table patterns from Round 21.3.
+
+  WHAT YOU JUST LEARNED:
+  Another role-gated page. By now this is rote.
+
+
+CHALLENGE 30.3 — Approve + reject endpoints                  Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. POST /api/leave/{id}/approve { note? }.
+  2. POST /api/leave/{id}/reject { note: string (required) }.
+  3. Server checks: caller is Manager/Admin, status is currently
+     Pending, updates status + decidedBy + decidedAt + decisionNote.
+
+  RULES:
+  - Rejection note REQUIRED (it's the reason the employee gets).
+  - Approval note optional.
+
+  WHAT YOU JUST LEARNED:
+  Two endpoints for two outcomes — vs. a generic /decide endpoint
+  with action in body. Explicit > clever.
+
+
+CHALLENGE 30.4 — Approve/reject UI + mutations              Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. useApproveLeaveRequest, useRejectLeaveRequest mutations.
+  2. Approve = inline button + confirm modal (optional note).
+  3. Reject = button → modal with required reason textarea.
+  4. On success: invalidate pending list + the requester's balance +
+     their leave list.
+
+  RULES:
+  - Optimistic? Skip — the row vanishes from "pending" after; let
+    the refetch happen.
+  - Invalidate MULTIPLE keys (pending list + per-user balance/list).
+
+  WHAT YOU JUST LEARNED:
+  Multi-key invalidation. One write, several caches go stale.
+
+
+CHALLENGE 30.5 — Notification to requester (toast/in-app)    Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. When manager approves/rejects, add an entry to the
+     RecentActivityStore (Round 22.2) for the requester. (Real
+     real-time push comes in Round 32 / 46.)
+  2. Requester sees the entry on next page load.
+
+  RULES:
+  - Don't try real-time yet. Reactive load is enough until SignalR
+    (Round 46).
+
+  WHAT YOU JUST LEARNED:
+  The poor-man's notification — stash in a shared store; let the
+  consumer read on refresh. Bridges to real-time later.
+
+
+================================================================================
+ROUND 31 — FEATURE: LEAVE — ROLLBACK FLOWS (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. The rich part of your suggestion. Two
+distinct flows depending on whether the request was already approved.
+
+
+CHALLENGE 31.1 — Cancel (pre-approval) endpoint              Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. POST /api/leave/{id}/cancel — owner only, status must be Pending.
+  2. Sets status = 'Cancelled' + decidedAt = now.
+  3. Server returns 409 if status is not Pending.
+
+  RULES:
+  - Owner-only. Manager can't "cancel" — they can only reject.
+
+  WHAT YOU JUST LEARNED:
+  State-machine enforcement server-side. The status transition is
+  the rule.
+
+
+CHALLENGE 31.2 — Cancel UI                                   Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. On MyLeavesPage, show "Cancel" button only when
+     `canCancel(status)` = true (Pending).
+  2. Confirm modal, then useCancelLeaveRequest mutation.
+  3. On success: invalidate own list + balance.
+
+  RULES:
+  - Helper from Round 28.2 (`canCancel`) drives the button visibility.
+
+  WHAT YOU JUST LEARNED:
+  Status helpers + JSX = declarative state machine UI.
+
+
+CHALLENGE 31.3 — Request rollback (post-approval) endpoint   Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Post-approval rollback: once a leave is Approved, the employee
+    can't unilaterally cancel — they REQUEST a rollback with a note.
+    Status transitions Approved → RollbackRequested. Manager then
+    decides:
+      Approve rollback → status becomes RolledBack (balance refunded).
+      Reject rollback → status returns to Approved.
+  - The note is REQUIRED on the rollback request — it's the
+    justification.
+
+  TASK:
+  1. POST /api/leave/{id}/request-rollback { note: string }
+     - Owner only.
+     - Status must be Approved.
+     - Sets status=RollbackRequested + rollbackNote=note.
+  2. POST /api/leave/{id}/rollback-approve { managerNote? }
+     - Manager only.
+     - Status must be RollbackRequested.
+     - Sets status=RolledBack.
+  3. POST /api/leave/{id}/rollback-reject { managerNote: string }
+     - Manager only.
+     - Status must be RollbackRequested.
+     - Reverts status to Approved + stores managerNote.
+
+  RULES:
+  - Balance computation in Round 28.3 must treat 'RolledBack' as not
+    counting toward `used`. Verify.
+  - Audit trail: don't lose the original rollbackNote on reject.
+    Maybe add a separate history field (Round 34 covers full audit).
+
+  WHAT YOU JUST LEARNED:
+  Multi-step state machine. Each transition is its own endpoint with
+  its own preconditions. Same shape as a workflow engine.
+
+
+CHALLENGE 31.4 — Rollback request UI (employee side)         Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. MyLeavesPage: when `status === 'Approved'`, show "Request
+     Rollback" button.
+  2. Click → modal with required reason textarea.
+  3. useRequestLeaveRollback mutation.
+  4. After submit, status shows as "Rollback Pending" (UI label).
+  5. Cannot re-request while RollbackRequested.
+
+  RULES:
+  - Show the rollback note clearly on the row after submission.
+  - Disable the action button while RollbackRequested.
+
+  WHAT YOU JUST LEARNED:
+  Status-aware UI. The button set on each row changes by status.
+
+
+CHALLENGE 31.5 — Rollback decision UI (manager side)         Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. ManagerLeavesPage gets a new tab/section: "Rollback Requests."
+  2. GET /api/leave/rollback-requested (new endpoint OR reuse
+     pending with status filter).
+  3. Each row shows: original leave dates, original reason, rollback
+     note (the employee's justification).
+  4. Two actions: Approve Rollback (optional manager note) / Reject
+     Rollback (required note).
+  5. After decision: invalidate pending-rollback list + the
+     requester's leave list + balance.
+
+  RULES:
+  - The manager sees BOTH the original request context AND the new
+    rollback note. Make it scannable.
+  - Approving rollback REFUNDS days into balance.remaining.
+
+  WHAT YOU JUST LEARNED:
+  Two-stage approval. Same shape as expense reports, change requests,
+  any workflow where the org wants a second eye.
+
+
+================================================================================
+ROUND 32 — FEATURE: NOTIFICATIONS (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Bell icon + dropdown + mark-read +
+auto-poll. SignalR real-time push comes in Round 46.
+
+
+CHALLENGE 32.1 — Notification model + create on events      Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Notification model: id, recipientUserId, title, body, link?, read,
+    createdAt.
+  - "Side effect" pattern: when a domain event happens (leave approved,
+    document uploaded), CREATE a notification for the relevant user(s).
+
+  TASK:
+  1. Domain/Models/Notification.cs.
+  2. INotificationRepository / NotificationRepository (JSON store).
+  3. NotificationService.Create(userId, title, body, link).
+  4. Call from existing services:
+     - LeaveService.Approve / Reject → notify requester
+     - DocumentService.Upload → notify all Admins
+  5. GET /api/notifications — current user's notifications, newest first.
+  6. POST /api/notifications/{id}/read.
+  7. POST /api/notifications/read-all.
+
+  RULES:
+  - Don't notify the actor (manager who approved doesn't get their own
+    notification).
+
+  WHAT YOU JUST LEARNED:
+  Services calling each other through interfaces — clean cross-feature
+  side effects.
+
+
+CHALLENGE 32.2 — useNotifications hook (with polling)        Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - React Query `refetchInterval`: a useQuery option that auto-refetches
+    every N ms. Cheap real-time approximation.
+       useQuery({ queryKey, queryFn, refetchInterval: 30_000 });
+
+  TASK:
+  1. notificationKeys.ts + useNotifications hook with refetchInterval 30s.
+  2. useUnreadCount = derive from notifications data length where !read.
+  3. useMarkRead + useMarkAllRead mutations with optimistic update.
+
+  RULES:
+  - Disable polling when user is on the notifications page (they
+    interact with it directly).
+  - 30s feels live without hammering the server.
+
+  WHAT YOU JUST LEARNED:
+  Polling as a first-pass for "real-time." Trade-off: simple, but the
+  delay is visible. Replaced with SignalR in Round 46.
+
+
+CHALLENGE 32.3 — Bell + badge in header                      Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Bell icon in AuthLayout header.
+  2. Badge with unread count (hidden if 0).
+  3. Click → dropdown panel showing last 10 notifications.
+  4. Each notification: title, body, time-ago, link.
+
+  RULES:
+  - Use a simple time-ago helper (no library): "5m ago", "2h ago",
+    "3d ago".
+  - Close dropdown on outside click + on Esc.
+
+  WHAT YOU JUST LEARNED:
+  Dropdown with outside-click. Pattern reused for user menu, filters.
+
+
+CHALLENGE 32.4 — Notifications page (full history)           Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. /notifications route.
+  2. Full list with filters: all / unread / by date range.
+  3. Mark-read on hover / click. Mark-all-read button.
+  4. Empty state.
+
+  RULES:
+  - Reuse Tailwind table patterns + searchParams filter pattern.
+
+  WHAT YOU JUST LEARNED:
+  Same archetype as documents/leaves list. By now the page assembly
+  is rote.
+
+
+CHALLENGE 32.5 — Notification preferences (stub)              Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Add a `notificationPrefs: { email: bool, inApp: bool }` field on
+     User.
+  2. /profile/notifications page with two checkboxes.
+  3. PUT /api/profile/notification-prefs.
+  4. Service-side, just store; we don't wire email yet (no SMTP).
+
+  RULES:
+  - Stub the email path — log it server-side. Real SMTP is a separate
+    Round (skipped here; future scope).
+
+  WHAT YOU JUST LEARNED:
+  Preferences-as-data. Same shape as feature flags.
+
+
+================================================================================
+ROUND 33 — FEATURE: AUDIT LOG (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Every state-changing action is recorded,
+filterable, exportable. Foundation for compliance + debugging.
+
+
+CHALLENGE 33.1 — Audit model + middleware                   Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - AuditEntry: id, actorUserId, actorName, action (string enum),
+    entityType (string), entityId (string), before? (JSON), after?
+    (JSON), at (DateTime).
+  - Capture strategy: an ASP.NET Core action filter that intercepts
+    POST/PUT/DELETE on controllers, captures the before-state if
+    available, records on success.
+
+  TASK:
+  1. Domain/Models/AuditEntry.cs.
+  2. IAuditRepository / AuditRepository.
+  3. AuditService.Record(...).
+  4. AuditActionFilter : IAsyncActionFilter — captures actor (from
+     JWT), action name, entity from route. Calls AuditService.
+  5. Register in Program.cs as a global filter.
+
+  RULES:
+  - Sensitive fields (passwords, tokens) NEVER stored in before/after.
+  - JSON-serialize the entity for human readability.
+
+  WHAT YOU JUST LEARNED:
+  Cross-cutting via filters. Same shape as ASP.NET filters you've
+  used before, applied to audit.
+
+
+CHALLENGE 33.2 — Audit endpoints + role guard                Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. GET /api/audit — Admin only. Optional query: actorId, entityType,
+     entityId, from, to.
+  2. Server-side pagination: ?page=1&pageSize=50.
+  3. Sort by `at` desc.
+
+  RULES:
+  - Admin-only. Audit is sensitive.
+
+  WHAT YOU JUST LEARNED:
+  Pagination on the server. Same shape as the client pagination from
+  Round 12.1, but in SQL/JSON.
+
+
+CHALLENGE 33.3 — useAuditLog hook + page                     Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - React Query `keepPreviousData: true`: while fetching a new page,
+    keep the previous page's data visible. No "loading…" flicker
+    between pages.
+  - Page state in URL: ?page=2 — survives reload, shareable.
+
+  TASK:
+  1. useAuditLog(filters): useQuery with the filters in the queryKey.
+  2. /admin/audit route.
+  3. Filter bar: actor dropdown, entityType dropdown, date range.
+  4. Table with prev/next pagination.
+
+  RULES:
+  - Pagination + filter combine into the queryKey — every combo gets
+    its own cache slot.
+
+  WHAT YOU JUST LEARNED:
+  Server-side paginated list with filters. Same pattern in any
+  enterprise admin tool.
+
+
+CHALLENGE 33.4 — Diff viewer (before/after)                  Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Click an audit row → side-drawer or modal showing before/after
+     JSON.
+  2. Simple diff highlighting: bold/colored keys that changed.
+     (No need for a full diff library; loop the keys, compare.)
+
+  RULES:
+  - Pretty-print JSON.
+  - Show "(unchanged)" rather than empty for no-change views.
+
+  WHAT YOU JUST LEARNED:
+  Object diff rendering. Useful in any "before/after" surface.
+
+
+CHALLENGE 33.5 — CSV export                                  Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. "Export CSV" button on audit page.
+  2. Build CSV client-side from currently visible filters (last 1000
+     entries server-side cap).
+  3. Reuse the blob-download helper from Round 25.4.
+
+  RULES:
+  - Cap at 1000 client-side. Larger exports go via a server-side
+    streamed endpoint — defer.
+
+  WHAT YOU JUST LEARNED:
+  Same blob-download pattern as document download. Reused.
+
+
+================================================================================
+ROUND 34 — FEATURE: MANAGER DASHBOARD (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Aggregated views, charts, KPI cards.
+Charts are introduced here.
+
+
+CHALLENGE 34.1 — KPI endpoints + types                       Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. GET /api/dashboard/kpis — aggregates server-side:
+     - employeeCount, activeCount
+     - pendingLeavesCount
+     - documentsThisWeek
+     - rollbackRequestsCount
+  2. Types: src/Types/Dashboard.ts (Kpis interface).
+  3. queries/useDashboardKpis.ts.
+
+  RULES:
+  - Manager/Admin only.
+  - Aggregate server-side — don't ship the whole employee list to
+    derive a count client-side.
+
+  WHAT YOU JUST LEARNED:
+  Aggregation endpoint vs list endpoint. Big perf difference at scale.
+
+
+CHALLENGE 34.2 — KPI cards UI                                 Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - "Card" component: a reusable styled container (title, big number,
+    subtitle). Extract once, use everywhere.
+
+  TASK:
+  1. components/Card.tsx — title, value, optional trend (% change),
+     optional link.
+  2. /dashboard route.
+  3. Dashboard renders 4-6 cards in a grid.
+
+  RULES:
+  - Tailwind grid: `grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4`.
+  - Cards link to the relevant page (pendingLeavesCount → manager
+    leaves).
+
+  WHAT YOU JUST LEARNED:
+  Composable cards from a typed KPI object. Same shape in any admin
+  dashboard.
+
+
+CHALLENGE 34.3 — Install Recharts + first chart              Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Recharts: declarative React charts wrapping D3.
+    `<BarChart><Bar dataKey="count" /></BarChart>`.
+  - Data shape: an array of objects, one per X-axis tick. Each Bar
+    references a key on those objects.
+
+  TASK:
+  1. npm install recharts
+  2. GET /api/dashboard/employees-by-department.
+  3. BarChart on dashboard for the result.
+
+  RULES:
+  - Data must be sorted and complete (zero rows for empty buckets).
+
+  WHAT YOU JUST LEARNED:
+  Charts as components. The library is small; the data prep is the
+  work.
+
+
+CHALLENGE 34.4 — Time-series chart (hires by month)          Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. GET /api/dashboard/hires-by-month?year=2026.
+  2. LineChart with monotone curve.
+  3. Empty months show 0, not missing.
+
+  RULES:
+  - X-axis labels formatted: "Jan", "Feb" (3-char month).
+  - Tooltip with full date + count.
+
+  WHAT YOU JUST LEARNED:
+  Line vs bar. Use line for trends over time; bar for category compare.
+
+
+CHALLENGE 34.5 — Responsive container + a11y                 Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `<ResponsiveContainer>` wraps a chart and gives it parent
+    width/height — chart reflows on resize.
+  - Charts are SVG → invisible to screen readers. Provide an
+    aria-label + an accessible data table somewhere.
+
+  TASK:
+  1. Wrap every chart in <ResponsiveContainer width="100%" height={300}>.
+  2. Add aria-label describing each chart.
+  3. Below each chart, render a <details><summary>Show data</summary>
+     <table>...</table></details>.
+
+  RULES:
+  - <details>/<summary> is native disclosure — accessible by default.
+
+  WHAT YOU JUST LEARNED:
+  Responsive + accessible charts. Necessary, not optional.
+
+
+================================================================================
+ROUND 35 — FEATURE: MANAGER DASHBOARD POLISH (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Pending-approvals quick view + team
+list + date range filter.
+
+
+CHALLENGE 35.1 — Pending approvals widget                    Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Dashboard widget: list of 5 most-recent pending leave requests
+     with quick Approve/Reject buttons.
+  2. Reuse the mutations from Round 30.4.
+  3. After action: invalidate.
+
+  RULES:
+  - Don't duplicate the manager-leaves page logic. Reuse hooks +
+    mutations. Different UI shell only.
+
+  WHAT YOU JUST LEARNED:
+  Composition: the same mutations driving two different UIs.
+
+
+CHALLENGE 35.2 — Team list widget                            Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Widget: list of direct reports (placeholder: all employees if
+     no team relationship modeled — simplify).
+  2. Each card: name, position, current leave status (On Leave /
+     Working / On Sick).
+
+  RULES:
+  - Compute "currently on leave" client-side from leave list.
+
+  WHAT YOU JUST LEARNED:
+  Cross-data derivation. Pull from multiple queries, render one view.
+
+
+CHALLENGE 35.3 — Date range filter                           Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Date-range picker at the top of dashboard (this week, this month,
+     this quarter, custom).
+  2. searchParams: from, to (ISO).
+  3. All KPI endpoints accept ?from&to; re-query when range changes.
+
+  RULES:
+  - Default to "this month."
+  - Server applies the range to all aggregations.
+
+  WHAT YOU JUST LEARNED:
+  Global filter binding. Affects multiple widgets uniformly.
+
+
+CHALLENGE 35.4 — Export dashboard as CSV (each chart)        Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Each chart gets an Export button → CSV of its underlying data.
+  2. Reuse blob-download helper.
+
+  RULES:
+  - Don't export the rendered chart image — export the data. Easier,
+    more useful.
+
+  WHAT YOU JUST LEARNED:
+  Data is the asset; the chart is one rendering of it. Export the
+  asset.
+
+
+CHALLENGE 35.5 — Dashboard preferences (saved layout)        Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Add a Zustand store `dashboardPrefs` (persist middleware).
+  2. Let user toggle widgets on/off via a "Customize" menu.
+  3. State survives reload.
+
+  RULES:
+  - Default: all widgets on.
+
+  WHAT YOU JUST LEARNED:
+  User customization as state. Same shape as collapsed-sidebar pref.
+
+
+================================================================================
+ROUND 36 — FEATURE: TIME TRACKING — CLOCK IN/OUT (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Clock-in/out workflow + duration math.
+
+
+CHALLENGE 36.1 — TimeEntry model + endpoints                Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - TimeEntry: id, employeeId, clockInAt (UTC ISO), clockOutAt? (UTC
+    ISO), durationMinutes (derived on clock-out), date (the local
+    business day this entry belongs to), note?, status ('Open'|
+    'Closed'|'Submitted'|'Approved'|'Rejected').
+  - All timestamps stored UTC. Display localized.
+
+  TASK:
+  1. Domain + repo + service for TimeEntry.
+  2. POST /api/time/clock-in — fails if there's an Open entry for
+     today.
+  3. POST /api/time/clock-out — closes the open entry, computes
+     duration.
+  4. GET /api/time?from&to — list own entries.
+
+  RULES:
+  - UTC server-side. ALWAYS.
+  - One open entry at a time per employee.
+
+  WHAT YOU JUST LEARNED:
+  Time data discipline. UTC everywhere, except at the edge.
+
+
+CHALLENGE 36.2 — Clock-in/out UI                              Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Live timer: `useEffect` + setInterval(1000) updating a "minutes
+    elapsed" counter. Clean up on unmount.
+
+  TASK:
+  1. /time route.
+  2. Big card showing current state:
+     - If clocked in: live timer + Clock Out button.
+     - If clocked out: Clock In button + today's total.
+  3. useClockIn / useClockOut mutations.
+
+  RULES:
+  - setInterval cleanup in useEffect — leaked timers cause re-render
+    bugs.
+  - Format duration: "2h 14m."
+
+  WHAT YOU JUST LEARNED:
+  Live UI driven by setInterval. Same pattern in any timer-based
+  feature.
+
+
+CHALLENGE 36.3 — Today's entries list + edit                 Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Below the big card: today's entries (closed + open).
+  2. Edit modal for each: change times, add note.
+  3. PUT /api/time/{id} — server enforces same-day, no overlap.
+
+  RULES:
+  - Editing reduces honesty. Production apps log edits. For now, log
+    via the audit filter (Round 33).
+
+  WHAT YOU JUST LEARNED:
+  Edit-after-the-fact pattern. Audit captures the change.
+
+
+CHALLENGE 36.4 — Daily/weekly aggregation                    Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. GET /api/time/summary?week=2026-W20 — returns 7 daily totals.
+  2. queries/useWeekSummary.
+  3. Render under today's entries: a 7-day strip with hours per day.
+
+  RULES:
+  - Use ISO week numbers server-side.
+
+  WHAT YOU JUST LEARNED:
+  Aggregation at the right layer. Server computes; client renders.
+
+
+CHALLENGE 36.5 — Today's blockers + missing entries          Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. If user has an Open entry from yesterday: banner "You forgot
+     to clock out yesterday at X. [Close it now]."
+  2. Quick-close modal — pick the actual time, optional note.
+
+  RULES:
+  - Default the close time to "end of business yesterday" (5pm). User
+    can change.
+
+  WHAT YOU JUST LEARNED:
+  Defensive UX for human errors. Find the foot-guns, defuse them.
+
+
+================================================================================
+ROUND 37 — FEATURE: TIME TRACKING — TIMESHEETS (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Submit-for-approval workflow + manager
+view.
+
+
+CHALLENGE 37.1 — Timesheet model + submission                Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Timesheet: id, employeeId, weekStart (Mon ISO date), entries
+     (list of TimeEntry ids), totalMinutes, status ('Draft'|
+     'Submitted'|'Approved'|'Rejected'), submittedAt?, decidedAt?,
+     decisionNote?
+  2. POST /api/timesheet/submit { weekStart } — bundles open Closed
+     entries from that week, marks them Submitted.
+  3. Service rejects if any entry is Open (still ongoing).
+
+  RULES:
+  - A submitted timesheet locks its entries — no more edits without
+    rejection + re-submit.
+
+  WHAT YOU JUST LEARNED:
+  Container-of-things pattern. The Timesheet groups TimeEntries for
+  approval.
+
+
+CHALLENGE 37.2 — Submission UI                               Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. /time/week/:weekStart route.
+  2. Full grid: 7 columns (days), entries per day.
+  3. "Submit this week" button — disabled if any entry is Open.
+
+  RULES:
+  - Show total at the top.
+  - Block submit if total < 30h (configurable) and show a warning?
+    Soft check only.
+
+  WHAT YOU JUST LEARNED:
+  Pre-submit checks. Soft warnings let user proceed; hard checks
+  block.
+
+
+CHALLENGE 37.3 — Manager approval (timesheets)                Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. /manager/timesheets route — pending submissions.
+  2. Approve / Reject mutations.
+  3. Reject requires note → returns timesheet to Draft.
+  4. Notification to submitter (Round 32).
+
+  RULES:
+  - Same flow shape as leave approval. Pattern repeated.
+
+  WHAT YOU JUST LEARNED:
+  This is the 3rd approval flow you've built (Documents admin
+  delete-with-reason, Leave approve/reject, Timesheet approve/reject).
+  Pattern internalized.
+
+
+CHALLENGE 37.4 — Reopen + re-submit (after reject)           Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. On Rejected timesheet: show manager note + "Reopen" button.
+  2. Reopen returns status to Draft, unlocks entries for edit.
+  3. Re-submit clears the rejection.
+
+  RULES:
+  - Preserve the rejection note for audit (Round 33 captures it).
+
+  WHAT YOU JUST LEARNED:
+  Loops in state machines. Workflow can cycle Draft → Submitted →
+  Rejected → Draft.
+
+
+CHALLENGE 37.5 — Weekly digest email (stubbed)               Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Background hosted service or cron-ish — every Sunday: enumerate
+     employees without a submitted timesheet for last week, log
+     "would email" entries.
+  2. No real SMTP — just log the intended emails.
+
+  RULES:
+  - Schedule via IHostedService + Timer for the learning repo.
+  - Real production uses Hangfire / Quartz / a cron job.
+
+  WHAT YOU JUST LEARNED:
+  Background tasks for periodic work. Stubbed dispatch isolates the
+  scheduling concern.
+
+
+================================================================================
+ROUND 38 — FEATURE: PERFORMANCE REVIEW (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Lightweight 1:1 review form.
+
+
+CHALLENGE 38.1 — Review model                                 Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Review: id, employeeId, reviewerId, period ('2026-Q2', etc.),
+     ratings: { delivery, collaboration, growth } (1-5), strengths
+     (text), improvements (text), goalsNext (text), status ('Draft'|
+     'Shared'|'Acknowledged'), createdAt, sharedAt?, acknowledgedAt?
+  2. Endpoints: create, get, list (manager sees their team, employee
+     sees their own), share, acknowledge.
+
+  RULES:
+  - Manager creates as Draft, edits freely, then Shares.
+  - Once Shared, employee can read; manager can no longer edit.
+  - Employee Acknowledges to confirm they read it.
+
+  WHAT YOU JUST LEARNED:
+  Two-party state machine: manager → employee handoff.
+
+
+CHALLENGE 38.2 — Review form (manager side)                  Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. /manager/reviews/new?employeeId=...
+  2. RHF + Zod with: 3 ratings (1-5 select), 3 text areas (each
+     min 20 chars).
+  3. Save Draft / Share buttons.
+
+  RULES:
+  - Min text length forces real content, not "good."
+  - Auto-save Draft every 30s (Round 39 covers this — for now manual).
+
+  WHAT YOU JUST LEARNED:
+  Sizable form with mixed input types. Same RHF+Zod pattern, more
+  fields.
+
+
+CHALLENGE 38.3 — Review viewer (employee side)               Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. /reviews route — list of own reviews.
+  2. Click → /reviews/:id — read-only display + Acknowledge button.
+  3. Once acknowledged, button replaced with timestamp.
+
+  RULES:
+  - Don't show Draft reviews to the employee. Server enforces.
+
+  WHAT YOU JUST LEARNED:
+  Read-only view of a write-restricted resource. Server is the gate;
+  client renders.
+
+
+CHALLENGE 38.4 — Auto-save drafts                            Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - RHF `watch()` returns the current form values (subscription).
+  - Debounce the watch updates → call save endpoint.
+  - Show "Saved at HH:MM" indicator.
+
+  TASK:
+  1. useEffect + useDebouncedValue (Round … or write inline) +
+     watch() → mutation.
+  2. Status indicator near the Save button.
+
+  RULES:
+  - Don't save on every keystroke. 2s debounce is the sweet spot.
+
+  WHAT YOU JUST LEARNED:
+  Auto-save with debounce. Sized-up form UX.
+
+
+CHALLENGE 38.5 — Manager dashboard review widget             Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Dashboard widget: "Reviews due this quarter" — employees in your
+     team without a Shared review for the current period.
+  2. Click an employee → start review.
+
+  RULES:
+  - "Due" definition: period rolled over and no review created.
+
+  WHAT YOU JUST LEARNED:
+  Negative-data lists ("things NOT done") are valuable dashboard
+  fixtures.
+
+
+================================================================================
+ROUND 39 — FEATURE: ONBOARDING WIZARD (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. HR creates a new employee via a multi-
+step form. Includes the default password + first-login flag from
+Round 20.3.
+
+
+CHALLENGE 39.1 — Wizard state machine                        Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Multi-step form: each step has its own subset of fields. State
+    persists across steps until final submit.
+  - Two valid patterns:
+    (a) One big useForm; each step renders a different subset of
+        fields.
+    (b) One useForm per step; combine on final submit.
+  - (a) is simpler and what we'll do. Use `trigger(['fieldA',
+    'fieldB'])` to validate just current-step fields before going next.
+
+  TASK:
+  1. /admin/onboard route.
+  2. Wizard: 3 steps — Personal, Job, Account.
+  3. Step navigation: Next disabled until current step's fields
+     pass validation.
+  4. Step state in URL: ?step=1.
+
+  RULES:
+  - URL step state survives reload.
+  - Don't lose form data on Back.
+
+  WHAT YOU JUST LEARNED:
+  Multi-step form state. Same RHF pattern, segmented UI.
+
+
+CHALLENGE 39.2 — Per-step validation with trigger()          Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `trigger(fields?)`: forces validation NOW. With an array of field
+    names, only those are validated. Returns boolean.
+
+  TASK:
+  1. On Next click: `const ok = await trigger(['firstName',
+     'lastName', 'email']); if (ok) goNextStep();`.
+  2. Repeat per step.
+
+  RULES:
+  - Don't try to read errors[] before trigger() — they're not there
+    yet.
+
+  WHAT YOU JUST LEARNED:
+  Forcing validation at the right moment. Wizard-specific pattern.
+
+
+CHALLENGE 39.3 — Account step (default password + flag)      Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Account step: username, default password (defaults to "user123",
+     editable), role select.
+  2. Final submit: POST /api/admin/onboard — creates Employee + User
+     in one transaction with `mustChangePassword: true`.
+  3. Success: navigate /admin/employees, toast with credentials shown
+     (HR copies + delivers to user).
+
+  RULES:
+  - Default password is shown clearly. HR must pass it to the user.
+  - `mustChangePassword: true` is implicit on this endpoint.
+
+  WHAT YOU JUST LEARNED:
+  Multi-entity creation. One server call, transactional.
+
+
+CHALLENGE 39.4 — Confirmation step                            Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Step 4: review screen showing all entered data + the default
+     password.
+  2. Edit buttons jump back to that step.
+  3. Final "Create employee" button.
+
+  RULES:
+  - Confirmation step prevents accidental submission with typos.
+
+  WHAT YOU JUST LEARNED:
+  Confirmation patterns. The same as multi-step checkout flows.
+
+
+CHALLENGE 39.5 — Capstone: bulk onboard from CSV              Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. /admin/onboard/bulk route.
+  2. Upload a CSV (firstName, lastName, email, dept, role).
+  3. Client parses + validates each row against the same Zod schema.
+  4. Show preview table with per-row pass/fail.
+  5. "Create all valid" submits each via the onboard endpoint.
+
+  RULES:
+  - Use Papa Parse (npm install papaparse) to avoid hand-parsing CSV.
+  - Show real-time progress.
+
+  WHAT YOU JUST LEARNED:
+  Bulk creation pattern. Same shape any "import from spreadsheet"
+  feature.
+
+
+================================================================================
+ROUND 40 — FEATURE: BULK OPERATIONS (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Multi-select + bulk actions on the
+employee table.
+
+
+CHALLENGE 40.1 — Selection state                             Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Selection state: a Set<EmployeeId> of currently-selected rows.
+    Set, not Array — O(1) lookup, no dupes.
+  - Compute "all selected" from set.size === employees.length.
+
+  TASK:
+  1. useState<Set<EmployeeId>>(new Set()).
+  2. Checkbox per row, header checkbox for select-all.
+  3. Selection survives filter changes? Reset when filters change.
+     (Behaviour to pick — make it explicit.)
+
+  RULES:
+  - Immutable updates: `new Set(prev).add(id)`. Set mutates in place,
+    React won't re-render without a new reference.
+
+  WHAT YOU JUST LEARNED:
+  Set as state. Same shape in any multi-select UI.
+
+
+CHALLENGE 40.2 — Action bar                                  Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. When `selected.size > 0`, slide-in action bar at top: "3 selected
+     — Activate / Deactivate / Delete / Cancel".
+  2. Buttons disabled if role doesn't permit (Admin only for delete).
+
+  RULES:
+  - Animate the action bar (Tailwind transition utilities) — slides
+    are nicer than pops.
+
+  WHAT YOU JUST LEARNED:
+  Conditional UI from state. Common pattern in admin tools.
+
+
+CHALLENGE 40.3 — Bulk endpoints                               Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. POST /api/employee/bulk/activate { ids: EmployeeId[] }.
+  2. POST /api/employee/bulk/deactivate { ids: EmployeeId[] }.
+  3. POST /api/employee/bulk/delete { ids: EmployeeId[] } — Admin only.
+  4. Each returns per-id success/error array.
+
+  RULES:
+  - Partial success is real. Don't rollback on first failure unless
+    transactional semantics matter.
+
+  WHAT YOU JUST LEARNED:
+  Bulk endpoint contract. Returns per-id outcome so the client can
+  render details.
+
+
+CHALLENGE 40.4 — Bulk mutations + UX                          Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. useBulkActivate / useBulkDeactivate / useBulkDelete mutations.
+  2. Show progress: "Processing 3 employees…".
+  3. After: toast "2 activated, 1 failed (Anna — already active)."
+  4. Invalidate ['employees'] + per-employee details.
+
+  RULES:
+  - Confirm before bulk delete with a "type DELETE to confirm" gate.
+
+  WHAT YOU JUST LEARNED:
+  Bulk write feedback. Same idea as multi-file upload from Round 26.4.
+
+
+CHALLENGE 40.5 — Capstone: bulk department reassign           Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Action: "Move to department…" — opens a dropdown.
+  2. POST /api/employee/bulk/department { ids, department }.
+  3. Optimistic update of every selected row's department in cache.
+
+  RULES:
+  - Validate department exists.
+  - Optimistic + rollback on per-id error.
+
+  WHAT YOU JUST LEARNED:
+  Combined patterns: selection + bulk endpoint + optimistic update +
+  per-id outcome. The cap of Phase 3.
+
+
+================================================================================
+ROUND 41 — REAL-TIME WITH SIGNALR (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Replace the 30s polling on notifications
+(Round 32.2) with server push. Also push leave-approval events live.
+
+
+CHALLENGE 41.1 — SignalR Hub on .NET                         Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - SignalR: WebSockets with fallbacks. .NET server + JS client speak
+    one protocol.
+  - `Hub`: server class pushing messages. `Clients.User(userId).
+    SendAsync("EventName", args)` pushes to a specific user.
+  - `MapHub<MyHub>("/path")`: routes WS handshakes to the hub.
+
+  TASK:
+  1. NotificationHub : Hub. Empty (no client-callable methods —
+     server-push only).
+  2. Map at /hubs/notifications.
+  3. Inject IHubContext<NotificationHub> into NotificationService.
+  4. After every Create(...): hubContext.Clients.User(recipientUserId).
+     SendAsync("Notification", notification).
+
+  RULES:
+  - `Clients.User` uses the JWT's sub claim (configured via
+    IUserIdProvider).
+  - Authorize the hub: [Authorize] on the Hub class.
+
+  WHAT YOU JUST LEARNED:
+  Hub-driven notifications. The service stays oblivious — DI gives
+  it the push channel.
+
+
+CHALLENGE 41.2 — Client connect + subscribe                   Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `@microsoft/signalr`: JS client. HubConnectionBuilder().
+     withUrl(url, { accessTokenFactory }).withAutomaticReconnect().
+     build().
+  - `connection.start()`: opens.
+  - `connection.on(event, handler)`: subscribe. `.off(event)`:
+    unsubscribe (critical for cleanup).
+
+  TASK:
+  1. npm install @microsoft/signalr
+  2. services/notificationHub.ts: build + export the connection.
+  3. AuthLayout useEffect: start on mount, stop on unmount.
+  4. On "Notification" event → queryClient.setQueryData(
+     notificationKeys.list, prev => [new, ...prev]).
+
+  RULES:
+  - Always cleanup .off in useEffect return.
+  - Pass auth via accessTokenFactory.
+
+  WHAT YOU JUST LEARNED:
+  Push-driven cache updates. No polling, instant UX.
+
+
+CHALLENGE 41.3 — Replace leave polling with push              Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. LeaveHub on the .NET side. Pushes "LeaveStatusChanged" to the
+     requester after approve/reject/rollback decisions.
+  2. Client subscribes and invalidates the leave list + balance.
+
+  RULES:
+  - Each domain gets its own hub OR one hub with topics — pick one
+    convention.
+
+  WHAT YOU JUST LEARNED:
+  Domain-event-driven UI. The server tells the client what to refresh.
+
+
+CHALLENGE 41.4 — Connection lifecycle UX                      Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `connection.onreconnecting(cb)`, `onreconnected(cb)`, `onclose(cb)`.
+
+  TASK:
+  1. Small green/yellow/red dot in the header.
+  2. Banner if disconnected > 30s.
+  3. Manual reconnect button.
+
+  RULES:
+  - Don't flash UI on every reconnect — debounce visible states.
+
+  WHAT YOU JUST LEARNED:
+  Network UX. The difference between "appears OK silently broken"
+  and "user knows."
+
+
+CHALLENGE 41.5 — Online indicators (presence stub)            Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Hub tracks connected userIds in a static set (OK for the
+     learning repo).
+  2. GET /api/presence — returns the set.
+  3. Show a green dot next to online users in EmployeeList /
+     dashboard.
+
+  RULES:
+  - Real presence uses a distributed store (Redis). Static set is
+    fine for one-process learning.
+
+  WHAT YOU JUST LEARNED:
+  Presence pattern. Same shape as Slack/Teams indicators.
+
+
+================================================================================
+ROUND 42 — TESTING: COMPONENT + HOOK (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Tests for the features built in
+Rounds 23-40.
+
+
+CHALLENGE 42.1 — Vitest + RTL setup                          Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Vitest: test runner. Same API as Jest, faster.
+  - React Testing Library (RTL): renders components, queries DOM the
+    way a user would. `render(<C />)`, `screen.getByRole('button',
+    { name: /save/i })`.
+  - `@testing-library/jest-dom`: extra matchers (toBeInTheDocument,
+    toHaveClass).
+  - jsdom: fake DOM for Node so tests don't need a real browser.
+
+  TASK:
+  1. Install vitest, @testing-library/* packages, jsdom.
+  2. vitest.config.ts with `environment: 'jsdom'`, setupFiles for
+     jest-dom.
+  3. Write one trivial StatusBadge test.
+
+  RULES:
+  - Query priority: getByRole > getByLabelText > getByText >
+    getByTestId.
+
+  WHAT YOU JUST LEARNED:
+  Test infrastructure once. Every test you write uses this.
+
+
+CHALLENGE 42.2 — Test EmployeeRow + ProfilePage              Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `userEvent`: simulates real interactions. Always await it.
+  - `vi.fn()`: mock function. `toHaveBeenCalledWith(...)`.
+
+  TASK:
+  1. EmployeeRow tests:
+     - renders name
+     - calls onEdit when Edit clicked
+     - calls onDelete when Delete clicked
+  2. ProfilePage tests:
+     - shows loading initially
+     - shows employee data after fetch (mock useProfile)
+
+  RULES:
+  - Test user-visible behavior, not implementation details.
+
+  WHAT YOU JUST LEARNED:
+  The component test pattern, applied. Reuse the shape for every
+  future component test.
+
+
+CHALLENGE 42.3 — Test custom hooks                            Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `renderHook(() => useFoo())` from RTL. `result.current` is the
+    return.
+  - `act(() => {...})` wraps state-changing calls.
+  - `wrapper` option provides Context (QueryClientProvider).
+
+  TASK:
+  1. useEmployeeFilter tests: renders defaults, filters by search,
+     filters by department.
+  2. useLeaveBalance test with a mock fetch — verify computation.
+
+  RULES:
+  - Wrap query-dependent hooks in a fresh QueryClient per test.
+
+  WHAT YOU JUST LEARNED:
+  Hooks as testable units. Easier than testing through a component.
+
+
+CHALLENGE 42.4 — Mock API at module boundary                  Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `vi.mock('../services/api', () => ({ getEmployees: vi.fn(...) }))`.
+    Replaces the module for the test file.
+
+  TASK:
+  1. Integration test: <EmployeeList />.
+  2. Mock api.getEmployees → returns 2 mock employees.
+  3. Assert table renders 2 rows.
+  4. Click Delete → modal → confirm → assert row gone.
+
+  RULES:
+  - Fresh QueryClient per test.
+  - findBy* (async) when waiting for fetch completion.
+
+  WHAT YOU JUST LEARNED:
+  Integration test — render a slice, mock edges, assert behavior.
+  Catches more bugs than unit tests.
+
+
+CHALLENGE 42.5 — Test the leave approval flow                Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Render ManagerLeavesPage with mocked auth (Manager role) +
+     mocked api.
+  2. Assert pending requests visible.
+  3. Click Approve → confirm.
+  4. Assert mutation called with correct args + row removed.
+
+  RULES:
+  - Bigger test = more setup. Keep mock factories DRY across tests.
+
+  WHAT YOU JUST LEARNED:
+  Feature-level test. Real-world test pyramid bottom-mid.
+
+
+================================================================================
+ROUND 43 — E2E TESTING (PLAYWRIGHT) (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Real-browser flows. Slow but high-
+signal — catches the integration bugs unit tests miss.
+
+
+CHALLENGE 43.1 — Install + first test                        Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Playwright: Microsoft's browser automation. Drives real Chromium/
+    Firefox/WebKit. Replaces Selenium for most React apps.
+
+  TASK:
+  1. npm init playwright@latest
+  2. Accept defaults.
+  3. Replace sample test with one that loads /login and asserts the
+     heading.
+
+  RULES:
+  - Pin Playwright version in CI.
+  - Use page.getByRole — same RTL philosophy.
+
+  WHAT YOU JUST LEARNED:
+  Real-browser test setup. Same query philosophy as RTL.
+
+
+CHALLENGE 43.2 — Login + table E2E                            Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Test: fill login, click submit, assert /employees opens, assert
+     at least one row.
+  2. beforeEach to log in for subsequent tests.
+
+  RULES:
+  - Seed the DB / use known fixtures. Don't depend on prod data.
+
+  WHAT YOU JUST LEARNED:
+  Auth + nav + data assertion. The smoke test that catches most
+  regressions.
+
+
+CHALLENGE 43.3 — Full leave request flow                      Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. As Employee: navigate to /leaves/new, submit a request, assert
+     it appears in the list.
+  2. Switch user to Manager (different login fixture).
+  3. Navigate to pending, approve, assert it shows Approved.
+  4. Switch back to Employee, request rollback.
+  5. Switch to Manager, approve rollback.
+  6. Switch to Employee, assert balance is refunded.
+
+  RULES:
+  - Multi-user tests use storage states for fast user switching.
+
+  WHAT YOU JUST LEARNED:
+  End-to-end the rollback flow you built. Catches integration bugs
+  no unit test would.
+
+
+CHALLENGE 43.4 — Document upload + download flow              Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Upload a known fixture file.
+  2. Assert it appears in the list.
+  3. Download it; verify the response.
+  4. Delete it; verify removed.
+
+  RULES:
+  - File handling in Playwright: page.setInputFiles for upload,
+    page.waitForEvent('download') for download.
+
+  WHAT YOU JUST LEARNED:
+  File flows in E2E. Tricky but covered by built-in helpers.
+
+
+CHALLENGE 43.5 — CI integration + traces                      Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Playwright trace: screenshots + DOM + network for each step.
+    Captured on failure, opened with `npx playwright show-trace`.
+
+  TASK:
+  1. GitHub Actions job for Playwright (Round 51 covers GH Actions
+     basics).
+  2. Upload trace artifacts on failure.
+  3. Force a failure, download the trace, debug locally.
+
+  RULES:
+  - Run E2E nightly + on main, not every PR (too slow).
+
+  WHAT YOU JUST LEARNED:
+  Reproducible CI test failures. The trace is gold.
+
+
+================================================================================
+ROUND 44 — ACCESSIBILITY AUDIT (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Apply the a11y patterns across all
+features built.
+
+
+CHALLENGE 44.1 — jsx-a11y ESLint pass                        Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Install eslint-plugin-jsx-a11y; enable recommended ruleset.
+  2. Run lint; fix every error (missing alt, click handlers on divs,
+     etc.).
+  3. Set max-warnings=0.
+
+  RULES:
+  - Don't suppress with eslint-disable. Fix the real issue.
+
+  WHAT YOU JUST LEARNED:
+  Static a11y catches the easy 30%. Run + fix once.
+
+
+CHALLENGE 44.2 — Focus management                             Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. On route change: move focus to <main> (with tabIndex={-1}).
+  2. After form submit success: move focus to the success message
+     OR confirmation route.
+  3. After modal close: restore focus to the trigger element.
+
+  RULES:
+  - Track the trigger element via ref before opening modal.
+
+  WHAT YOU JUST LEARNED:
+  Focus is part of navigation UX in SPAs. Restoring it is the bar.
+
+
+CHALLENGE 44.3 — Live regions for async UX                    Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Global aria-live="polite" container at end of body.
+  2. announce(text) helper writes to it.
+  3. Call announce() on every toast, count update, validation
+     summary.
+
+  RULES:
+  - aria-atomic="true" for "read the whole thing on update."
+  - polite for almost everything; assertive only for errors.
+
+  WHAT YOU JUST LEARNED:
+  Screen-reader UX. Async events are invisible without this.
+
+
+CHALLENGE 44.4 — Modals + keyboard                            Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Every modal: role="dialog", aria-modal, aria-labelledby.
+  2. Focus trap (react-focus-lock or hand-rolled).
+  3. Esc closes; outside click closes; Cancel button closes.
+  4. Restore focus on close.
+
+  RULES:
+  - Touch every modal in the app — ConfirmModal, RecentActivityModal,
+    rollback note modals, etc.
+
+  WHAT YOU JUST LEARNED:
+  Modal a11y is mechanical but unforgiving. Do it once, copy across.
+
+
+CHALLENGE 44.5 — Lighthouse to 100                            Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Run Lighthouse on every key page.
+  2. Fix every issue.
+  3. Aim 100 on Accessibility.
+  4. Note in YOUR TIME the 3 trickiest fixes.
+
+  RULES:
+  - 100 is necessary, not sufficient. Real screen-reader testing
+    catches what Lighthouse can't.
+
+  WHAT YOU JUST LEARNED:
+  Lighthouse is the floor. 100 across the app is a respectable bar.
+
+
+================================================================================
+ROUND 45 — PERFORMANCE PASS (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Measure → fix worst offender → measure
+again.
+
+
+CHALLENGE 45.1 — Profiler baseline                           Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - React DevTools → Profiler tab. Record an interaction. Inspect
+    flame graph. "Why did this render?" lists the cause per render.
+
+  TASK:
+  1. Profile typing in search filter. Note offenders.
+  2. Profile opening the leave list (server data load).
+  3. Profile navigating between dashboard widgets.
+  4. Document the 3 worst (component + ms + why).
+
+  RULES:
+  - Don't optimize speculatively. Measure first.
+
+  WHAT YOU JUST LEARNED:
+  Perf-discipline = measure-fix-measure. No guessing.
+
+
+CHALLENGE 45.2 — Memo + useCallback pass                      Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Wrap heavy children in React.memo.
+  2. Stabilize callback identities with useCallback where needed.
+  3. Re-profile; confirm reduced re-renders.
+
+  RULES:
+  - Don't memo everything. memo when parent re-renders frequently
+    AND child render is expensive.
+
+  WHAT YOU JUST LEARNED:
+  Targeted memoization. The 80/20 of React perf.
+
+
+CHALLENGE 45.3 — Virtualize big tables                        Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - react-window: tiny virtualization library. Renders only visible
+    rows; reuses DOM nodes on scroll.
+
+  TASK:
+  1. npm install react-window
+  2. Apply to AuditLog page (large dataset).
+  3. Verify smooth scroll with 5000 mock rows.
+
+  RULES:
+  - Table virtualization with <table> is fiddly. Many teams switch
+    to div-grid.
+
+  WHAT YOU JUST LEARNED:
+  Virtualization above 100 rows is mandatory.
+
+
+CHALLENGE 45.4 — Bundle analyzer + tree-shake                Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - source-map-explorer (or rollup-plugin-visualizer for Vite) shows
+    which packages take which % of the bundle.
+
+  TASK:
+  1. Run analyzer.
+  2. Find one unexpectedly large dep.
+  3. Replace or import-narrow (e.g. `import debounce from 'lodash-
+     es/debounce'` instead of `import _ from 'lodash'`).
+  4. Re-run; confirm shrinkage.
+
+  RULES:
+  - Tree-shake only works with ESM imports.
+
+  WHAT YOU JUST LEARNED:
+  Bundle treemap reveals fat deps. Every senior frontend has done
+  this audit.
+
+
+CHALLENGE 45.5 — useDeferredValue + Suspense pass             Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `useDeferredValue(value)`: deferred update — React keeps input
+    responsive even if rendering with the new value is slow.
+  - `useTransition()`: marks a state update as low-priority.
+
+  TASK:
+  1. Replace any debounce hacks with useDeferredValue where the
+     bottleneck is render time, not API calls.
+  2. Wrap heavy state updates in startTransition.
+
+  RULES:
+  - useDeferredValue for VALUES; useTransition for ACTIONS.
+
+  WHAT YOU JUST LEARNED:
+  Concurrent rendering features. React 18 can interrupt slow renders.
+
+
+================================================================================
+ROUND 46 — INTERNATIONALIZATION (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Even if you ship in English only, the
+DISCIPLINE of i18n catches hardcoded strings and date/number bugs.
+
+
+CHALLENGE 46.1 — react-i18next setup                          Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - i18n: internationalization. Strings → JSON dictionary, looked up
+    at render via `t('key')`.
+  - `react-i18next`: the standard library. `useTranslation()` hook.
+
+  TASK:
+  1. npm install react-i18next i18next i18next-browser-languagedetector
+  2. src/i18n/index.ts: init with one en bundle.
+  3. Test: replace one heading with t('employees.title').
+
+  RULES:
+  - Namespace keys by feature ('leaves.balance.remaining').
+
+  WHAT YOU JUST LEARNED:
+  i18n infrastructure once. Every t() is a lookup.
+
+
+CHALLENGE 46.2 — Extract strings (Phase 3 features)          Target: 50 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Walk EVERY feature page (profile, documents, leaves, time,
+     reviews, etc.).
+  2. Replace user-visible literal strings with t() calls.
+  3. Build out en.json by feature namespace.
+
+  RULES:
+  - Keys must be stable. Pick well.
+  - Don't extract debug strings.
+
+  WHAT YOU JUST LEARNED:
+  Extraction is mechanical work. The DISCIPLINE is the value.
+
+
+CHALLENGE 46.3 — Add a second language                        Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Copy en.json → hi.json. Translate (or use placeholder text —
+     "EN_X" pattern proves it works).
+  2. Language switcher in header.
+  3. Persist user choice in localStorage.
+
+  RULES:
+  - Translation is content work — placeholder OK for learning repo.
+
+  WHAT YOU JUST LEARNED:
+  Switching languages reveals missed strings. Painful but valuable
+  QA step.
+
+
+CHALLENGE 46.4 — Pluralization + interpolation                Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Interpolate: t('greeting', { name }) → "Hello, {{name}}".
+  2. Plurals: `notifications_count_one` + `notifications_count_other`.
+  3. Apply to count-y strings (employees count, leave days).
+
+  RULES:
+  - Always use `{{count}}` — i18next selects plural form from it.
+
+  WHAT YOU JUST LEARNED:
+  Real i18n handles plural rules. The library knows the languages.
+
+
+CHALLENGE 46.5 — Locale dates/numbers                         Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Intl.NumberFormat / Intl.DateTimeFormat — browser-built-in,
+    locale-aware. No library.
+
+  TASK:
+  1. Wrap currency formatting through Intl.NumberFormat(i18n.language,
+     {...}).
+  2. Same for dates — Intl.DateTimeFormat(i18n.language, {...}).
+  3. Apply across the app.
+
+  RULES:
+  - Currency code stays (USD); only locale changes (commas/periods).
+  - One util function; not inline at every call.
+
+  WHAT YOU JUST LEARNED:
+  Locale awareness is separate from translation. Numbers/dates need
+  it independently.
+
+
+================================================================================
+ROUND 47 — PWA + OFFLINE (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Installable + offline reads + queued
+writes.
+
+
+CHALLENGE 47.1 — Web manifest + install prompt                Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Web manifest: JSON declaring name, icons, theme color. Browsers
+    use it for the "install" prompt and home-screen icon.
+  - `beforeinstallprompt` event: fires when manifest+SW are valid.
+    Stash, call .prompt() on user gesture.
+
+  TASK:
+  1. Tune public/manifest.json — name, theme_color, icons.
+  2. useInstallPrompt hook — captures the event, exposes promptInstall.
+  3. "Install app" button in header (shows only when available).
+
+  RULES:
+  - The event fires once. Stash it.
+
+  WHAT YOU JUST LEARNED:
+  Installable apps are mostly metadata.
+
+
+CHALLENGE 47.2 — Service worker (Workbox)                     Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Service worker (SW): background script in the browser; intercepts
+    fetches, caches, can do push notifications.
+  - Workbox: Google's library that simplifies SW (precache + runtime
+    caching strategies).
+
+  TASK:
+  1. Register the SW (if CRA: switch from noop to real registration;
+     if Vite: use vite-plugin-pwa).
+  2. Verify a SW is active in DevTools.
+  3. Reload offline; confirm app shell loads.
+
+  RULES:
+  - HTTPS or localhost only.
+
+  WHAT YOU JUST LEARNED:
+  The SW is your offline runtime. Setup once.
+
+
+CHALLENGE 47.3 — Cache strategies per route                   Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - cache-first (static assets), network-first (HTML), stale-while-
+    revalidate (API GETs).
+
+  TASK:
+  1. SW routes:
+     - /static/* → cache-first
+     - /api/* GET → stale-while-revalidate
+     - /api/* writes → network-only
+
+  RULES:
+  - Never cache writes.
+  - Set max-entries + max-age on every cache.
+
+  WHAT YOU JUST LEARNED:
+  Cache strategy is per-route. One size doesn't fit all.
+
+
+CHALLENGE 47.4 — Offline indicator                            Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `window.addEventListener('online'/'offline')`: connection
+    transition events.
+  - `navigator.onLine`: current state. Unreliable on some platforms;
+    a 5s ping to /api/health is more accurate.
+
+  TASK:
+  1. Hook useOnlineStatus().
+  2. Banner if offline: "Offline. Read-only mode."
+  3. Disable write buttons when offline.
+
+  RULES:
+  - online/offline events are not always accurate; verify with a
+    health ping in parallel.
+
+  WHAT YOU JUST LEARNED:
+  Connection state in the UI. The minimum useful offline UX.
+
+
+CHALLENGE 47.5 — Background sync for writes                   Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Background Sync API: queue writes while offline; SW replays them
+    when connection returns. Workbox's BackgroundSyncPlugin handles
+    the queue.
+
+  TASK:
+  1. Wrap POST/PUT/DELETE routes in BackgroundSyncPlugin.
+  2. Test: throttle DevTools offline, submit a leave request, come
+     online, verify it replays.
+
+  RULES:
+  - Show "Queued for sync" indicator. Don't pretend it succeeded.
+  - Cap retries.
+
+  WHAT YOU JUST LEARNED:
+  True offline UX. The pattern (queue intents, replay) fits anywhere.
+
+
+================================================================================
+ROUND 48 — MIGRATE CRA → VITE (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. CRA is in maintenance mode; Vite is
+the standard. Migration is mechanical.
+
+
+CHALLENGE 48.1 — Side-by-side Vite scaffold                  Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Vite: dev tool. Native ESM in dev (no bundling, < 200ms start).
+    Rollup for prod.
+
+  TASK:
+  1. `npm create vite@latest EmployeeManager.Client.Vite -- --template
+     react-ts`.
+  2. Run npm run dev; verify the welcome page.
+
+  RULES:
+  - Don't delete CRA yet. Migrate incrementally.
+
+  WHAT YOU JUST LEARNED:
+  Vite scaffold is 30s. The migration is one part at a time.
+
+
+CHALLENGE 48.2 — Env vars (REACT_APP_ → VITE_)                Target: 15 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Vite uses `import.meta.env.VITE_X` (not `process.env.REACT_APP_X`).
+  - Prefix and access pattern both change.
+
+  TASK:
+  1. Rename every REACT_APP_ var to VITE_.
+  2. Replace process.env access.
+  3. Update .env files.
+
+  RULES:
+  - vite-env.d.ts declares the env interface for autocomplete.
+
+  WHAT YOU JUST LEARNED:
+  Bundler-specific bits change; app code mostly doesn't.
+
+
+CHALLENGE 48.3 — Port routing + entrypoint                    Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Vite's index.html lives at PROJECT ROOT (not public/).
+  - vite.config.ts server.proxy maps /api → backend.
+  - SVG imports differ — `?react` query or @svgr/rollup.
+
+  TASK:
+  1. Copy src/ from CRA to Vite project.
+  2. Move index.html to root, point to /src/main.tsx.
+  3. Configure proxy.
+  4. Run npm run dev; fix import errors.
+
+  RULES:
+  - process.env outside env vars breaks. Replace with import.meta.env.
+
+  WHAT YOU JUST LEARNED:
+  90% portable, 10% bundler glue.
+
+
+CHALLENGE 48.4 — Port tests                                  Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Vitest is already installed via Vite scaffold.
+  2. Move test files; most pass unchanged.
+  3. Fix process.env.NODE_ENV refs → import.meta.env.MODE.
+
+  RULES:
+  - Vitest mirrors Jest's API.
+
+  WHAT YOU JUST LEARNED:
+  Test runner follows the build tool.
+
+
+CHALLENGE 48.5 — Swap + delete CRA                            Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Rename folders: Client → Client.Cra (archive), Client.Vite →
+     Client.
+  2. Update .NET API proxy port if changed.
+  3. Run end-to-end; if green, delete the CRA archive in a week.
+
+  RULES:
+  - Keep rollback path for a week.
+
+  WHAT YOU JUST LEARNED:
+  Migrations succeed in small steps with rollback paths.
+
+
+================================================================================
+ROUND 49 — STORYBOOK (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Component dev workshop. Worth it once
+you have ~20+ components.
+
+
+CHALLENGE 49.1 — Install + first story                       Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Storybook: separate dev server (:6006). Renders ONE component at
+    a time with controlled props. Visual unit-test workbench.
+  - "Stories" = named variants of a component.
+
+  TASK:
+  1. npx storybook@latest init.
+  2. Verify :6006.
+  3. Write StatusBadge.stories.tsx (Active/Inactive).
+
+  RULES:
+  - Stories live next to component.
+  - One story per meaningful STATE, not per prop combo.
+
+  WHAT YOU JUST LEARNED:
+  Component dev in isolation. Save time tweaking small components.
+
+
+CHALLENGE 49.2 — Stories for cards + form fields             Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Card stories: Default, WithTrend, Link.
+  2. Input field stories: Default, Disabled, Error.
+  3. Button stories: Primary, Secondary, Disabled, Loading.
+
+  RULES:
+  - Mock data in a fixtures file, not inline.
+
+  WHAT YOU JUST LEARNED:
+  Story-per-state covers your edge cases explicitly.
+
+
+CHALLENGE 49.3 — Args + controls                              Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Args = the props the story renders with. Storybook generates a
+    Controls panel from them.
+  - argTypes config picks the right control per prop (range, color,
+    select).
+
+  TASK:
+  1. For Button, define argTypes: variant (select), disabled (toggle),
+     size (radio).
+  2. Try the controls; watch the canvas update live.
+
+  RULES:
+  - Expose only the props that matter for design review.
+
+  WHAT YOU JUST LEARNED:
+  Live playground. Designers and PMs love it.
+
+
+CHALLENGE 49.4 — Decorators (Providers in stories)           Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Decorators wrap every story. Use them to provide QueryClient,
+    Auth, Router — without re-wrapping each story.
+
+  TASK:
+  1. .storybook/preview.tsx: decorators wrapping stories in
+     QueryClientProvider + AuthProvider with mock user + Router.
+  2. Stories for connected components (notifications bell, etc.).
+
+  RULES:
+  - Fresh QueryClient per story — cache must not leak.
+
+  WHAT YOU JUST LEARNED:
+  Decorators inject the Providers Storybook needs.
+
+
+CHALLENGE 49.5 — Chromatic (visual regression)               Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Chromatic: hosted service that diffs screenshots of each story
+    against the last approved baseline.
+
+  TASK:
+  1. Sign up; grab the project token.
+  2. `npx chromatic --project-token=XXX`.
+  3. On the next branch, tweak a button padding; verify Chromatic
+    flags the diff.
+
+  RULES:
+  - Treat snapshot approvals like code review.
+
+  WHAT YOU JUST LEARNED:
+  Visual regression bar. Production teams hit it before deploys.
+
+
+================================================================================
+ROUND 50 — ADVANCED TYPESCRIPT (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Deeper TS — opens up library type
+reading.
+
+
+CHALLENGE 50.1 — Conditional types                           Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Conditional: `T extends U ? X : Y`. Type-level if.
+  - `infer`: introduces a named type variable inside conditional.
+    `T extends (...args: any) => infer R ? R : never` extracts the
+    return.
+
+  TASK:
+  1. Implement ReturnType<T> from scratch.
+  2. Implement Awaited<T> (unwrap Promise<X> → X).
+  3. Write IsArray<T>: true if T extends any[], else false.
+
+  RULES:
+  - Read lib.es5.d.ts in node_modules — every utility type is in there.
+
+  WHAT YOU JUST LEARNED:
+  TS type system is Turing-complete. Conditionals + infer = type-
+  level functions.
+
+
+CHALLENGE 50.2 — Mapped types                                Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `{ [K in keyof T]: ... }` iterates T's keys, produces a new prop
+    type. Same shape as Partial/Required/Readonly.
+  - Modifiers: +?/−?/+readonly/−readonly.
+
+  TASK:
+  1. Implement MyPartial, MyRequired, Mutable from scratch.
+  2. Compose: Mutable<Required<T>>.
+
+  RULES:
+  - keyof T is the union of T's keys.
+
+  WHAT YOU JUST LEARNED:
+  Most utility types are mapped types. Demystified.
+
+
+CHALLENGE 50.3 — Template literal types                      Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `\`/users/${string}\`` — string type with a placeholder. Useful
+    for typed routes, event names.
+
+  TASK:
+  1. Build a Route type union for your app.
+  2. Constrain navigate(): function navigate(r: Route).
+  3. Test: typo'd routes fail to compile.
+
+  RULES:
+  - Use sparingly; can explode compile time.
+
+  WHAT YOU JUST LEARNED:
+  String types. The compiler enforces URL shapes at compile time.
+
+
+CHALLENGE 50.4 — Type guards + runtime validation             Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Type guard: `(x: unknown): x is Employee`. TS narrows after the
+    call.
+
+  TASK:
+  1. Write isEmployee, isUser hand-rolled guards.
+  2. Replace with Zod-based runtime validators at the API boundary.
+  3. Use them after JSON.parse from localStorage.
+
+  RULES:
+  - Hand-rolled drifts from type. Prefer Zod for real code.
+
+  WHAT YOU JUST LEARNED:
+  Boundaries need runtime validation. Types are claims; guards
+  enforce.
+
+
+CHALLENGE 50.5 — Branded types (consolidation)                Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Audit every "id: string" in the codebase — replace with the
+     proper branded type (Round 16.2).
+  2. Add new brands: LeaveRequestId, DocumentId, NotificationId.
+  3. Constructor functions at API boundaries.
+
+  RULES:
+  - Brands compile-time only. No runtime cost.
+
+  WHAT YOU JUST LEARNED:
+  Nominal typing pays off as the codebase grows. Bigger app = more
+  brand value.
+
+
+================================================================================
+ROUND 51 — ANIMATION (FRAMER MOTION) (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Selective animation — page transitions,
+list enter/exit, modal flourishes. Polish-tier work.
+
+
+CHALLENGE 51.1 — Install + first animate                     Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Framer Motion: declarative animation. `<motion.div>` instead of
+    `<div>`, animate `initial` / `animate` / `exit` props.
+
+  TASK:
+  1. npm install framer-motion.
+  2. Wrap a toast or modal in motion.div with opacity in/out.
+  3. Confirm smooth fade.
+
+  RULES:
+  - Animate transforms (translate, scale) and opacity. Not width/
+    height — causes layout thrash.
+
+  WHAT YOU JUST LEARNED:
+  Declarative animation. State → animated transition.
+
+
+CHALLENGE 51.2 — Page transitions                            Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - <AnimatePresence>: detects children being removed; gives them
+    time to animate OUT.
+  - `mode="wait"`: outgoing finishes before incoming starts.
+
+  TASK:
+  1. Wrap <Outlet /> in <AnimatePresence mode="wait">.
+  2. Each page = motion.div with key={pathname}.
+  3. variants object for initial/animate/exit.
+
+  RULES:
+  - Unique `key` on AnimatePresence children — that's how it detects
+    enter/exit.
+
+  WHAT YOU JUST LEARNED:
+  Route transitions = AnimatePresence + motion + exit variants.
+
+
+CHALLENGE 51.3 — List enter/exit (employees, leaves)          Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `layout` prop: automatic FLIP animation when an item's position
+    changes (sort, filter, reorder). Magic for sortable lists.
+
+  TASK:
+  1. Wrap employee rows in AnimatePresence + motion.tr.
+  2. Each row gets `layout` + enter/exit props.
+  3. Sort/delete/insert and watch them animate.
+
+  RULES:
+  - Always set `key={item.id}` on list items in AnimatePresence.
+
+  WHAT YOU JUST LEARNED:
+  Layout animation is what makes UIs feel polished.
+
+
+CHALLENGE 51.4 — Modal flourishes                            Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. ConfirmModal: backdrop fade-in, panel scale-in (0.95 → 1).
+  2. On close: reverse.
+  3. Apply to every modal in the app.
+
+  RULES:
+  - Keep timing fast (150-200ms). Long animations feel sluggish.
+
+  WHAT YOU JUST LEARNED:
+  Polish defaults across the app. Same animation, applied everywhere.
+
+
+CHALLENGE 51.5 — Reduced motion respect                      Target: 15 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - `useReducedMotion()` from framer-motion reads the OS "Reduce
+    Motion" setting.
+
+  TASK:
+  1. Detect; if true, set transition duration to 0 (skip, don't speed
+     up).
+  2. Test by enabling OS reduce-motion.
+
+  RULES:
+  - Some users get motion sickness. Skip transitions entirely; don't
+    just shorten.
+
+  WHAT YOU JUST LEARNED:
+  Motion is an accessibility dimension.
+
+
+================================================================================
+ROUND 52 — CI / GITHUB ACTIONS (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. CI catches regressions before merge.
+Standard pattern transfers to Azure Pipelines / GitLab CI.
+
+
+CHALLENGE 52.1 — First workflow                              Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - GitHub Actions: YAML workflows in .github/workflows/. Triggers
+    (`on: pull_request`), jobs, steps.
+
+  TASK:
+  1. .github/workflows/ci.yml: build + test on pull_request.
+  2. setup-node@v4 with cache: 'npm'.
+  3. Run `npm ci && npm run build && npm test -- --run` in the client
+    dir.
+  4. Open a PR; verify checks run.
+
+  RULES:
+  - Pin action versions.
+  - `npm ci` in CI, not `npm install`.
+
+  WHAT YOU JUST LEARNED:
+  CI = build + test on every PR.
+
+
+CHALLENGE 52.2 — Parallel jobs (typecheck/lint/test)         Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Three separate jobs (different `jobs:` keys, run in parallel):
+     - typecheck: `npx tsc --noEmit`
+     - lint: `npx eslint src --max-warnings=0`
+     - test: `npm test -- --run`
+  2. Backend .NET job: `dotnet build && dotnet test`.
+
+  RULES:
+  - Parallelism is free. Don't sequence jobs that don't depend on
+    each other.
+
+  WHAT YOU JUST LEARNED:
+  Tighter feedback per check.
+
+
+CHALLENGE 52.3 — Caching                                     Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - actions/cache or setup-node's cache option saves npm/nuget caches
+    between runs.
+  - Cache key = OS + tool + lockfile hash. Wrong key = stale.
+
+  TASK:
+  1. Verify npm cache is enabled via setup-node `cache: 'npm'`.
+  2. Add actions/cache for ~/.nuget/packages.
+  3. Time the run before/after.
+
+  RULES:
+  - Cache key includes the lockfile hash — new deps invalidate.
+
+  WHAT YOU JUST LEARNED:
+  Caching halves CI time. Watch the cache key.
+
+
+CHALLENGE 52.4 — Coverage upload                             Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - lcov: standard coverage file format. Vitest outputs via
+    `--coverage.reporter=lcov`.
+  - Codecov: free hosted service that ingests lcov, shows coverage
+    per PR.
+
+  TASK:
+  1. Run vitest --coverage in CI.
+  2. codecov/codecov-action@v4 to upload.
+  3. README badge.
+
+  RULES:
+  - Coverage is signal, not goal. Don't gate PRs on "coverage must
+    increase."
+
+  WHAT YOU JUST LEARNED:
+  Coverage as a code-review aid. Where tests aren't.
+
+
+CHALLENGE 52.5 — Preview deployment                          Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Job that builds the client and deploys to Vercel/Netlify on PR.
+  2. Comment the preview URL on the PR.
+
+  RULES:
+  - Preview deploys make design review possible. Worth the setup.
+
+  WHAT YOU JUST LEARNED:
+  Per-PR previews. Enterprise-tier reviewer UX.
+
+
+================================================================================
+ROUND 53 — DOCKER (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Containerize both halves. Portable
+deploys.
+
+
+CHALLENGE 53.1 — Dockerfile for .NET API                     Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Dockerfile: recipe for an image. Each line = a cacheable layer.
+  - Multi-stage build: build stage compiles; runtime stage copies
+    artifacts only. No compiler in prod.
+
+  TASK:
+  1. Multi-stage Dockerfile for the API:
+     - mcr.microsoft.com/dotnet/sdk:10.0 AS build
+     - dotnet restore + publish
+     - mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+     - COPY --from=build /app .
+  2. docker build; docker run; verify endpoint.
+
+  RULES:
+  - Copy csproj first, restore, THEN copy source — caches restore
+    on source-only changes.
+
+  WHAT YOU JUST LEARNED:
+  Multi-stage = small images. Standard for compiled languages.
+
+
+CHALLENGE 53.2 — Dockerfile for the client                   Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Final image = nginx + static build. No Node in prod.
+  - SPA nginx config: `try_files $uri $uri/ /index.html;` — all
+    routes fallback to index.html so the SPA router handles them.
+
+  TASK:
+  1. Multi-stage Dockerfile:
+     - node:20-alpine AS build → npm ci → npm run build
+     - nginx:alpine → COPY --from=build /app/dist /usr/share/nginx/html
+  2. Custom nginx.conf with SPA fallback + /api proxy.
+
+  RULES:
+  - alpine images = ~25MB. Use them.
+
+  WHAT YOU JUST LEARNED:
+  Static SPA on nginx. The standard prod shape.
+
+
+CHALLENGE 53.3 — docker-compose for local                    Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - compose orchestrates multi-container apps via one YAML. Dev only;
+    prod uses k8s / ECS.
+
+  TASK:
+  1. docker-compose.yml with api + client services.
+  2. depends_on, ports, volumes.
+  3. `docker compose up` — whole stack from one command.
+
+  RULES:
+  - compose is dev convenience. Don't use it in prod.
+
+  WHAT YOU JUST LEARNED:
+  Stack-in-one-command onboarding. Great for new contributors.
+
+
+CHALLENGE 53.4 — Healthchecks                                Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Healthcheck: an endpoint that returns 200 when ready. Orchestrators
+    poll it.
+  - Dockerfile HEALTHCHECK CMD; compose `condition: service_healthy`
+    for ordering.
+
+  TASK:
+  1. /health on .NET (AddHealthChecks + MapHealthChecks).
+  2. HEALTHCHECK in Dockerfile (curl -f http://localhost:5000/health).
+  3. compose dep on health.
+
+  RULES:
+  - Real healthchecks verify dependencies (DB), not just "process up."
+
+  WHAT YOU JUST LEARNED:
+  Healthchecks make orchestration possible.
+
+
+CHALLENGE 53.5 — Image size + .dockerignore                  Target: 15 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - .dockerignore: like .gitignore, but for `docker build` context.
+
+  TASK:
+  1. `.dockerignore`: bin/, obj/, node_modules/, .git/, *.log.
+  2. Rebuild; compare image size and build speed.
+
+  RULES:
+  - Smaller context = faster builds, no leaked artifacts.
+
+  WHAT YOU JUST LEARNED:
+  Context matters. Strip what you don't need.
+
+
+================================================================================
+ROUND 54 — MONOREPO (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Workspaces + shared packages + Turborepo.
+Optional but how enterprise frontends grow.
+
+
+CHALLENGE 54.1 — pnpm workspaces                             Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Workspace: multiple packages, one node_modules via symlinks.
+  - pnpm-workspace.yaml lists package globs.
+
+  TASK:
+  1. npm install -g pnpm.
+  2. pnpm-workspace.yaml at repo root: apps/*, packages/*.
+  3. Move EmployeeManager.Client → apps/client.
+  4. pnpm install at root.
+
+  RULES:
+  - Don't mix npm and pnpm in the same repo.
+
+  WHAT YOU JUST LEARNED:
+  Workspaces — multiple packages, one install.
+
+
+CHALLENGE 54.2 — Shared types package                        Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Scoped npm names: `@employee/types`, `@employee/ui`. Keeps your
+    packages grouped.
+
+  TASK:
+  1. Create packages/types/ with src/Models.ts.
+  2. package.json: name `@employee/types`, `"types": "./src/index.ts"`.
+  3. apps/client imports from `@employee/types`.
+
+  RULES:
+  - TS-only packages need no build step if the consumer also runs TS.
+
+  WHAT YOU JUST LEARNED:
+  One source of truth for shared types.
+
+
+CHALLENGE 54.3 — Shared UI package                            Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Vite library mode OR tsup: produces distributable ESM+CJS+.d.ts.
+  - peerDependencies: list React/ReactDOM as peerDeps so the consumer's
+    React is used.
+
+  TASK:
+  1. packages/ui/ with Button, StatusBadge, Card.
+  2. Build with tsup.
+  3. apps/client imports from `@employee/ui`.
+
+  RULES:
+  - Style imports work via Tailwind config sharing (include the UI
+    package in the consumer's tailwind content paths).
+
+  WHAT YOU JUST LEARNED:
+  Reusable component library. Same shape as a .NET class library.
+
+
+CHALLENGE 54.4 — Turborepo                                    Target: 20 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Turborepo: a task runner that knows the dep graph. Builds in
+    order, caches outputs, parallelizes.
+
+  TASK:
+  1. npm install -g turbo.
+  2. turbo.json with build / test / dev pipelines.
+  3. `turbo run build` — observe ordering.
+
+  RULES:
+  - Local cache is on by default.
+
+  WHAT YOU JUST LEARNED:
+  Only rebuild what changed. Speeds up CI massively.
+
+
+CHALLENGE 54.5 — Changesets                                  Target: 15 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Changesets: tool for versioning monorepo packages independently.
+    PR includes a "changeset" describing the change.
+
+  TASK:
+  1. npx @changesets/cli init.
+  2. Create one changeset.
+  3. `pnpm changeset version` — observe version bumps.
+
+  RULES:
+  - Independent versioning > fixed. Each package at its own pace.
+
+  WHAT YOU JUST LEARNED:
+  Monorepo publishing. Industry-standard pattern.
+
+
+================================================================================
+ROUND 55 — SSR / NEXT.JS INTRO (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Awareness round — when SSR matters,
+how Next.js changes the shape.
+
+
+CHALLENGE 55.1 — Why SSR, when, trade-offs                    Target: 15 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this:
+  - CSR (today): browser downloads JS → builds DOM → fetches data.
+    Slow first paint; great for app-like UIs.
+  - SSR: server renders HTML → client hydrates. Fast first paint;
+    SEO-friendly.
+  - SSG: SSR done at BUILD time. Even faster.
+  - When SSR: public content + SEO. Internal tools = stick with CSR.
+
+  TASK:
+  - Read the above. Open Next.js docs. Decide whether the rest of
+    the round is worth it for YOUR career path.
+
+  WHAT YOU JUST LEARNED:
+  Rendering strategy is architectural. CSR ≠ wrong; just different.
+
+
+CHALLENGE 55.2 — create-next-app + walkthrough               Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. npx create-next-app@latest employee-next — accept App Router, TS,
+     Tailwind.
+  2. npm run dev — welcome page at :3000.
+  3. Read the generated app/ folder structure.
+
+  RULES:
+  - Separate project, not a migration target yet.
+
+  WHAT YOU JUST LEARNED:
+  Next mental model: file-based routing, server-by-default.
+
+
+CHALLENGE 55.3 — Port one route as Server Component           Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Server Components run on the server. No hooks. Fetch data
+    directly with `await`.
+  - Client Components: 'use client' directive. Use for interactivity.
+
+  TASK:
+  1. app/employees/page.tsx as async Server Component.
+  2. await fetch the employee list.
+  3. Render server-side.
+  4. Add a client subcomponent for interactivity (a search box).
+
+  RULES:
+  - Server Components can't use useState/useEffect/Context.
+  - Async components are the new normal.
+
+  WHAT YOU JUST LEARNED:
+  Data fetching at the component. The Round-13 useEffect/useState
+  dance disappears.
+
+
+CHALLENGE 55.4 — Server Actions for delete                   Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Server Action: function marked `'use server'` callable from the
+    client. No API route boilerplate.
+
+  TASK:
+  1. app/actions.ts: deleteEmployee(id) marked 'use server'.
+  2. Form action: `<form action={deleteEmployee.bind(null, id)}>`.
+  3. revalidatePath('/employees') after.
+
+  RULES:
+  - Server Actions can be form actions OR called via useFormState.
+  - Revalidate touched paths/tags after writes.
+
+  WHAT YOU JUST LEARNED:
+  Mutations without API routes. The client/server boundary blurs.
+
+
+CHALLENGE 55.5 — Hybrid auth (cookies + middleware)           Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - middleware.ts runs BEFORE every request, on the edge. Auth checks,
+    redirects, header rewriting.
+  - SSR can read cookies but NOT localStorage — auth must go in
+    cookies.
+
+  TASK:
+  1. Set the JWT in an httpOnly cookie on login (Round 20 already
+     covered this).
+  2. middleware.ts: redirect unauthenticated to /login.
+  3. Read user in Server Components via cookies().
+
+  RULES:
+  - Cookie flags: HttpOnly + Secure + SameSite=Strict.
+
+  WHAT YOU JUST LEARNED:
+  SSR forces cookie-based auth. The cleaner option anyway.
+
+
+================================================================================
+ROUND 56 — SECURITY PASS (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Apply security hygiene to the app
+built so far. Not exhaustive — the basics every dev should know.
+
+
+CHALLENGE 56.1 — Content Security Policy                     Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - CSP: HTTP header telling browsers which sources are allowed for
+    scripts/styles/images. Defense against XSS.
+  - Strict CSP example: `default-src 'self'; script-src 'self';
+    img-src 'self' data:; ...`.
+
+  TASK:
+  1. Add CSP middleware in .NET API.
+  2. Set strict policy. Watch the console; relax SPECIFIC rules as
+     needed.
+  3. Use `Report-Only` first to find violations before enforcing.
+
+  RULES:
+  - Avoid `unsafe-inline`/`unsafe-eval`. Use nonces if you must.
+
+  WHAT YOU JUST LEARNED:
+  CSP is your XSS safety net.
+
+
+CHALLENGE 56.2 — Rate limiting                                Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Rate limiting: cap requests per identity per window. Defense
+    against brute force, scraping.
+  - .NET 7+ ships built-in Microsoft.AspNetCore.RateLimiting.
+
+  TASK:
+  1. AddRateLimiter with a fixed-window policy: 100 req/min per IP.
+  2. Stricter policy on /api/auth/login: 5 req/min per IP.
+  3. Test by hammering.
+
+  RULES:
+  - Different policies for different endpoints. Auth needs stricter.
+
+  WHAT YOU JUST LEARNED:
+  Production must rate-limit. Built-in in modern .NET.
+
+
+CHALLENGE 56.3 — Input sanitization                          Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Audit every user-input field that gets RENDERED back (notes,
+     reasons, etc.).
+  2. Confirm React's default escaping handles them (it does for
+     text — confirm by inserting `<script>` and watching it render
+     as text).
+  3. NEVER use dangerouslySetInnerHTML on user input.
+  4. If rendering markdown/rich text, use a sanitizer (DOMPurify).
+
+  RULES:
+  - React's text rendering is XSS-safe by default. dangerouslySetInnerHTML
+    is the only escape.
+
+  WHAT YOU JUST LEARNED:
+  React's default IS the defense. Don't override it unless
+  necessary + sanitized.
+
+
+CHALLENGE 56.4 — Secrets management                          Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Secrets (JWT keys, DB passwords, API keys) NEVER in source.
+    .NET: user-secrets in dev; Azure Key Vault / AWS Secrets Manager
+    in prod.
+
+  TASK:
+  1. Move JWT signing key out of appsettings.json into User Secrets.
+  2. Verify .gitignore covers .env and appsettings.Development.json.
+  3. Document a SECRETS.md describing each secret and where it
+     belongs.
+
+  RULES:
+  - If a secret appears in git history, ROTATE it. Even after deletion.
+
+  WHAT YOU JUST LEARNED:
+  Secrets discipline is process. Tools help but humans break it.
+
+
+CHALLENGE 56.5 — Dependency audit                            Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. `npm audit` and `dotnet list package --vulnerable`.
+  2. Categorize: fix now / accept (with reason) / defer.
+  3. Pin Dependabot in the GH repo settings.
+
+  RULES:
+  - Don't blindly `npm audit fix --force`. Read each.
+
+  WHAT YOU JUST LEARNED:
+  Vulnerabilities accumulate. A monthly audit catches the worst.
+
+
+================================================================================
+ROUND 57 — MOBILE / RESPONSIVE PASS (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Make every page work on mobile.
+Tailwind's responsive utilities + thoughtful layout choices.
+
+
+CHALLENGE 57.1 — Audit on real devices                        Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - DevTools device emulation is OK; real device is better.
+  - Common breakpoints: 320px (small mobile), 640px (mobile), 768px
+    (tablet), 1024px (desktop). Tailwind defaults map to these.
+
+  TASK:
+  1. Walk every page at 320px / 768px / 1280px.
+  2. Document broken layouts.
+  3. Prioritize: tables, modals, navigation.
+
+  RULES:
+  - Real device > DevTools emulation when finalizing.
+
+  WHAT YOU JUST LEARNED:
+  Mobile-first audits. The bar is "does it work at 320px?"
+
+
+CHALLENGE 57.2 — Tables → cards on mobile                    Target: 40 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Wide tables can't shrink to 320px. Pattern: render as cards
+    below md breakpoint, table above.
+
+  TASK:
+  1. EmployeeList: below md, render each employee as a card.
+  2. Same for LeaveList, AuditLog.
+  3. Conditional rendering with Tailwind's hidden/block + md:
+     classes.
+
+  RULES:
+  - Maintain feature parity in the card view (Edit, Delete buttons).
+
+  WHAT YOU JUST LEARNED:
+  Pattern: table on desktop, card on mobile. Common solution.
+
+
+CHALLENGE 57.3 — Mobile navigation                            Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Below md: hamburger menu collapsing the header nav into a
+     drawer.
+  2. Drawer slides in from the side with Framer Motion (Round 51).
+  3. Close on outside click + Esc.
+
+  RULES:
+  - Always include a logout in the drawer.
+
+  WHAT YOU JUST LEARNED:
+  Mobile chrome pattern. Hamburger + drawer.
+
+
+CHALLENGE 57.4 — Touch targets + spacing                     Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Touch target minimum: 44×44px (Apple) / 48×48px (Material).
+    Buttons smaller than this are hard to tap.
+
+  TASK:
+  1. Audit every clickable element on mobile.
+  2. Add padding to meet 44×44 minimum.
+  3. Increase spacing between adjacent buttons.
+
+  RULES:
+  - Padding > font-size for tap targets.
+
+  WHAT YOU JUST LEARNED:
+  Touch ergonomics. One of the most common mobile UX failures.
+
+
+CHALLENGE 57.5 — Mobile-specific UX (bottom sheets)          Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  NEW HERE — read this before TASK:
+  - Modal on mobile = bottom sheet (slides up from bottom). Easier
+    one-handed; standard iOS/Android pattern.
+
+  TASK:
+  1. Make ConfirmModal render as a bottom sheet below md.
+  2. Drag to dismiss (Framer Motion drag — Round 51).
+  3. Modal remains centered above md.
+
+  RULES:
+  - One component, two rendering modes by breakpoint.
+
+  WHAT YOU JUST LEARNED:
+  Native-feeling mobile UX. Bottom sheets > centered modals on phones.
+
+
+================================================================================
+ROUND 58 — REUSABLE PRIMITIVES + DESIGN SYSTEM (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. Extract the cross-cutting components
+into a coherent system. Round 49 (Storybook) becomes the workbench.
+
+
+CHALLENGE 58.1 — Button primitive                            Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. components/ui/Button.tsx with variant: 'primary' | 'secondary' |
+     'danger' | 'ghost'; size: 'sm' | 'md' | 'lg'; loading: boolean.
+  2. Forward refs (forwardRef).
+  3. Use everywhere — replace inline buttons.
+
+  RULES:
+  - Forward refs so consumers can focus the button.
+
+  WHAT YOU JUST LEARNED:
+  Polymorphic primitive. Same shape as your existing variants but
+  formalized.
+
+
+CHALLENGE 58.2 — Input + Select primitives                    Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Input.tsx with label, error, helpText props.
+  2. Select.tsx with the same.
+  3. Wire RHF compatibility (forwardRef + spread register).
+
+  RULES:
+  - Inputs control their own error visual + ARIA invalid + describedby.
+
+  WHAT YOU JUST LEARNED:
+  Form primitives bundle their own a11y.
+
+
+CHALLENGE 58.3 — Modal primitive                              Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Modal.tsx with focus trap + Esc + outside click + framer.
+  2. Compose ConfirmModal from it.
+  3. Compose any other modal in the app from it.
+
+  RULES:
+  - Modal does NOT own its content. Children-as-content.
+
+  WHAT YOU JUST LEARNED:
+  One modal primitive, many feature modals. Removes duplication.
+
+
+CHALLENGE 58.4 — Card + EmptyState                            Target: 25 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Card.tsx with title, footer slots.
+  2. EmptyState.tsx with icon, message, action.
+  3. Apply across every list page.
+
+  RULES:
+  - EmptyState always has a CTA. "No data" is not helpful.
+
+  WHAT YOU JUST LEARNED:
+  Polish primitives. Same UX shape across features.
+
+
+CHALLENGE 58.5 — Storybook all primitives                    Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Stories for every primitive.
+  2. Args for every variant.
+  3. README in /components/ui linking to Storybook.
+
+  RULES:
+  - Treat primitives' Storybook as their docs.
+
+  WHAT YOU JUST LEARNED:
+  Library-grade primitives. Same shape as material-ui / radix.
+
+
+================================================================================
+ROUND 59 — FINAL POLISH + PORTFOLIO PREP (designed 2026-05-15)
+================================================================================
+
+Pacing: One challenge per day. The deltas between "works" and "looks
+great on a resume."
+
+
+CHALLENGE 59.1 — Lighthouse on all pages → 95+               Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Run Lighthouse on every page.
+  2. Fix every Performance / SEO / Best Practices issue.
+  3. Aim 95+ across the four categories.
+
+  RULES:
+  - SEO matters even for internal apps (good titles, descriptions).
+
+  WHAT YOU JUST LEARNED:
+  All four Lighthouse categories matter for portfolio quality.
+
+
+CHALLENGE 59.2 — Empty / error / loading states              Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Every page has: empty state, error state, loading state.
+  2. Replace "Loading..." with skeleton screens where appropriate.
+  3. Error states show what went wrong + retry.
+
+  RULES:
+  - Skeleton > spinner for perceived speed.
+  - Error states are visible reminders to handle them in your hooks.
+
+  WHAT YOU JUST LEARNED:
+  Polish bar. Every state must be designed, not just the happy path.
+
+
+CHALLENGE 59.3 — Onboarding tour (Shepherd / Joyride)        Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. npm install react-joyride.
+  2. First-login tour: walk through 5 features on the dashboard.
+  3. Persist "tour seen" flag in user prefs.
+
+  RULES:
+  - Skippable.
+  - Don't lock interactions during the tour.
+
+  WHAT YOU JUST LEARNED:
+  Onboarding tours = standard enterprise polish.
+
+
+CHALLENGE 59.4 — README + screenshots + GIFs                 Target: 35 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. README.md at repo root:
+     - Tagline + screenshots
+     - Tech stack list
+     - "Try it" instructions (clone + docker compose up)
+     - Feature highlights with GIFs
+  2. Record 3-5 short GIFs of key flows (Loom / ScreenToGif / Kap).
+
+  RULES:
+  - README sells the project in 30 seconds. Lead with screenshots.
+
+  WHAT YOU JUST LEARNED:
+  Communication is half the work. The README is your portfolio
+  cover letter.
+
+
+CHALLENGE 59.5 — Architecture diagram + docs                 Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. ARCHITECTURE.md: high-level component diagram (use draw.io or
+     Mermaid in MD).
+  2. Layer responsibilities table.
+  3. Data flow walkthrough for 1-2 features.
+
+  RULES:
+  - Diagrams in code (Mermaid) age better than images.
+
+  WHAT YOU JUST LEARNED:
+  Interview-quality artifacts. Senior engineers read the docs first.
+
+
+================================================================================
+ROUND 60 — FINAL CAPSTONE (designed 2026-05-15)
+================================================================================
+
+Pacing: Sprint mode. The "you've done it" round.
+
+
+CHALLENGE 60.1 — Pick the capstone                           Target: 15 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  - Choose ONE:
+    (a) Build a NEW small app from scratch (your tech stack, your
+        choice of domain).
+    (b) Find an open-source project on GitHub with "good first issue"
+        labels — pick one, fix it.
+    (c) Add a brand-new feature to EmployeeManager with NO reference
+        to this file or to the existing code (no copy-paste from your
+        own codebase).
+
+  RULES:
+  - Scope ~6h total. Smaller scope, polished, > big scope half-done.
+
+  WHAT YOU JUST LEARNED:
+  Picking scope is a senior skill.
+
+
+CHALLENGE 60.2 — Design before building                      Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Write a 1-page design doc:
+     - Problem
+     - Approach
+     - Interfaces (types/endpoints/components)
+     - Trade-offs
+     - Risks
+  2. Sleep on it (literally — overnight if possible). Re-read.
+
+  RULES:
+  - One page max. Forces clarity.
+
+  WHAT YOU JUST LEARNED:
+  Design before code. Senior reflex.
+
+
+CHALLENGE 60.3 — Vertical slice                              Target: 90 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Backend: model, repo, service, controller. Tests.
+  2. Frontend: types, hooks, page, form. Use every pattern from
+     Rounds 16-22 + relevant feature patterns.
+  3. End-to-end manual test.
+
+  RULES:
+  - Don't grind on perfection. Working slice first.
+
+  WHAT YOU JUST LEARNED:
+  Integration. By Round 60 you can spin up a vertical slice without
+  thinking about HOW.
+
+
+CHALLENGE 60.4 — Tests + a11y + responsive                   Target: 60 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Tests at every layer (component, hook, E2E).
+  2. Lighthouse a11y pass.
+  3. Mobile responsive check.
+
+  RULES:
+  - Each layer catches different bugs.
+
+  WHAT YOU JUST LEARNED:
+  The cross-cutting routine: tests + a11y + responsive on every
+  feature.
+
+
+CHALLENGE 60.5 — Polish + PR + share                         Target: 30 min
+--------------------------------------------------------------------------
+YOUR TIME:
+
+  TASK:
+  1. Open a PR (or commit to portfolio repo). Write a senior-level
+     description: what, why, screenshots, test plan, follow-ups.
+  2. Share on LinkedIn / portfolio site / wherever.
+
+  RULES:
+  - PR description is for HUMANS. The diff is for machines.
+
+  WHAT YOU JUST LEARNED:
+  Code is half the work. Communication about code is the other half.
+  After Round 60: you're past the "can ship features" bar. The next
+  level (senior) is "can lead features." That's a different journey
+  — leadership, design judgment, mentorship — which can't be drilled
+  in challenges. Real jobs teach it.
 
 
 ================================================================================
@@ -3517,39 +8462,264 @@ Fill this in as you complete each challenge:
   13.5       | 45 min  | ~75 min   | Over target by ~30 min — first self-designed capstone (no spec). **[Claude — opener]:** Right test of integration. Context + custom hook + Modal + EmployeeList wiring all designed solo before code. Architectural choices were senior-tier; the overrun was syntax-recall and a try/catch logic gap, not unclear thinking. **What was built:** RecentActivity feature — Context (RecentActivityContext.js) + custom hook (useRecentActivity) + Modal (RecentActivityModal.js) + "View Recent Activities" button in EmployeeList; tracks last 5 delete/undo actions, cap-at-5 by dropping oldest. Logic-solo: Context for shared state (mirrored auth pattern), modal visibility state placed in EmployeeList not in the hook (correct ownership), `onClose` callback passed down. Stuck point 1 — inline onClick syntax: found the ConfirmModal mirror but couldn't reconstruct the line without help (AC didn't carry this specific spot; see autocomplete-dependency memory). Stuck point 2 — undo was a soft undo (state-only; record disappeared on refresh): user added POST /api/employee call to persist; first try/catch put success-path (setEmployees, success toast, addActivity) inside `finally` — would have shown contradictory toasts and faked success on failure. Concept reinforced: `finally` always runs; success path belongs in `try` after `await`. Bug caught in review, fixed on second pass. Cleanup: removed 5th leftover `debugger` (habit watch confirmed), dead `{...employee}` shallow copy, duplicate `../services/api` imports, stale "No API call — purely client-side" comment. Backend ID-mismatch bug also surfaced (EmployeeRepository.CreateAsync overwrites incoming Id with Guid.NewGuid) — user noted, deferred fix to a backend pass. **[Claude — closer]:** Logic and architecture were the win; raw recall stalled twice. User affirmed long-term direction: "syntax rust is fine, focus on understanding React" — endorsed as Round 14–18 strategy. AC-off capstones retracted. Counts as 13.5 done.
   14.1       | 30 min  | ~24 min   | Beat target by ~6 min. CRA peer-dep conflict surfaced: react-scripts@5.0.1 caps typescript at ^4, so the default `npm install typescript` (v6.0.3) failed ERESOLVE. Pinned typescript@4.9.5 — correct call (CRA is maintenance-mode; eject/Vite migration is out of scope here). `npm audit fix` skipped (same conflict, 31 CRA-stack vulns are background noise for a learning repo). tsconfig.json clean with strict + isolatedModules + jsx:react-jsx. StatusBadge.js → .tsx verified via `npm start` + `npx tsc --noEmit`. Pattern internalised: TS bolts on file-by-file, .js + .tsx coexist; leaves-first migration order is the right path.
   14.2       | 25 min  | ~15 min   | Beat target by ~10 min. Step 1 (Models.ts: Employee, User, LoginRequest, LoginResponse) — 3 syntax bugs surfaced in review: `Number`→`number` (boxed vs primitive, same as C# Int32 vs int); `userName` vs `username` inconsistency (matched lowercase to ASP.NET Core camelCase JSON output); `user[role]` → `User['role']` (indexed access needs type ref + quoted string, C# equivalent: `nameof(User.Role)`). Concept gap: over-correction loop on case sensitivity — lowercased all four interface declarations after misreading the "cannot find name user, did you mean User?" error as "lowercase is wrong everywhere"; reverted to PascalCase. False-friend reinforced: types are PascalCase, references must match the declaration (don't change the declaration to satisfy a broken consumer). Step 2 (StatusBadge.tsx refactor) — first real cross-file TS dependency; `employee: Employee` intentionally accepted as worse design than `isActive: boolean` (TS practice scaffolding, not a real-code pattern; props minimalism still the rule). Two-sided refactor caller-miss: updated value on EmployeeRow.js but left prop name `isActive=` stale — 2nd incident of this shape (1st was 12.3 oncancel/onCancel); memory saved (feedback_two_sided_refactor). JS-file caller silenced TS; runtime blew up on undefined. Future cue: "prop name first, then value." Stray empty src/Types/Employee.ts still on disk — needs delete to close out fully.
-  14.3       | 30 min  |           |  TypeScript: leaf component
-  14.4       | 35 min  |           |  TypeScript: generic hook
-  14.5       | 40 min  |           |  TypeScript: no-ref capstone
-  15.1       | 30 min  |           |  TypeScript: API service
+  14.3       | 30 min  | 5 min     |  TypeScript: leaf component
+  14.4       | 35 min  | 5 min     |  TypeScript: generic hook
+  14.5       | 40 min  | 5 min     |  TypeScript: no-ref capstone
+  15.1       | 30 min  | 5 min     |  TypeScript: API service
   15.2       | 40 min  |           |  TypeScript: useEmployees + discriminated unions
   15.3       | 35 min  |           |  TypeScript: AuthContext
   15.4       | 45 min  |           |  TypeScript: form types
   15.5       | 45 min  |           |  TypeScript: full migration capstone
-  16.1       | 20 min  |           |  React Query: install + setup
-  16.2       | 35 min  |           |  React Query: useQuery
-  16.3       | 40 min  |           |  React Query: useMutation + optimistic delete
-  16.4       | 40 min  |           |  React Query: create + edit mutations
-  16.5       | 45 min  |           |  React Query: no-ref capstone (new resource)
-  17.1       | 25 min  |           |  Testing: Vitest + RTL setup
-  17.2       | 35 min  |           |  Testing: leaf component
-  17.3       | 35 min  |           |  Testing: custom hook
-  17.4       | 45 min  |           |  Testing: form
-  17.5       | 45 min  |           |  Testing: integration + mocked API
-  18.1       | 30 min  |           |  Capstone: code splitting
-  18.2       | 35 min  |           |  Capstone: accessibility
-  18.3       | 30 min  |           |  Capstone: feature flag
-  18.4       | 35 min  |           |  Capstone: Profiler perf pass
-  18.5       | 60 min  |           |  Capstone: full feature end-to-end (the "comfortable" test)
+  16.1       | 30 min  |           |  TS Hardening: eliminate `any`
+  16.2       | 25 min  |           |  TS Hardening: branded ID types
+  16.3       | 30 min  |           |  TS Hardening: discriminated reducers
+  16.4       | 25 min  |           |  TS Hardening: tighten event handlers
+  16.5       | 20 min  |           |  TS Hardening: strict-mode pass
+  17.1       | 20 min  |           |  React Query: install + Provider
+  17.2       | 35 min  |           |  React Query: useEmployees → useQuery
+  17.3       | 40 min  |           |  React Query: delete + optimistic
+  17.4       | 35 min  |           |  React Query: create + edit mutations
+  17.5       | 30 min  |           |  React Query: query-key hierarchy
+  18.1       | 25 min  |           |  Router: createBrowserRouter
+  18.2       | 25 min  |           |  Router: URL params
+  18.3       | 30 min  |           |  Router: nested routes + AuthLayout
+  18.4       | 25 min  |           |  Router: search params for filters
+  18.5       | 25 min  |           |  Router: typed route helpers
+  19.1       | 25 min  |           |  RHF: install + first form
+  19.2       | 35 min  |           |  RHF: EmployeeForm refactor
+  19.3       | 30 min  |           |  Zod: schema validation
+  19.4       | 30 min  |           |  RHF + Zod: zodResolver
+  19.5       | 25 min  |           |  RHF: touched-aware + root errors
+  20.1       | 35 min  |           |  Auth: refresh token endpoint
+  20.2       | 40 min  |           |  Auth: refresh interceptor
+  20.3       | 40 min  |           |  Auth: first-login forced password
+  20.4       | 25 min  |           |  Auth: role-based route guards
+  20.5       | 25 min  |           |  Auth: useAuth narrowing
+  21.1       | 20 min  |           |  Tailwind: install + config
+  21.2       | 30 min  |           |  Tailwind: refactor StatusBadge/Row
+  21.3       | 35 min  |           |  Tailwind: EmployeeList + Form
+  21.4       | 30 min  |           |  Tailwind: tokens + dark mode
+  21.5       | 20 min  |           |  Tailwind: @apply patterns
+  22.1       | 20 min  |           |  Zustand: install + first store
+  22.2       | 30 min  |           |  Zustand: migrate RecentActivity
+  22.3       | 25 min  |           |  Zustand: shallow equality
+  22.4       | 25 min  |           |  Zustand: persist middleware
+  22.5       | 20 min  |           |  Zustand: devtools + slices
+  23.1       | 30 min  |           |  Feature/Profile: types + endpoint
+  23.2       | 25 min  |           |  Feature/Profile: useProfile hook
+  23.3       | 30 min  |           |  Feature/Profile: page + display
+  23.4       | 40 min  |           |  Feature/Profile: edit (RHF+Zod)
+  23.5       | 30 min  |           |  Feature/Profile: avatar upload
+  24.1       | 25 min  |           |  Feature/ChangePwd: endpoint
+  24.2       | 25 min  |           |  Feature/ChangePwd: strength schema
+  24.3       | 35 min  |           |  Feature/ChangePwd: form + logout
+  24.4       | 20 min  |           |  Feature/ChangePwd: forced flow test
+  24.5       | 30 min  |           |  Feature/ChangePwd: forgot-pwd stub
+  25.1       | 40 min  |           |  Feature/Docs: model + .NET CRUD
+  25.2       | 30 min  |           |  Feature/Docs: types + query hooks
+  25.3       | 35 min  |           |  Feature/Docs: My Documents page
+  25.4       | 25 min  |           |  Feature/Docs: download flow
+  25.5       | 20 min  |           |  Feature/Docs: type/size validation
+  26.1       | 25 min  |           |  Feature/DocsUpload: basic form
+  26.2       | 30 min  |           |  Feature/DocsUpload: progress bar
+  26.3       | 30 min  |           |  Feature/DocsUpload: drag-drop
+  26.4       | 30 min  |           |  Feature/DocsUpload: multi-file queue
+  26.5       | 25 min  |           |  Feature/DocsUpload: paste support
+  27.1       | 30 min  |           |  Feature/DocsAdmin: list-all page
+  27.2       | 30 min  |           |  Feature/DocsAdmin: filter by owner
+  27.3       | 35 min  |           |  Feature/DocsAdmin: delete-with-reason
+  27.4       | 30 min  |           |  Feature/DocsAdmin: bulk zip download
+  27.5       | 30 min  |           |  Feature/DocsAdmin: stats panel
+  28.1       | 35 min  |           |  Feature/Leave: domain model
+  28.2       | 25 min  |           |  Feature/Leave: TS types + helpers
+  28.3       | 30 min  |           |  Feature/Leave: balance endpoint
+  28.4       | 35 min  |           |  Feature/Leave: My Leaves page
+  28.5       | 20 min  |           |  Feature/Leave: year selector
+  29.1       | 25 min  |           |  Feature/LeaveReq: Zod schema
+  29.2       | 35 min  |           |  Feature/LeaveReq: request endpoint
+  29.3       | 35 min  |           |  Feature/LeaveReq: request form
+  29.4       | 30 min  |           |  Feature/LeaveReq: date pickers
+  29.5       | 25 min  |           |  Feature/LeaveReq: RHF Controller
+  30.1       | 30 min  |           |  Feature/LeaveAppr: Manager + queue
+  30.2       | 35 min  |           |  Feature/LeaveAppr: pending page
+  30.3       | 30 min  |           |  Feature/LeaveAppr: approve/reject API
+  30.4       | 35 min  |           |  Feature/LeaveAppr: approve UI
+  30.5       | 25 min  |           |  Feature/LeaveAppr: notify requester
+  31.1       | 25 min  |           |  Feature/LeaveRollback: cancel endpoint
+  31.2       | 25 min  |           |  Feature/LeaveRollback: cancel UI
+  31.3       | 35 min  |           |  Feature/LeaveRollback: request endpoints
+  31.4       | 30 min  |           |  Feature/LeaveRollback: request UI
+  31.5       | 35 min  |           |  Feature/LeaveRollback: manager UI
+  32.1       | 35 min  |           |  Feature/Notif: model + triggers
+  32.2       | 25 min  |           |  Feature/Notif: useNotifications poll
+  32.3       | 30 min  |           |  Feature/Notif: bell + badge
+  32.4       | 30 min  |           |  Feature/Notif: full page
+  32.5       | 20 min  |           |  Feature/Notif: preferences stub
+  33.1       | 40 min  |           |  Feature/Audit: model + filter
+  33.2       | 25 min  |           |  Feature/Audit: endpoints
+  33.3       | 35 min  |           |  Feature/Audit: hook + page
+  33.4       | 30 min  |           |  Feature/Audit: diff viewer
+  33.5       | 25 min  |           |  Feature/Audit: CSV export
+  34.1       | 30 min  |           |  Feature/Dashboard: KPI endpoints
+  34.2       | 30 min  |           |  Feature/Dashboard: KPI cards
+  34.3       | 25 min  |           |  Feature/Dashboard: Recharts intro
+  34.4       | 30 min  |           |  Feature/Dashboard: time series
+  34.5       | 25 min  |           |  Feature/Dashboard: responsive + a11y
+  35.1       | 30 min  |           |  Feature/DashPolish: pending widget
+  35.2       | 25 min  |           |  Feature/DashPolish: team list widget
+  35.3       | 30 min  |           |  Feature/DashPolish: date range
+  35.4       | 25 min  |           |  Feature/DashPolish: CSV export per chart
+  35.5       | 30 min  |           |  Feature/DashPolish: saved layout
+  36.1       | 35 min  |           |  Feature/Time: model + endpoints
+  36.2       | 30 min  |           |  Feature/Time: clock UI
+  36.3       | 30 min  |           |  Feature/Time: today's entries + edit
+  36.4       | 25 min  |           |  Feature/Time: weekly summary
+  36.5       | 25 min  |           |  Feature/Time: missing-entry banner
+  37.1       | 30 min  |           |  Feature/Timesheet: model + submit
+  37.2       | 30 min  |           |  Feature/Timesheet: submission UI
+  37.3       | 30 min  |           |  Feature/Timesheet: approval flow
+  37.4       | 25 min  |           |  Feature/Timesheet: reopen + re-submit
+  37.5       | 20 min  |           |  Feature/Timesheet: weekly digest stub
+  38.1       | 30 min  |           |  Feature/Review: model
+  38.2       | 35 min  |           |  Feature/Review: manager form
+  38.3       | 25 min  |           |  Feature/Review: viewer + ack
+  38.4       | 30 min  |           |  Feature/Review: auto-save drafts
+  38.5       | 25 min  |           |  Feature/Review: dashboard widget
+  39.1       | 30 min  |           |  Feature/Onboard: wizard state
+  39.2       | 25 min  |           |  Feature/Onboard: per-step trigger()
+  39.3       | 30 min  |           |  Feature/Onboard: account step
+  39.4       | 25 min  |           |  Feature/Onboard: confirmation
+  39.5       | 35 min  |           |  Feature/Onboard: bulk CSV import
+  40.1       | 25 min  |           |  Feature/Bulk: selection state
+  40.2       | 25 min  |           |  Feature/Bulk: action bar
+  40.3       | 30 min  |           |  Feature/Bulk: endpoints
+  40.4       | 30 min  |           |  Feature/Bulk: mutations + UX
+  40.5       | 25 min  |           |  Feature/Bulk: dept reassign capstone
+  41.1       | 35 min  |           |  SignalR: Hub + push
+  41.2       | 30 min  |           |  SignalR: client connect + subscribe
+  41.3       | 30 min  |           |  SignalR: leave status push
+  41.4       | 35 min  |           |  SignalR: connection lifecycle UX
+  41.5       | 25 min  |           |  SignalR: presence indicator
+  42.1       | 25 min  |           |  Testing: Vitest + RTL setup
+  42.2       | 35 min  |           |  Testing: EmployeeRow + ProfilePage
+  42.3       | 30 min  |           |  Testing: custom hooks
+  42.4       | 35 min  |           |  Testing: mock API integration
+  42.5       | 40 min  |           |  Testing: leave approval flow
+  43.1       | 25 min  |           |  Playwright: install + first
+  43.2       | 35 min  |           |  Playwright: login + table flow
+  43.3       | 40 min  |           |  Playwright: full leave rollback E2E
+  43.4       | 30 min  |           |  Playwright: document upload E2E
+  43.5       | 30 min  |           |  Playwright: CI + traces
+  44.1       | 25 min  |           |  A11y: jsx-a11y ESLint
+  44.2       | 30 min  |           |  A11y: focus management
+  44.3       | 30 min  |           |  A11y: live regions
+  44.4       | 30 min  |           |  A11y: modals keyboard
+  44.5       | 40 min  |           |  A11y: Lighthouse to 100
+  45.1       | 25 min  |           |  Perf: Profiler baseline
+  45.2       | 35 min  |           |  Perf: memo + useCallback pass
+  45.3       | 35 min  |           |  Perf: virtualize tables
+  45.4       | 30 min  |           |  Perf: bundle analyzer + tree-shake
+  45.5       | 25 min  |           |  Perf: useDeferredValue + Suspense
+  46.1       | 25 min  |           |  i18n: react-i18next setup
+  46.2       | 50 min  |           |  i18n: extract strings (all features)
+  46.3       | 30 min  |           |  i18n: add second language
+  46.4       | 25 min  |           |  i18n: plural + interpolation
+  46.5       | 25 min  |           |  i18n: locale dates/numbers
+  47.1       | 25 min  |           |  PWA: manifest + install
+  47.2       | 35 min  |           |  PWA: service worker (Workbox)
+  47.3       | 30 min  |           |  PWA: cache strategies
+  47.4       | 25 min  |           |  PWA: offline indicator
+  47.5       | 30 min  |           |  PWA: background sync writes
+  48.1       | 30 min  |           |  Vite: side-by-side scaffold
+  48.2       | 15 min  |           |  Vite: env var migration
+  48.3       | 40 min  |           |  Vite: port routing + entry
+  48.4       | 25 min  |           |  Vite: port tests
+  48.5       | 20 min  |           |  Vite: swap + delete CRA
+  49.1       | 20 min  |           |  Storybook: install + first
+  49.2       | 30 min  |           |  Storybook: cards + fields
+  49.3       | 25 min  |           |  Storybook: args + controls
+  49.4       | 35 min  |           |  Storybook: Provider decorators
+  49.5       | 25 min  |           |  Storybook: Chromatic visual reg
+  50.1       | 35 min  |           |  Adv TS: conditional types
+  50.2       | 30 min  |           |  Adv TS: mapped types
+  50.3       | 25 min  |           |  Adv TS: template literal types
+  50.4       | 30 min  |           |  Adv TS: type guards + Zod boundary
+  50.5       | 25 min  |           |  Adv TS: branded consolidation
+  51.1       | 20 min  |           |  Framer: install + first
+  51.2       | 25 min  |           |  Framer: page transitions
+  51.3       | 25 min  |           |  Framer: list enter/exit
+  51.4       | 25 min  |           |  Framer: modal flourishes
+  51.5       | 15 min  |           |  Framer: reduced motion
+  52.1       | 25 min  |           |  CI: first workflow (build+test)
+  52.2       | 20 min  |           |  CI: parallel typecheck/lint/test
+  52.3       | 20 min  |           |  CI: caching npm + nuget
+  52.4       | 25 min  |           |  CI: coverage upload
+  52.5       | 25 min  |           |  CI: preview deployment
+  53.1       | 30 min  |           |  Docker: API Dockerfile
+  53.2       | 30 min  |           |  Docker: client Dockerfile + nginx
+  53.3       | 25 min  |           |  Docker: compose for local
+  53.4       | 20 min  |           |  Docker: healthchecks
+  53.5       | 15 min  |           |  Docker: image size + ignore
+  54.1       | 25 min  |           |  Monorepo: pnpm workspaces
+  54.2       | 25 min  |           |  Monorepo: shared types pkg
+  54.3       | 30 min  |           |  Monorepo: shared UI pkg
+  54.4       | 20 min  |           |  Monorepo: Turborepo
+  54.5       | 15 min  |           |  Monorepo: changesets
+  55.1       | 15 min  |           |  SSR: why + trade-offs
+  55.2       | 25 min  |           |  SSR: create-next-app
+  55.3       | 40 min  |           |  SSR: port Server Component
+  55.4       | 30 min  |           |  SSR: Server Actions
+  55.5       | 30 min  |           |  SSR: hybrid auth (cookies)
+  56.1       | 30 min  |           |  Security: CSP
+  56.2       | 25 min  |           |  Security: rate limiting
+  56.3       | 30 min  |           |  Security: input sanitization
+  56.4       | 25 min  |           |  Security: secrets management
+  56.5       | 25 min  |           |  Security: dependency audit
+  57.1       | 25 min  |           |  Mobile: audit on real devices
+  57.2       | 40 min  |           |  Mobile: tables → cards pattern
+  57.3       | 30 min  |           |  Mobile: hamburger nav drawer
+  57.4       | 25 min  |           |  Mobile: touch targets
+  57.5       | 30 min  |           |  Mobile: bottom sheets
+  58.1       | 30 min  |           |  Design system: Button
+  58.2       | 35 min  |           |  Design system: Input + Select
+  58.3       | 35 min  |           |  Design system: Modal
+  58.4       | 25 min  |           |  Design system: Card + EmptyState
+  58.5       | 30 min  |           |  Design system: Storybook docs
+  59.1       | 35 min  |           |  Polish: Lighthouse all pages 95+
+  59.2       | 30 min  |           |  Polish: empty/error/loading states
+  59.3       | 30 min  |           |  Polish: onboarding tour
+  59.4       | 35 min  |           |  Polish: README + screenshots/GIFs
+  59.5       | 30 min  |           |  Polish: architecture diagram + docs
+  60.1       | 15 min  |           |  Capstone: pick scope
+  60.2       | 30 min  |           |  Capstone: design doc
+  60.3       | 90 min  |           |  Capstone: vertical slice
+  60.4       | 60 min  |           |  Capstone: tests/a11y/responsive
+  60.5       | 30 min  |           |  Capstone: PR + share
 
-  Total target time: ~28h (Rounds 1–12: ~10h | Round 13: ~3h |
-                           Round 14: ~2h 40m | Round 15: ~3h 15m |
-                           Round 16: ~3h     | Round 17: ~3h 5m |
-                           Round 18: ~3h 10m)
-  Your total time:   ~4h 37m through 12.3 (vs. ~10h target for the same scope — ~54% under).
-                     Round 12 complete; Rounds 13–18 designed (2026-05-12).
-                     Path: Round 13 (advanced JS React) → Rounds 14-15 (TypeScript) →
-                           Round 16 (React Query) → Round 17 (Testing) → Round 18 (Capstone).
-                     Pacing: ~1 round per week. Round 18 = the "comfortable" bar.
+  Total target time: ~110h across 60 rounds (~22 weeks at 1 round/week).
+                     Rounds 1-15 (~13h)  : Original CRUD + advanced JS React + TS migration.
+                     Rounds 16-22 (~13h) : TS hardening + pattern foundations.
+                     Rounds 23-40 (~46h) : Feature modules. THE muscle-memory rounds —
+                                           every feature reapplies React Query + RHF + Zod +
+                                           TS interfaces + Router + Tailwind + role checks.
+                     Rounds 41-50 (~26h) : Cross-cutting polish — real-time, testing, E2E,
+                                           a11y, perf, i18n, PWA, Vite, Storybook, Advanced TS.
+                     Rounds 51-60 (~30h) : Production extras + polish + final capstone.
+
+  Your total time:   ~4h 37m through 12.3, +~75m for Round 13, +~24m for 14.1, +~15m for 14.2,
+                     +5m each for 14.3, 14.4, 14.5, 15.1 (logged 2026-05-14/15).
+                     Round 13 complete; Round 14 complete; 15.1 done; 15.2 in progress.
+
+                     Curriculum redesigned 2026-05-15 to feature-first approach. Rounds 16-60
+                     prioritize REPEATED application of patterns across enterprise features:
+                     Profile, Documents, Leave Mgmt, Notifications, Audit Log, Manager
+                     Dashboard, Time Tracking, Performance Review, Onboarding Wizard, Bulk Ops.
+
+                     Path: 16-22 patterns → 23-40 features (repetition for muscle memory) →
+                           41-50 cross-cutting polish → 51-60 production extras + capstone.
+
+                     Pacing: ~1 round/week. No rush. Round 40 = "feature-builder" bar;
+                     Round 50 = "production-ready"; Round 60 = "interview-ready portfolio."
 
 After you finish all challenges, you will understand:
   - How .NET Clean Architecture works (layers, DI, interfaces)
