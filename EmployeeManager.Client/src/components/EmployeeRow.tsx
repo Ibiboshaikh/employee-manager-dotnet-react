@@ -14,12 +14,13 @@
 import { memo } from "react";
 import StatusBadge from "./StatusBadge";
 import { Employee } from "../Types/Models";
+import { EmployeeId } from "../Types/Ids";
 export interface EmployeeRowProps {
     employee: Employee;
-    onEdit: (id: string) => void;
-    onDelete: (id: string, name: string) => void;
-    onSelect: (id: string) => void;
-    selected: string | null;
+    onEdit: (id: EmployeeId) => void;
+    onDelete: (id: EmployeeId, name: string) => void;
+    onSelect: (id: EmployeeId) => void;
+    selected: EmployeeId | null;
 }
 
 const EmployeeRow = ({ employee, onEdit, onDelete, onSelect, selected }: EmployeeRowProps) => (

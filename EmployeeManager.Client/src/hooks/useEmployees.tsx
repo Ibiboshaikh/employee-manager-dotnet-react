@@ -12,15 +12,16 @@ import { createEmployee, getEmployees, deleteEmployee } from "../services/api";
 import { Employee } from "../Types/Models";
 import { useRecentActivity } from "../Context/RecentActivityContext";
 import { isAxiosError } from 'axios';
+import { EmployeeId } from "../Types/Ids";
 type ConfirmState = {
   open: boolean;
-  id: string | null;
+  id: EmployeeId | null;
   name: string;
 }
 
 type ConfirmAction = {
   type: "open" | "close";
-  id?: string;
+  id?: EmployeeId;
   name?: string;
 }
 
@@ -40,7 +41,7 @@ export interface UseEmployeesReturn {
     loading: boolean;
     fetchedAt: string | null;
     confirm: ConfirmState;
-    handleDelete: (id: string, name: string) => void;
+    handleDelete: (id: EmployeeId, name: string) => void;
     onConfirm: () => Promise<void>;
     onCancel: () => void;
 }
@@ -76,7 +77,7 @@ function useEmployees(): UseEmployeesReturn {
 
   // Step 1 of delete flow: just open the confirm modal. No API call yet —
   // the user must click "Yes, Delete" first.
-  const handleDelete = (id: string, name: string) => {
+  const handleDelete = (id: EmployeeId, name: string) => {
     dispatch({ type: 'open', id, name });
   };
 

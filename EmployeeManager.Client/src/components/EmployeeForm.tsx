@@ -53,6 +53,7 @@ import { createEmployee, getEmployee, updateEmployee } from "../services/api";
 // Toast for showing success/error notifications
 import { toast } from "react-toastify";
 import { Employee } from "../Types/Models";
+import { EmployeeId, toEmployeeId } from "../Types/Ids";
 
 interface FormErrors {
   firstName?: string;
@@ -133,7 +134,7 @@ const EmployeeForm = () => {
   const fetchEmployee = async () => {
     try {
       // GET /api/employee/{id} — fetch this specific employee
-      const response = await getEmployee(id as string);
+      const response = await getEmployee(toEmployeeId(id!));
 
       // response.data is the employee object from the API:
       // { id, firstName, lastName, email, department, position, salary, dateOfJoining, isActive }
@@ -245,7 +246,7 @@ const EmployeeForm = () => {
 
       if (isEditMode) {
         // EDIT MODE: PUT /api/employee/{id} with the updated data
-        await updateEmployee(id as string, employeeData);
+        await updateEmployee(toEmployeeId(id!), employeeData);
         toast.success("Employee updated successfully");
       } else {
         // CREATE MODE: POST /api/employee with the new employee data

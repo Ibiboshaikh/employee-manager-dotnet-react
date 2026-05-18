@@ -1,5 +1,6 @@
+import { EmployeeId, UserId } from "./Ids";
 export interface Employee {
-    id: string;
+    id: EmployeeId;
     firstName: string;
     lastName: string;
     email: string;
@@ -12,7 +13,7 @@ export interface Employee {
 }
 
 export interface User {
-    id: string;
+    id: UserId;
     username: string;
     fullName: string;
     role: 'Admin' | 'User';

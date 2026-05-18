@@ -3370,7 +3370,76 @@ Still open (deferred to later rounds):
 
 CHALLENGE 16.2 — Branded types for IDs                      Target: 25 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~20 min (2026-05-18) — beat target by ~5 min. Some Gemini help
+on initial brand syntax (Gemini gave the `unique symbol` + `declare const`
+pattern instead of the string-literal `__brand` pattern in the spec —
+more rigorous, unforgeable since the symbol is never exported).
+
+Real learning came in two phases:
+
+  PHASE 1 — UNDERSTANDING THE BRAND. Gemini's Ids.ts used:
+    declare const employeeIdBrand: unique symbol;
+    type EmployeeId = string & { readonly [employeeIdBrand]: true };
+  vs the spec's:
+    type EmployeeId = string & { __brand: 'EmployeeId' };
+  Both work. unique-symbol version is preferred in production codebases
+  (io-ts, effect-ts) because the symbol is module-private — outside code
+  literally cannot construct the brand field key, so the type is
+  unforgeable. String-literal version is forgeable: any file can write
+  `{ __brand: 'EmployeeId' as const }`. NEW CONCEPTS internalised:
+  `unique symbol` (a symbol type that refers to one specific symbol value,
+  distinguishable at the type level from every other symbol), and
+  `declare const` (tells TS something exists, compiles to zero bytes at
+  runtime — pure compile-time marker).
+
+  PHASE 2 — THE SUBTYPE DIRECTION GOTCHA. After changing Models.ts to
+  use EmployeeId, ran tsc — NO errors. Surprising. The reason:
+  `EmployeeId = string & {brand}` makes EmployeeId a SUBTYPE of string.
+  Subtypes flow into supertypes silently (`EmployeeId → string` ✅), but
+  not the reverse (`string → EmployeeId` ❌). So changing the producer
+  (Employee.id) does nothing on its own — the brand widens to string
+  every time it enters a function with a `string` parameter. **The brand
+  only bites when you also tighten every CONSUMER.**
+
+  Initial wrong move: scattered `as EmployeeId` casts at every call site
+  (deleteEmployee, getEmployee, updateEmployee). That made compilation
+  work but defeated the entire point — bare `as` is the same lie as
+  `as any`. The fix: tighten signatures (handleDelete, ConfirmState.id,
+  useCallback types, EmployeeRow prop types, api.ts params) so the brand
+  flows naturally up the call chain. Then use `toEmployeeId(...)` (the
+  named constructor) ONLY at true boundaries — useParams() in
+  EmployeeForm, where URL strings enter the app.
+
+WIN CONDITIONS HIT:
+  - `as EmployeeId` / `as UserId` appear ONLY inside Ids.ts (the
+    constructor — exactly one place per brand).
+  - `toEmployeeId(...)` appears at exactly the two real boundaries
+    (EmployeeForm.tsx lines 137 and 249 — getEmployee + updateEmployee
+    calls fed by useParams()).
+  - `EmployeeId` flows through the rest by type inheritance:
+    Employee.id → EmployeeRow callbacks → EmployeeList useCallbacks →
+    useEmployees.handleDelete → ConfirmState.id → deleteEmployee.
+    Zero casts in that chain.
+  - `npx tsc --noEmit` clean.
+
+KEY MEMORY BEAT — "intersection done right":
+  In 15.4 I tried `Omit<Employee, 'id'> & { salary: string }` to OVERRIDE
+  a primitive — failed because `number & string = never`. In 16.2,
+  `string & { brand }` SUCCEEDS because the intersection ADDS a marker
+  field, not overrides an existing one. Same `&` operator, two different
+  uses: adding constraints (works) vs overriding primitives (fails).
+  Different shapes of intersection.
+
+C# ANALOGY THAT FITS BEST: like declaring `record EmployeeId(Guid Value)`
+and `record UserId(Guid Value)` in C#. Different type names, identical
+underlying data. The brand is TS's hack to fake that nominal distinction
+in a structurally-typed language. Same protection — pass UserId where
+EmployeeId is expected → compile error. Zero runtime cost in both
+languages.
+
+USERID UNUSED: User.id is now typed UserId but nothing reads/writes it
+yet (no User CRUD in the app). Brand will activate the moment User
+endpoints land. Future-proofed at zero cost today.
 
   NEW HERE — read this before TASK:
   - Branded type (nominal type): `type EmployeeId = string & { __brand:
@@ -8589,7 +8658,7 @@ Fill this in as you complete each challenge:
   15.4       | 45 min  | ~45 min   | On target. Event types (React.ChangeEvent<HTMLInputElement|HTMLSelectElement> + as HTMLInputElement, React.FormEvent<HTMLFormElement>), useState<EmployeeFormData> explicit generic, Validate(): FormErrors — clean. Two TS gotchas surfaced via salary type chain: (1) Models.ts had `salary: string` while .NET returns number — domain type was lying; symptom looked like a form bug. (2) Intersection ≠ override: `Omit<Employee, 'id'> & { salary: string }` produced `never` because `number & string = never`. Canonical fix: Omit the conflicting key first — `Omit<Employee, 'id' | 'salary'> & { salary: string }`. Real C#→TS false friend — inherited-property override doesn't translate to structural typing; intersection requires ALL constraints. Boundary-conversion pattern locked in: API number → form string (.toString fetchEmployee), form string → API number (parseFloat submit), form↔input both string. FormErrors written as manual interface (not Partial<Record<keyof T, string>>) — works, defer scaling to 16.x. Carryovers: `Validate`→`validate`, narrow error casts in 16.1, FormErrors → Partial<Record<...>> swap.
   15.5       | 45 min  | ~20 min   | Beat target by ~25 min. Took help from Gemini when stucked. Migration mostly mechanical (rename + add prop interfaces); real learning came from EmployeeList.tsx surfacing a long-standing data-shape bug TS now refused: `hideBelow50K` was `useState('')` (string) in the hook but FilterBar correctly typed `boolean`, and on-clear called `sethideBelow50K(false)`. JS coercion (`!''` truthy, `!'on'` falsy) had masked the mismatch since Round 11. Fixed hook to `useState(false)` — boolean end-to-end. Canonical TS-migration moment: converting `.js → .tsx` doesn't ADD bugs, it REVEALS bugs JS was coercing past. Wrong reflex: relax the type (`useState('')`, `: any`, `as unknown`) — hides the bug again. Right move: ask "what should this value really be?" and fix the source of truth. Same pattern as 15.4's salary chain. Cleanup pass: deleted stray empty `src/Types/Employee.ts`, renamed `reportWebVitals.tsx`→`.ts` (no JSX), kept `App.test.js` (CRA boilerplate, needs @types/jest to migrate). Fixed `.JS`/`App.js`/`api.js`/`Login.js`/`index.js` references in comments. Removed dead duplicate import in EmployeeList. `npx tsc --noEmit` clean. Carryovers to Round 16: `>= 900` salary threshold bug, `AuthContext.user: any`, `Activity = any`, `error as any` casts, `Validate`→`validate`, FormErrors → `Partial<Record<keyof T, string>>`.
   16.1       | 30 min  | ~10 min   | Beat target by ~20 min. A bit of help from Gemini. Removed every hard `any` from src/ (only `global.d.ts` CSS module stub remains — CRA standard). Three fix categories: (1) AuthContext `user: any` → `LoginResponse | null` + try/catch around localStorage JSON parse; (2) RecentActivity Activity = any → real ActivityInterface{id,action,details,timestamp,userId?}, modal + useEmployees callers updated; (3) error catches in EmployeeForm/useEmployees/Login. Initial pass used `as AxiosError<...>` (compile-time assertion); cleanup pass swapped to `isAxiosError<{message?:string}>(error)` (true runtime type guard — TS narrows only when check passes). Concept drilled: generic parameter on error types (same idea as Promise<T> / Array<T>, .NET analogy Task<T>/List<T>); type assertion vs type guard (`as X` is a compile-time lie, `is X`/guard fn is a real runtime check — same family as `error is X` pattern matching in C#). Cleanup pass also fixed: handleUndo toast.error regression (was console.error — would silently lose data on undo failure), EmployeeForm catch indent at column 1. Open: Activity.id semantic mismatch (stores employee id, commented as log-entry id); `ActivityInterface` redundant naming (TS drops the `Interface` suffix — .NET reflex).
-  16.2       | 25 min  |           |  TS Hardening: branded ID types
+  16.2       | 25 min  | ~20 min   | Beat target by ~5 min. Some Gemini help on initial brand syntax. Gemini gave `unique symbol` + `declare const` pattern instead of the spec's string-literal `__brand` — more rigorous, unforgeable (symbol is module-private, no outside file can construct the key). NEW CONCEPTS: `unique symbol` (a type referring to one specific symbol value, distinguishable at type level), `declare const` (compiles to zero bytes — pure compile-time marker). Real learning was the subtype-direction gotcha: after changing Models.ts to EmployeeId, tsc had NO errors because `EmployeeId = string & {brand}` is a SUBTYPE of string — flows silently into `string` parameters. **The brand only bites when CONSUMERS are also tightened.** Initial wrong move: scattered `as EmployeeId` casts at every call site (defeats the point — bare `as` is `as any` in disguise). Correct fix: tighten signatures (handleDelete, ConfirmState.id, useCallback types, EmployeeRow props, api.ts params) so brand flows naturally; use `toEmployeeId(...)` named constructor ONLY at true boundaries (useParams() in EmployeeForm). Win condition: `as EmployeeId` appears only inside Ids.ts (constructor), `toEmployeeId(...)` at exactly the two URL-param boundaries, zero casts in the propagation chain. INTERSECTION-DONE-RIGHT contrast vs 15.4: `Omit<E,'id'> & {salary:string}` failed because `number & string = never` (override primitive); `string & {brand}` succeeds because intersection ADDS a marker field, doesn't override. Same `&` operator, two different shapes. C# analogy: `record EmployeeId(Guid Value)` vs `record UserId(Guid Value)` — different names, identical data, distinct types. Brand is TS's hack for nominal distinction in a structural language. UserId branded but unused (no User CRUD yet) — future-proofed at zero cost.
   16.3       | 30 min  |           |  TS Hardening: discriminated reducers
   16.4       | 25 min  |           |  TS Hardening: tighten event handlers
   16.5       | 20 min  |           |  TS Hardening: strict-mode pass

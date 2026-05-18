@@ -26,6 +26,7 @@
 // Advantages over browser's fetch(): automatic JSON parsing, interceptors, cleaner API.
 import axios, { AxiosResponse } from "axios";
 import { Employee, LoginRequest, LoginResponse } from "../Types/Models";
+import { EmployeeId } from "../Types/Ids";
 // ── CREATE AXIOS INSTANCE ──────────────────────────────────────────────────
 // axios.create() creates a custom instance with pre-configured settings.
 // All requests made through this instance will use these settings.
@@ -139,13 +140,13 @@ export const getEmployees = (): Promise<AxiosResponse<Employee[]>> => api.get<Em
 /**
  * Get Single Employee — fetches one employee by ID.
  *
- * @param {string} id - The employee's GUID (e.g., "a1b2c3d4-...")
+ * @param {EmployeeId} id - The employee's GUID (e.g., "a1b2c3d4-...")
  * @returns {Promise} - Resolves with { data: Employee }
  *
  * Maps to: GET http://localhost:5000/api/employee/{id}
  * .NET endpoint: EmployeeController.GetById(Guid id)
  */
-export const getEmployee = (id: string): Promise<AxiosResponse<Employee>> => api.get<Employee>
+export const getEmployee = (id: EmployeeId): Promise<AxiosResponse<Employee>> => api.get<Employee>
 (`/employee/${id}`);
 //                                          ^^^ Template literal — embeds the id variable into the URL string
 
@@ -164,26 +165,26 @@ export const createEmployee = (employee: Omit<Employee, 'id'>): Promise<AxiosRes
 /**
  * Update Employee — sends updated data for an existing employee.
  *
- * @param {string} id - The employee's GUID
+ * @param {EmployeeId} id - The employee's GUID
  * @param {Employee} employee - Updated employee data
  * @returns {Promise} - Resolves with { data: Employee }
  *
  * Maps to: PUT http://localhost:5000/api/employee/{id}
  * .NET endpoint: EmployeeController.Update(Guid id, Employee employee)
  */
-export const updateEmployee = (id: string, employee: Omit<Employee, 'id'>):  Promise<AxiosResponse<Employee>> =>
+export const updateEmployee = (id: EmployeeId, employee: Omit<Employee, 'id'>):  Promise<AxiosResponse<Employee>> =>
   api.put<Employee>(`/employee/${id}`, employee);
 
 /**
  * Delete Employee — removes an employee by ID.
  *
- * @param {string} id - The employee's GUID
+ * @param {EmployeeId} id - The employee's GUID
  * @returns {Promise} - Resolves with 204 No Content (empty response)
  *
  * Maps to: DELETE http://localhost:5000/api/employee/{id}
  * .NET endpoint: EmployeeController.Delete(Guid id)
  */
-export const deleteEmployee = (id: string): Promise<AxiosResponse<void>> => api.delete(`/employee/${id}`);
+export const deleteEmployee = (id: EmployeeId): Promise<AxiosResponse<void>> => api.delete(`/employee/${id}`);
 
 // Export the axios instance as default (in case someone needs direct access)
 export default api;

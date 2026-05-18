@@ -20,6 +20,7 @@ import ConfirmModal from "./ConfirmModal";
 import { useAuth } from "../Context/AuthContext";
 import RecentActivityModal from "./RecentActivityModal";
 import { Employee } from "../Types/Models";
+import { EmployeeId } from "../Types/Ids";
 
 const EmployeeList = () => {
   // ── HOOKS ──────────────────────────────────────────────────────────────
@@ -43,7 +44,7 @@ const EmployeeList = () => {
 
   // ── LOCAL UI STATE ─────────────────────────────────────────────────────
   const [view, setView] = useState(0);             // FilterBar layout toggle
-  const [selected, setSelected] = useState<string | null>(null);  // Currently clicked row id
+  const [selected, setSelected] = useState<EmployeeId | null>(null);  // Currently clicked row id
 
   const [recentActivityOpen, setRecentActivityOpen] = useState(false); // Recent Activity Modal
 
@@ -95,8 +96,8 @@ const EmployeeList = () => {
 
   // Stable callbacks for memoized EmployeeRow. Without useCallback, a new
   // function identity each render defeats React.memo on the row.
-  const onEdit = useCallback((id: string) => navigate(`/employees/edit/${id}`), [navigate]);
-  const onDelete = useCallback((id: string, name: string) => handleDelete(id, name), [handleDelete]);
+  const onEdit = useCallback((id: EmployeeId) => navigate(`/employees/edit/${id}`), [navigate]);
+  const onDelete = useCallback((id: EmployeeId, name: string) => handleDelete(id, name), [handleDelete]);
 
   // ── RENDER ─────────────────────────────────────────────────────────────
   if (loading) return <div style={styles.loading}>Loading employees...</div>;
