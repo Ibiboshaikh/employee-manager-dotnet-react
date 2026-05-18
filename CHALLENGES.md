@@ -2952,7 +2952,7 @@ bugs at compile time instead of runtime.
 
 CHALLENGE 15.2 — Type useEmployees fully                    Target: 40 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~7-8 min — took help from Gemini when stuck.
 
 Convert useEmployees.js → useEmployees.ts. Type the state, the reducer
 (if you did 13.1), and the return value. This is the hook that everything
@@ -3036,7 +3036,7 @@ else depends on — getting its types right unlocks the rest.
 
 CHALLENGE 15.3 — Type the AuthContext                       Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~7-8 min — took help from Gemini when stuck.
 
 Convert your AuthContext (from 13.2) to TS. Force consumers to handle
 "no provider" cases at compile time — the most common Context bug.
@@ -3108,7 +3108,48 @@ Convert your AuthContext (from 13.2) to TS. Force consumers to handle
 
 CHALLENGE 15.4 — Type the form (EmployeeForm)               Target: 45 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~45 min (2026-05-18) — on target. Got the event types
+(React.ChangeEvent<HTMLInputElement|HTMLSelectElement> + as HTMLInputElement,
+React.FormEvent<HTMLFormElement>), useState<EmployeeFormData> with explicit
+generic, and Validate(): FormErrors. FormErrors written as a manual interface
+(not the canonical Partial<Record<keyof T, string>>) — works but doesn't scale.
+
+Real learning moment was the salary type chain. Three boundary conversions
+clicked: API number → form string (.toString in fetchEmployee), form string
+→ API number (parseFloat in submit), form ↔ HTML input both string. Got
+there via two TS gotchas in sequence:
+
+  1. Domain type was wrong — Models.ts had `salary: string` while .NET
+     returns a number. Symptom was assignment errors that looked like a
+     form bug; root cause was the type lying about the wire. Fix: update
+     domain type to match reality, let the form override locally.
+
+  2. Intersection ≠ override. First attempt at the form type was
+     `Omit<Employee, 'id'> & { salary: string }` — assumed intersection
+     would override `salary: number` from Employee. Wrong: TS intersection
+     INTERSECTS — `number & string = never`, which surfaced as "Type 'X'
+     is not assignable to type 'never'." Canonical pattern is to Omit the
+     conflicting key first, then re-add with the new type:
+     `Omit<Employee, 'id' | 'salary'> & { salary: string }`.
+
+This is a real C#→TS false friend to lock in: in C# you can override an
+inherited property; in TS structural typing, intersection requires ALL
+constraints to hold simultaneously. To "override" a field type, you must
+Omit the original key first. Same shape as the [[feedback_csharp_ts_interface_false_friend]]
+beat — language reflexes from .NET don't translate 1:1.
+
+Also worth noting: tooling told the truth here. `.toString()` on
+`emp.salary` in fetchEmployee was a tell that the runtime value was a
+number even though the type claimed string. Trust the conversion calls
+your past self wrote more than the types when they disagree.
+
+Carryovers to 15.5 / Round 16:
+- `Validate` → `validate` (lowercase convention).
+- `(error as any).response?.data?.message` → narrow to AxiosError (16.1).
+- FormErrors interface → swap to Partial<Record<keyof EmployeeFormData, string>>
+  in 16.x — current shape works but won't scale when fields change.
+- `id as string` assertions in fetchEmployee/updateEmployee — could
+  refactor to a guard but acceptable since isEditMode gates the call.
 
 The form is where TS truly earns its place. Event types, controlled
 inputs, errors-as-record types — all the syntax that previously felt
@@ -3186,12 +3227,47 @@ fuzzy snaps into place.
 
 CHALLENGE 15.5 — Capstone: finish the migration             Target: 45 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~20 min (2026-05-18) — beat target by ~25 min. Took help from
+Gemini when stucked. Migration mechanical for most files (rename + add
+prop interfaces). Real learning came from one file: EmployeeList.tsx,
+which surfaced a long-standing data-shape bug TS was now refusing to
+permit — `hideBelow50K` was `useState('')` in the hook (string) but the
+FilterBar prop was correctly typed `boolean`, and the on-clear path
+called `sethideBelow50K(false)`. JS coercion (`!''` truthy, `!'on'` falsy)
+had been making it "work" since Round 11. TS stripped the accident:
+fixed the hook to `useState(false)` so the type is boolean end-to-end.
 
-Convert the remaining .js files to .ts/.tsx so the entire client is TS.
-Files: App.tsx, EmployeeList.tsx, Login.tsx, ProtectedRoute.tsx,
-ConfirmModal.tsx, useEmployeeFilter.ts, ErrorBoundary.tsx (from 13.4),
-index.tsx, reportWebVitals.ts (or delete it — CRA cruft).
+This is the canonical TS-migration moment to remember: **converting
+`.js → .tsx` doesn't add bugs, it reveals bugs.** Every place where JS
+truthy/falsy coercion silently bridged mismatched types becomes a
+compile error. The reflex to fight by relaxing the type (`useState('')`,
+`: any`, `as unknown`) is wrong — that hides the bug again. The right
+move is to ask "what should this value really be?" and fix the source
+of truth. Same pattern as 15.4's salary chain.
+
+Cleanup pass: deleted stray empty `src/Types/Employee.ts` (long-standing
+open item); renamed `reportWebVitals.tsx` → `.ts` (no JSX); kept
+`App.test.js` as-is (CRA boilerplate, never authored by user, would have
+needed @types/jest to compile as .tsx). Fixed all `.JS` / `App.js` /
+`api.js` / `Login.js` / `index.js` references in header and body
+comments to match the new file extensions. Removed dead commented-out
+duplicate `import { Employee }` line in EmployeeList. Minor formatting
+nits (trailing whitespace, off-indent on useEmployees return block).
+`npx tsc --noEmit` clean.
+
+Still open for Round 16 (TS Hardening):
+- `useEmployeeFilter.ts:23` — `emp.salary >= 900` should be `>= 50000`.
+  Type-safe now, but the threshold has been wrong since Round 11.
+- `Context/AuthContext.tsx` — `user: any` and `userData: any`. Should be
+  the actual User shape from Models.ts.
+- `Context/RecentActivityContext.tsx` — `export type Activity = any`.
+- Multiple `(error as any).response?.data?.message` casts across
+  EmployeeForm, useEmployees, Login. Should narrow to AxiosError.
+- `EmployeeForm.tsx` — `Validate` capital V (convention is lowercase),
+  `FormErrors` should be `Partial<Record<keyof EmployeeFormData, string>>`
+  (canonical form-errors idiom, not the hand-rolled interface).
+- `id as string` assertions in fetchEmployee/updateEmployee (acceptable
+  since isEditMode gates the call, but could be refactored to a guard).
 
   TASK:
   - Walk each file. Rename. Add types. Resolve red squiggles.
@@ -8466,10 +8542,10 @@ Fill this in as you complete each challenge:
   14.4       | 35 min  | 5 min     |  TypeScript: generic hook
   14.5       | 40 min  | 5 min     |  TypeScript: no-ref capstone
   15.1       | 30 min  | 5 min     |  TypeScript: API service
-  15.2       | 40 min  |           |  TypeScript: useEmployees + discriminated unions
-  15.3       | 35 min  |           |  TypeScript: AuthContext
-  15.4       | 45 min  |           |  TypeScript: form types
-  15.5       | 45 min  |           |  TypeScript: full migration capstone
+  15.2       | 40 min  | ~7-8 min  |  TypeScript: useEmployees + discriminated unions (took help from Gemini)
+  15.3       | 35 min  | ~7-8 min  |  TypeScript: AuthContext (took help from Gemini)
+  15.4       | 45 min  | ~45 min   | On target. Event types (React.ChangeEvent<HTMLInputElement|HTMLSelectElement> + as HTMLInputElement, React.FormEvent<HTMLFormElement>), useState<EmployeeFormData> explicit generic, Validate(): FormErrors — clean. Two TS gotchas surfaced via salary type chain: (1) Models.ts had `salary: string` while .NET returns number — domain type was lying; symptom looked like a form bug. (2) Intersection ≠ override: `Omit<Employee, 'id'> & { salary: string }` produced `never` because `number & string = never`. Canonical fix: Omit the conflicting key first — `Omit<Employee, 'id' | 'salary'> & { salary: string }`. Real C#→TS false friend — inherited-property override doesn't translate to structural typing; intersection requires ALL constraints. Boundary-conversion pattern locked in: API number → form string (.toString fetchEmployee), form string → API number (parseFloat submit), form↔input both string. FormErrors written as manual interface (not Partial<Record<keyof T, string>>) — works, defer scaling to 16.x. Carryovers: `Validate`→`validate`, narrow error casts in 16.1, FormErrors → Partial<Record<...>> swap.
+  15.5       | 45 min  | ~20 min   | Beat target by ~25 min. Took help from Gemini when stucked. Migration mostly mechanical (rename + add prop interfaces); real learning came from EmployeeList.tsx surfacing a long-standing data-shape bug TS now refused: `hideBelow50K` was `useState('')` (string) in the hook but FilterBar correctly typed `boolean`, and on-clear called `sethideBelow50K(false)`. JS coercion (`!''` truthy, `!'on'` falsy) had masked the mismatch since Round 11. Fixed hook to `useState(false)` — boolean end-to-end. Canonical TS-migration moment: converting `.js → .tsx` doesn't ADD bugs, it REVEALS bugs JS was coercing past. Wrong reflex: relax the type (`useState('')`, `: any`, `as unknown`) — hides the bug again. Right move: ask "what should this value really be?" and fix the source of truth. Same pattern as 15.4's salary chain. Cleanup pass: deleted stray empty `src/Types/Employee.ts`, renamed `reportWebVitals.tsx`→`.ts` (no JSX), kept `App.test.js` (CRA boilerplate, needs @types/jest to migrate). Fixed `.JS`/`App.js`/`api.js`/`Login.js`/`index.js` references in comments. Removed dead duplicate import in EmployeeList. `npx tsc --noEmit` clean. Carryovers to Round 16: `>= 900` salary threshold bug, `AuthContext.user: any`, `Activity = any`, `error as any` casts, `Validate`→`validate`, FormErrors → `Partial<Record<keyof T, string>>`.
   16.1       | 30 min  |           |  TS Hardening: eliminate `any`
   16.2       | 25 min  |           |  TS Hardening: branded ID types
   16.3       | 30 min  |           |  TS Hardening: discriminated reducers

@@ -1,5 +1,5 @@
 // ============================================================================
-// FILTERBAR.JS — Controlled filter inputs for the employee list.
+// FilterBar.tsx — Controlled filter inputs for the employee list.
 //
 // This is a "controlled" component — it owns NO state. All current values
 // come in as props, all changes go back up via callback props.

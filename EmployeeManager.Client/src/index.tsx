@@ -1,5 +1,5 @@
 // ============================================================================
-// INDEX.JS — The entry point of the React application.
+// index.tsx — The entry point of the React application.
 //
 // This file is the FIRST JavaScript code that runs. Its only job:
 // 1. Find the <div id="root"> in index.html
@@ -9,9 +9,9 @@
 //
 // EXECUTION ORDER:
 //   Browser loads index.html
-//     → Browser loads this file (index.js)
+//     → Browser loads this file (index.tsx)
 //       → This file mounts <App /> into <div id="root">
-//         → App.js renders the router and decides which page to show
+//         → App.tsx renders the router and decides which page to show
 // ============================================================================
 
 // Import the React library — needed for JSX to work
@@ -26,7 +26,7 @@ import ReactDOM from 'react-dom/client';
 
 // Import global CSS styles — these apply to the entire app.
 // In CSS, import order matters: index.css is loaded first (base styles),
-// then App.css (loaded via App.js) can override/extend them.
+// then App.css (loaded via App.tsx) can override/extend them.
 import './index.css';
 
 // Import the root component of our application.
@@ -45,7 +45,7 @@ import { RecentActivityProvider } from './Context/RecentActivityContext';
 //
 // createRoot() is the modern way to initialize React (React 18+).
 // Older code uses: ReactDOM.render(<App />, document.getElementById('root'))
-const root = ReactDOM.createRoot(document.getElementById('root'));
+const root = ReactDOM.createRoot(document.getElementById('root')!);
 
 // ── STEP 2: Render the App component ───────────────────────────────────────
 // root.render() tells React: "Take this component tree and display it."

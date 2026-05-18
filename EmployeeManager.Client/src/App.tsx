@@ -1,5 +1,5 @@
 // ============================================================================
-// APP.JS — The root component of the React application.
+// App.tsx — The root component of the React application.
 //
 // This is the "main layout" of your app. Its job:
 // 1. Set up ROUTING — which URL shows which component (page)
@@ -123,7 +123,7 @@ function App() {
   );
 }
 
-// Export this component so index.js can import and render it.
+// Export this component so index.tsx can import and render it.
 // "export default" means this is the MAIN export of this file.
 // Other files import it as: import App from './App';
 export default App;

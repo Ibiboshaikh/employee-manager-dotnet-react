@@ -1,12 +1,12 @@
 // ============================================================================
-// PROTECTEDROUTE.JS — Authentication guard for protected pages.
+// ProtectedRoute.tsx — Authentication guard for protected pages.
 //
 // This component acts as a "security gate" for routes that require login.
 // It checks if a JWT token exists in localStorage:
 //   - Token EXISTS → allow access (render the child page)
 //   - Token MISSING → redirect to login page
 //
-// HOW IT'S USED (in App.js):
+// HOW IT'S USED (in App.tsx):
 //   <Route element={<ProtectedRoute />}>       ← This is the guard
 //     <Route path="/employees" element={<EmployeeList />} />  ← Protected page
 //     <Route path="/employees/new" element={<EmployeeForm />} />
@@ -69,5 +69,5 @@ const ProtectedRoute = () => {
   return <Outlet />;
 };
 
-// Export the component so App.js can import and use it.
+// Export the component so App.tsx can import and use it.
 export default ProtectedRoute;

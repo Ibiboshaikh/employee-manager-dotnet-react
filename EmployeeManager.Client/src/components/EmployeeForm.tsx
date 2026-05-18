@@ -1,12 +1,12 @@
 // ============================================================================
-// EMPLOYEEFORM.JS — A dual-purpose form for CREATING and EDITING employees.
+// EmployeeForm.tsx — A dual-purpose form for CREATING and EDITING employees.
 //
 // This is ONE component that handles TWO tasks:
 //   - CREATE MODE: URL is /employees/new → form starts empty
 //   - EDIT MODE:   URL is /employees/edit/:id → form is pre-filled with existing data
 //
 // HOW IT DETERMINES THE MODE:
-// The URL parameter ":id" tells us. In App.js, we defined:
+// The URL parameter ":id" tells us. In App.tsx, we defined:
 //   <Route path="/employees/new" element={<EmployeeForm />} />        ← no :id
 //   <Route path="/employees/edit/:id" element={<EmployeeForm />} />   ← has :id
 //
@@ -52,6 +52,17 @@ import { createEmployee, getEmployee, updateEmployee } from "../services/api";
 
 // Toast for showing success/error notifications
 import { toast } from "react-toastify";
+import { Employee } from "../Types/Models";
+
+interface FormErrors {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  salary?: string;
+}
+
+type EmployeeFormData = Omit<Employee, 'id' | 'salary'> & {salary: string};
+
 
 // ── THE EMPLOYEEFORM COMPONENT ─────────────────────────────────────────────
 
@@ -80,7 +91,7 @@ const EmployeeForm = () => {
   //
   // Each property matches the "name" attribute of its corresponding <input>.
   // This is important for the handleChange function to work correctly.
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<EmployeeFormData>({
     firstName: "",       // Text input
     lastName: "",        // Text input
     email: "",           // Email input
@@ -97,7 +108,7 @@ const EmployeeForm = () => {
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const [errors, setErrors] = useState({}); // For future validation error handling
+  const [errors, setErrors] = useState<FormErrors>({}); // For future validation error handling
 
   // ── FETCH EMPLOYEE DATA FOR EDIT MODE ──────────────────────────────────
   //
@@ -122,7 +133,7 @@ const EmployeeForm = () => {
   const fetchEmployee = async () => {
     try {
       // GET /api/employee/{id} — fetch this specific employee
-      const response = await getEmployee(id);
+      const response = await getEmployee(id as string);
 
       // response.data is the employee object from the API:
       // { id, firstName, lastName, email, department, position, salary, dateOfJoining, isActive }
@@ -137,9 +148,9 @@ const EmployeeForm = () => {
         phoneNumber: emp.phoneNumber || "",  // Fallback for old records without this field
         department: emp.department,
         position: emp.position,
-        salary: emp.salary,
+        salary: emp.salary.toString(),
         // DATE FORMATTING:
-        // The API returns dates as ISO 8601 strings: "2024-01-15T00:00:00"
+        // The API returns dates as ISO 8601 strings: "2024-01-15T00:00:00"still
         // But HTML <input type="date"> requires: "2024-01-15" (just the date part)
         //
         // new Date("2024-01-15T00:00:00") creates a Date object
@@ -178,9 +189,9 @@ const EmployeeForm = () => {
   // SPREAD OPERATOR: { ...prev, [name]: value }
   // This copies ALL existing formData properties, then overrides the one that changed.
   // Example: { firstName: "old", lastName: "Doe", ...rest } → { firstName: "John", lastName: "Doe", ...rest }
-  const handleChange = (e) => {
+  const handleChange = (e:  React.ChangeEvent<HTMLInputElement| HTMLSelectElement>) => {
     // Destructure the event target to get the input's properties
-    const { name, value, type, checked } = e.target;
+    const { name, value, type, checked } = e.target as HTMLInputElement;
     // name: the input's name attribute (e.g., "firstName", "salary")
     // value: the current text/number in the input
     // type: the input type (e.g., "text", "checkbox", "number")
@@ -195,12 +206,12 @@ const EmployeeForm = () => {
     }));
   };
 
-  const Validate = () =>{
-    const errs = {};
+  const Validate = (): FormErrors =>{
+    const errs: FormErrors = {};
       if(!formData.firstName) errs.firstName = "First Name is required";
       if(!formData.lastName) errs.lastName = "Last Name is required";
       if(!formData.email) errs.email = "Email is required";
-      if (formData.salary <=0) errs.salary = "Salary must be greater than zero";
+      if (parseFloat(formData.salary) <=0) errs.salary = "Salary must be greater than zero";
     return errs;
   }
 
@@ -208,7 +219,7 @@ const EmployeeForm = () => {
   //
   // Called when the user clicks "Create Employee" or "Update Employee".
   // Determines which API call to make based on isEditMode.
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     // Prevent default form behavior (page reload)
     e.preventDefault();
     const errs = Validate();
@@ -226,16 +237,15 @@ const EmployeeForm = () => {
       // Build the employee object to send to the API.
       // We need to convert salary from string to number because
       // HTML inputs always give us strings, but the API expects a number.
+      const salaryNumber = parseFloat(formData.salary);
       const employeeData = {
-        ...formData,  // Copy all form fields
-        salary: parseFloat(formData.salary) || 0,
-        // ^^^ parseFloat("75000") → 75000 (number)
-        // ^^^ parseFloat("") → NaN, and NaN || 0 → 0 (fallback to zero)
+        ...formData,
+        salary: salaryNumber,  // number, not .toString()
       };
 
       if (isEditMode) {
         // EDIT MODE: PUT /api/employee/{id} with the updated data
-        await updateEmployee(id, employeeData);
+        await updateEmployee(id as string, employeeData);
         toast.success("Employee updated successfully");
       } else {
         // CREATE MODE: POST /api/employee with the new employee data
@@ -250,7 +260,7 @@ const EmployeeForm = () => {
       // Show the error message from the API (e.g., "Email already exists")
       // or a generic fallback message if no specific message is available.
       toast.error(
-        error.response?.data?.message || "Failed to save employee"
+        (error as any).response?.data?.message || "Failed to save employee"
       );
     } finally {
       // Always reset loading state
@@ -512,7 +522,7 @@ const styles = {
     border: "1px solid #ddd",
     borderRadius: "4px",
     fontSize: "14px",
-    boxSizing: "border-box",
+    boxSizing: "border-box" as const,
   },
 
   // Checkbox group — horizontal layout for checkbox + label

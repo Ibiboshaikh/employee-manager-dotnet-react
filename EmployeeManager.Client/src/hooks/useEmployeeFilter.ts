@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-function useEmployeeFilter(employees) {
+import { Employee } from "../Types/Models";
+function useEmployeeFilter(employees: Employee[]) {
     const [search, setSearch] = useState(
     ()=> localStorage.getItem('search') || ''
   );
@@ -8,7 +9,7 @@ function useEmployeeFilter(employees) {
     localStorage.setItem('search', search);
   }, [search])
     const [department, setDepartment] = useState('');
-    const [hideBelow50K, sethideBelow50K] = useState('');
+    const [hideBelow50K, sethideBelow50K] = useState(false);
     const [minSalary, setMinSalary] = useState('');
     const [maxSalary, setMaxSalary] = useState('');
 

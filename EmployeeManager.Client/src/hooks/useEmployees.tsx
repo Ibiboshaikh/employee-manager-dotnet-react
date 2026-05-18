@@ -56,7 +56,7 @@ function useEmployees(): UseEmployeesReturn {
   // so onConfirm knows which employee to delete and the toast can name them.
   const [confirm, dispatch] = useReducer(confirmReducer, { open: false, id: null, name: "" });
 
-  // GET /api/employee — JWT is attached by the Axios interceptor in api.js.
+  // GET /api/employee — JWT is attached by the Axios interceptor in api.ts.
   const fetchEmployees = async () => {
     try {
       const response = await getEmployees();
@@ -144,7 +144,7 @@ function useEmployees(): UseEmployeesReturn {
     handleDelete,
     onConfirm,
     onCancel,
-};
+  };
 }
 
 export default useEmployees;

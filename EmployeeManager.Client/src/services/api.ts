@@ -1,5 +1,5 @@
 // ============================================================================
-// API.JS — Centralized HTTP client for ALL communication with the .NET API.
+// api.ts — Centralized HTTP client for ALL communication with the .NET API.
 //
 // This file creates a configured Axios instance that:
 // 1. Has a base URL pointing to our .NET API (localhost:5000)
@@ -112,7 +112,7 @@ api.interceptors.response.use(
  * @param {Object} credentials - { username: string, password: string }
  * @returns {Promise} - Resolves with { data: { token, fullName, role } }
  *
- * Usage in Login.js:
+ * Usage in Login.tsx:
  *   const response = await login({ username: 'admin', password: 'admin123' });
  *   const token = response.data.token;
  *

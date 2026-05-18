@@ -1,7 +1,9 @@
-import React from "react";
 import { useRecentActivity } from "../Context/RecentActivityContext";
-
-function RecentActivityModal({ open, onClose }) {
+interface RecentActivityModalProps {
+    open: boolean;              // Whether the modal is visible
+    onClose: () => void;        // Callback when user wants to close the modal
+}
+function RecentActivityModal({ open, onClose }: RecentActivityModalProps) {
     const { getRecentActivities } = useRecentActivity();
     const activities = getRecentActivities();
 

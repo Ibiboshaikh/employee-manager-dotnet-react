@@ -19,7 +19,7 @@ import useEmployees from '../hooks/useEmployees';
 import ConfirmModal from "./ConfirmModal";
 import { useAuth } from "../Context/AuthContext";
 import RecentActivityModal from "./RecentActivityModal";
-// import { Employee } from "../Types/Models";
+import { Employee } from "../Types/Models";
 
 const EmployeeList = () => {
   // ── HOOKS ──────────────────────────────────────────────────────────────
@@ -37,13 +37,13 @@ const EmployeeList = () => {
   } = useEmployeeFilter(employees);
 
   const { user, logout } = useAuth();
-  
+
   // Current { field, order } and a toggler.
-  const [sort, handleSort] = useSort('firstName');
+  const [sort, handleSort] = useSort<Employee>('firstName');
 
   // ── LOCAL UI STATE ─────────────────────────────────────────────────────
   const [view, setView] = useState(0);             // FilterBar layout toggle
-  const [selected, setSelected] = useState(null);  // Currently clicked row id
+  const [selected, setSelected] = useState<string | null>(null);  // Currently clicked row id
 
   const [recentActivityOpen, setRecentActivityOpen] = useState(false); // Recent Activity Modal
 
@@ -60,7 +60,7 @@ const EmployeeList = () => {
         result = a.salary - b.salary;
         break;
       case 'dateOfJoining':
-        result = new Date(a.dateOfJoining) - new Date(b.dateOfJoining);
+        result = new Date(a.dateOfJoining).getTime() - new Date(b.dateOfJoining).getTime();
         break;
       case 'isActive':
         result = (a.isActive ? 1 : 0) - (b.isActive ? 1 : 0);
@@ -95,8 +95,8 @@ const EmployeeList = () => {
 
   // Stable callbacks for memoized EmployeeRow. Without useCallback, a new
   // function identity each render defeats React.memo on the row.
-  const onEdit = useCallback((id) => navigate(`/employees/edit/${id}`), [navigate]);
-  const onDelete = useCallback((id, name) => handleDelete(id, name), [handleDelete]);
+  const onEdit = useCallback((id: string) => navigate(`/employees/edit/${id}`), [navigate]);
+  const onDelete = useCallback((id: string, name: string) => handleDelete(id, name), [handleDelete]);
 
   // ── RENDER ─────────────────────────────────────────────────────────────
   if (loading) return <div style={styles.loading}>Loading employees...</div>;
@@ -275,7 +275,7 @@ const styles = {
 
   table: {
     width: "100%",
-    borderCollapse: "collapse",
+    borderCollapse: "collapse" as const,
     backgroundColor: "white",
     borderRadius: "8px",
     overflow: "hidden",
@@ -283,7 +283,7 @@ const styles = {
   },
   th: {
     padding: "12px 15px",
-    textAlign: "left",
+    textAlign: "left" as const,
     backgroundColor: "#f5f5f5",
     fontWeight: "600",
     color: "#333",
@@ -325,9 +325,9 @@ const styles = {
     padding: "12px 0",
   },
 
-  loading: { textAlign: "center", padding: "50px", color: "#666" },
+  loading: { textAlign: "center" as const, padding: "50px", color: "#666" },
   empty: {
-    textAlign: "center",
+    textAlign: "center" as const,
     padding: "50px",
     color: "#999",
     backgroundColor: "white",

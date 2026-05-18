@@ -1,5 +1,5 @@
 // ============================================================================
-// STATSBAR.JS — Shows employee count, total salary, and average salary.
+// StatsBar.tsx — Shows employee count, total salary, and average salary.
 //
 // Receives the filtered employees array and derives all display values
 // itself. The parent does NOT pre-compute these — it just passes the array.
@@ -13,9 +13,12 @@
 //   they're always derivable; storing them in state would be redundant.
 // ============================================================================
 
-import React from "react";
+import { Employee } from "../Types/Models";
 
-const StatsBar = ({ filtered }) => {
+interface StatsBarProps {
+    filtered: Employee[]; // Array of employees after filtering (from parent)
+}
+const StatsBar = ({ filtered }: StatsBarProps ) => {
     const totalEmployees = filtered.length;
     const totalSalary    = filtered.reduce((sum, emp) => sum + emp.salary, 0);
     const averageSalary  = totalEmployees > 0

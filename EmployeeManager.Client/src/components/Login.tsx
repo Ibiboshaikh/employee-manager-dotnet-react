@@ -1,5 +1,5 @@
 // ============================================================================
-// LOGIN.JS — The login page component.
+// Login.tsx — The login page component.
 //
 // This is the FIRST page users see. It renders a username/password form
 // and authenticates the user against the .NET API.
@@ -42,8 +42,8 @@ import React, { useState } from "react";
 // It's like Response.Redirect() in .NET — it changes the page programmatically.
 import { useNavigate } from "react-router-dom";
 
-// login: our API function from api.js that sends POST /api/auth/login.
-// It's imported as a named import (with curly braces) because api.js uses export const.
+// login: our API function from api.ts that sends POST /api/auth/login.
+// It's imported as a named import (with curly braces) because api.ts uses export const.
 import { login } from "../services/api";
 import { useAuth } from "../Context/AuthContext";
 // ^^^ "../" means "go up one directory" — from components/ to src/, then into services/
@@ -83,7 +83,7 @@ const Login = () => {
 
   // This function runs when the user submits the form (clicks "Sign In" or presses Enter).
   // It's an async function because it makes an API call (which is asynchronous).
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     // e is the "event object" — it contains info about what happened (which form, etc.)
 
     // CRITICAL: Prevent the default form behavior!
@@ -99,7 +99,7 @@ const Login = () => {
     // catch: handle errors (network failure, invalid credentials, etc.)
     // finally: always runs — reset loading state whether success or failure
     try {
-      // Call the login API function (defined in api.js).
+      // Call the login API function (defined in api.ts).
       // This sends: POST http://localhost:5000/api/auth/login
       // with body: { "username": "admin", "password": "admin123" }
       //
@@ -124,7 +124,7 @@ const Login = () => {
       // This changes the URL to /employees and React Router renders <EmployeeList />.
       navigate("/employees");
 
-    } catch (error) {
+    } catch (error: any) {
       // If the API call fails (network error, 401 Unauthorized, etc.)
 
       // Show a red error toast with the API's error message.
@@ -266,14 +266,14 @@ const styles = {
 
   // Title: centered, dark color
   title: {
-    textAlign: "center",
+    textAlign: "center" as const,
     color: "#1a1a2e",              // Dark navy blue
     marginBottom: "5px",
   },
 
   // Subtitle: centered, lighter gray
   subtitle: {
-    textAlign: "center",
+    textAlign: "center" as const,
     color: "#666",                 // Medium gray
     marginBottom: "30px",          // Space before the form
   },
@@ -298,7 +298,7 @@ const styles = {
     border: "1px solid #ddd",      // Light gray border
     borderRadius: "4px",           // Slightly rounded corners
     fontSize: "14px",
-    boxSizing: "border-box",       // Width includes padding and border
+    boxSizing: "border-box" as const,       // Width includes padding and border
   },
 
   // Button: full-width, dark background, white text
@@ -316,7 +316,7 @@ const styles = {
 
   // Hint: small gray text at the bottom
   hint: {
-    textAlign: "center",
+    textAlign: "center" as const,
     color: "#999",                 // Light gray
     fontSize: "12px",
     marginTop: "20px",

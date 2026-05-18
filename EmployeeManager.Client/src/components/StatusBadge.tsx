@@ -1,5 +1,5 @@
 // ============================================================================
-// STATUSBADGE.JS — Displays a colored pill for Active / Inactive status.
+// StatusBadge.tsx — Displays a colored pill for Active / Inactive status.
 //
 // Simplest possible component: one prop in, one styled span out.
 // Color is derived from the prop — no state needed.
