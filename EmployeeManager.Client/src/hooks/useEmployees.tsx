@@ -11,7 +11,7 @@ import { toast } from "react-toastify";
 import { createEmployee, getEmployees, deleteEmployee } from "../services/api";
 import { Employee } from "../Types/Models";
 import { useRecentActivity } from "../Context/RecentActivityContext";
-
+import { isAxiosError } from 'axios';
 type ConfirmState = {
   open: boolean;
   id: string | null;
@@ -89,7 +89,7 @@ function useEmployees(): UseEmployeesReturn {
 
       // Capture the full employee BEFORE removing — Undo needs to restore it.
       const deletedEmployee = employees.find((e) => e.id === confirm.id) as Employee;
-      addActivity(`Deleted: ${deletedEmployee.firstName} ${deletedEmployee.lastName}`);
+      addActivity({action: "Deleted Employee", details: `${deletedEmployee.firstName} ${deletedEmployee.lastName} was deleted`, timestamp: new Date().toISOString(), id: confirm.id });
       // Toast holds an inline Undo button. Capture the toastId so the button
       // can dismiss the toast on click (closure reads it at click time, by
       // which point toast.success has returned and assigned the value).
@@ -123,9 +123,12 @@ function useEmployees(): UseEmployeesReturn {
       await createEmployee(employee);
       setEmployees((prev) => [...prev, employee]);
       toast.success("Delete undone.");
-      addActivity(`Undo delete: ${employee.firstName} ${employee.lastName}`);
-    } catch (error: unknown) {
-      toast.error((error as any).response?.data?.message || "Failed to save employee");
+      addActivity({action: "Undo Delete", details: `Undo delete: ${employee.firstName} ${employee.lastName}`, timestamp: new Date().toISOString(), id: employee.id });
+    } catch (error) {
+      const errorMessage = isAxiosError<{ message?: string }>(error)
+        ? error.response?.data?.message || "Failed to undo delete"
+        : "Failed to undo delete";
+      toast.error(errorMessage);
     }
   };
 

@@ -17,7 +17,9 @@ function RecentActivityModal({ open, onClose }: RecentActivityModalProps) {
                         <li>No recent activity.</li>
                     ) : (
                         activities.map((activity, index) => (
-                            <li key={index}>{activity}</li>
+                            <li key={index}>
+                                <strong>{activity.action}</strong>: {activity.details} <em>({new Date(activity.timestamp).toLocaleString()})</em>
+                            </li>
                         ))
                     )}
                 </ul>

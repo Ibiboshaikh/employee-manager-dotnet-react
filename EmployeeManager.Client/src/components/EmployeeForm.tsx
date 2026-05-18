@@ -42,7 +42,7 @@
 // ── IMPORTS ────────────────────────────────────────────────────────────────
 
 import React, { useState, useEffect } from "react";
-
+import { isAxiosError } from 'axios';
 // useNavigate: programmatic navigation (go to another page)
 // useParams: read URL parameters (the :id from /employees/edit/:id)
 import { useNavigate, useParams } from "react-router-dom";
@@ -257,11 +257,10 @@ const EmployeeForm = () => {
       navigate("/employees");
 
     } catch (error) {
-      // Show the error message from the API (e.g., "Email already exists")
-      // or a generic fallback message if no specific message is available.
-      toast.error(
-        (error as any).response?.data?.message || "Failed to save employee"
-      );
+      const errorMessage = isAxiosError<{ message?: string }>(error)
+        ? error.response?.data?.message || "Failed to save employee"
+        : "Failed to save employee";
+      toast.error(errorMessage);
     } finally {
       // Always reset loading state
       setLoading(false);

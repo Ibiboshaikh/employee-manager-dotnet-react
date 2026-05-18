@@ -1,6 +1,12 @@
 import { createContext, useContext, useState, ReactNode } from "react";
-
-export type Activity = any;
+export interface ActivityInterface {
+  id: string;          // Unique identifier for the log entry
+  action: string;      // e.g., "Created Employee", "Updated Salary", "Logged In"
+  details: string;     // e.g., "John Doe was added to the database"
+  timestamp: string;   // ISO date string
+  userId?: string;     // Optional: The admin/user who performed the action
+}
+export type Activity = ActivityInterface;
 interface RecentActivityContextType {
     activities: Activity[];
     addActivity: (activity: Activity) => void;

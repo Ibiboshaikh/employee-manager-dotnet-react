@@ -37,6 +37,7 @@
 
 // React: the core library. useState is a hook for managing component state.
 import React, { useState } from "react";
+import { isAxiosError } from 'axios';
 
 // useNavigate: a React Router hook that returns a function to change the URL.
 // It's like Response.Redirect() in .NET — it changes the page programmatically.
@@ -124,20 +125,15 @@ const Login = () => {
       // This changes the URL to /employees and React Router renders <EmployeeList />.
       navigate("/employees");
 
-    } catch (error: any) {
-      // If the API call fails (network error, 401 Unauthorized, etc.)
-
-      // Show a red error toast with the API's error message.
-      // error.response?.data?.message uses "optional chaining" (?.)
-      // It safely accesses nested properties without crashing if any part is undefined.
-      //
-      // If the API returned { "message": "Invalid username or password" },
-      //   error.response.data.message = "Invalid username or password"
-      // If there's a network error (API is down), error.response is undefined,
-      //   so ?. returns undefined, and the || fallback message is used.
-      toast.error(
-        error.response?.data?.message || "Login failed. Please try again."
-      );
+    } catch (error) {
+      // isAxiosError is a runtime type guard — if it returns true, TS narrows
+      // `error` to AxiosError<{ message?: string }> inside the branch, so
+      // .response?.data?.message is type-safe. The optional chains (?.) handle
+      // network failures where error.response is undefined.
+      const errorMessage = isAxiosError<{ message?: string }>(error)
+        ? error.response?.data?.message || "Login failed. Please try again."
+        : "Login failed. Please try again.";
+      toast.error(errorMessage);
 
     } finally {
       // Always execute this, whether the login succeeded or failed.

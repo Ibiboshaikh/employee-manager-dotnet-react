@@ -3299,7 +3299,49 @@ round.
 
 CHALLENGE 16.1 — Eliminate every `any`                      Target: 30 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~10 min (2026-05-18) — beat target by ~20 min. A bit of help
+from Gemini. Removed every hard `any` from src/ (only `global.d.ts` CSS
+module stub remains — standard CRA pattern, intentionally kept).
+
+Three categories of fix:
+  1. AuthContext: `user: any` → `user: LoginResponse | null`, login
+     param typed. Defensive try/catch added around the localStorage
+     JSON parse on init (good instinct — corrupt JSON would have
+     crashed the app).
+  2. RecentActivityContext: `Activity = any` → real interface with
+     id, action, details, timestamp, userId?. Modal updated to render
+     the structured shape (action + details + timestamp). useEmployees
+     addActivity calls converted from plain strings to objects.
+  3. Error catches in EmployeeForm, useEmployees, Login: cast to
+     `AxiosError<{ message?: string }>` (generic types the response
+     body shape inside the error). 3 spots, same pattern.
+
+Concept-wise this round drilled the **generic parameter on error
+types** — `AxiosError<T>` where T describes the server's response body.
+Same idea as `Promise<T>` (T = resolved value) or `Array<T>` (T =
+element). The angle brackets are TS's way of parameterizing types.
+.NET analogy: `Task<T>` / `List<T>`.
+
+Carryovers (RESOLVED in cleanup pass same session):
+- ~~Functional regression~~ FIXED: useEmployees.tsx handleUndo now calls
+  toast.error again — user sees undo failures.
+- ~~Indentation off~~ FIXED: EmployeeForm.tsx catch block realigned.
+- ~~Type assertion vs type guard~~ FIXED: all three error catches now use
+  `isAxiosError<{message?: string}>(error)` (true runtime type guard,
+  TS narrows the type only when the check actually passes). Same
+  concept as `error is X` pattern-matching in C#. The spec was right
+  — `as` is a compile-time lie, the guard is a real check.
+
+Still open (deferred to later rounds):
+- **Semantic mismatch**: useEmployees:92 stores employee id under
+  Activity.id, but the interface comments id as "log entry id."
+  Either generate a unique log id (crypto.randomUUID()) and add
+  employeeId field, or fix the comment.
+- **Style nit**: `export interface ActivityInterface` + `type Activity =
+  ActivityInterface` is redundant aliasing. TS idiom is just
+  `export interface Activity {...}` — no "Interface" suffix. That's
+  a .NET reflex (`IFoo`/`FooInterface` matters in C#, doesn't in TS).
+  Same family as the C#-vs-TS interface false-friend rule.
 
   NEW HERE — read this before TASK:
   - `any` is the TypeScript escape hatch: it disables all type
@@ -8546,7 +8588,7 @@ Fill this in as you complete each challenge:
   15.3       | 35 min  | ~7-8 min  |  TypeScript: AuthContext (took help from Gemini)
   15.4       | 45 min  | ~45 min   | On target. Event types (React.ChangeEvent<HTMLInputElement|HTMLSelectElement> + as HTMLInputElement, React.FormEvent<HTMLFormElement>), useState<EmployeeFormData> explicit generic, Validate(): FormErrors — clean. Two TS gotchas surfaced via salary type chain: (1) Models.ts had `salary: string` while .NET returns number — domain type was lying; symptom looked like a form bug. (2) Intersection ≠ override: `Omit<Employee, 'id'> & { salary: string }` produced `never` because `number & string = never`. Canonical fix: Omit the conflicting key first — `Omit<Employee, 'id' | 'salary'> & { salary: string }`. Real C#→TS false friend — inherited-property override doesn't translate to structural typing; intersection requires ALL constraints. Boundary-conversion pattern locked in: API number → form string (.toString fetchEmployee), form string → API number (parseFloat submit), form↔input both string. FormErrors written as manual interface (not Partial<Record<keyof T, string>>) — works, defer scaling to 16.x. Carryovers: `Validate`→`validate`, narrow error casts in 16.1, FormErrors → Partial<Record<...>> swap.
   15.5       | 45 min  | ~20 min   | Beat target by ~25 min. Took help from Gemini when stucked. Migration mostly mechanical (rename + add prop interfaces); real learning came from EmployeeList.tsx surfacing a long-standing data-shape bug TS now refused: `hideBelow50K` was `useState('')` (string) in the hook but FilterBar correctly typed `boolean`, and on-clear called `sethideBelow50K(false)`. JS coercion (`!''` truthy, `!'on'` falsy) had masked the mismatch since Round 11. Fixed hook to `useState(false)` — boolean end-to-end. Canonical TS-migration moment: converting `.js → .tsx` doesn't ADD bugs, it REVEALS bugs JS was coercing past. Wrong reflex: relax the type (`useState('')`, `: any`, `as unknown`) — hides the bug again. Right move: ask "what should this value really be?" and fix the source of truth. Same pattern as 15.4's salary chain. Cleanup pass: deleted stray empty `src/Types/Employee.ts`, renamed `reportWebVitals.tsx`→`.ts` (no JSX), kept `App.test.js` (CRA boilerplate, needs @types/jest to migrate). Fixed `.JS`/`App.js`/`api.js`/`Login.js`/`index.js` references in comments. Removed dead duplicate import in EmployeeList. `npx tsc --noEmit` clean. Carryovers to Round 16: `>= 900` salary threshold bug, `AuthContext.user: any`, `Activity = any`, `error as any` casts, `Validate`→`validate`, FormErrors → `Partial<Record<keyof T, string>>`.
-  16.1       | 30 min  |           |  TS Hardening: eliminate `any`
+  16.1       | 30 min  | ~10 min   | Beat target by ~20 min. A bit of help from Gemini. Removed every hard `any` from src/ (only `global.d.ts` CSS module stub remains — CRA standard). Three fix categories: (1) AuthContext `user: any` → `LoginResponse | null` + try/catch around localStorage JSON parse; (2) RecentActivity Activity = any → real ActivityInterface{id,action,details,timestamp,userId?}, modal + useEmployees callers updated; (3) error catches in EmployeeForm/useEmployees/Login. Initial pass used `as AxiosError<...>` (compile-time assertion); cleanup pass swapped to `isAxiosError<{message?:string}>(error)` (true runtime type guard — TS narrows only when check passes). Concept drilled: generic parameter on error types (same idea as Promise<T> / Array<T>, .NET analogy Task<T>/List<T>); type assertion vs type guard (`as X` is a compile-time lie, `is X`/guard fn is a real runtime check — same family as `error is X` pattern matching in C#). Cleanup pass also fixed: handleUndo toast.error regression (was console.error — would silently lose data on undo failure), EmployeeForm catch indent at column 1. Open: Activity.id semantic mismatch (stores employee id, commented as log-entry id); `ActivityInterface` redundant naming (TS drops the `Interface` suffix — .NET reflex).
   16.2       | 25 min  |           |  TS Hardening: branded ID types
   16.3       | 30 min  |           |  TS Hardening: discriminated reducers
   16.4       | 25 min  |           |  TS Hardening: tighten event handlers
