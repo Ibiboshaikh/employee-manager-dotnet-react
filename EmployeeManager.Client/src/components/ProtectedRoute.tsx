@@ -25,8 +25,6 @@
 // ============================================================================
 
 // Import React (needed for JSX)
-import React from "react";
-
 // Navigate: component that redirects to another URL (like RedirectToAction)
 // Outlet: special component that renders the matching child route
 import { Navigate, Outlet } from "react-router-dom";

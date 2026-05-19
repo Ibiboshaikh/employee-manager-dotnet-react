@@ -172,7 +172,7 @@ const Login = () => {
             <input
               type="text"           // Text input (shows characters as typed)
               value={username}       // CONTROLLED: input's display value comes from state
-              onChange={(e) => setUsername(e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUsername(e.target.value)}
               // ^^^ CONTROLLED: every keystroke triggers onChange.
               // e.target is the <input> DOM element.
               // e.target.value is the current text in the input.
@@ -194,7 +194,7 @@ const Login = () => {
             <input
               type="password"        // Password input — characters shown as dots/asterisks
               value={password}        // Controlled by React state
-              onChange={(e) => setPassword(e.target.value)} // Update state on each keystroke
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)} // Update state on each keystroke
               style={styles.input}
               placeholder="Enter password"
               required                // Can't submit the form with an empty password

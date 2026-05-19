@@ -38,6 +38,9 @@ import App from './App';
 import reportWebVitals from './reportWebVitals';
 import { AuthProvider } from './Context/AuthContext';
 import { RecentActivityProvider } from './Context/RecentActivityContext';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+
 
 // ── STEP 1: Create a React "root" ──────────────────────────────────────────
 // Find the DOM element with id="root" (from index.html)
@@ -46,7 +49,14 @@ import { RecentActivityProvider } from './Context/RecentActivityContext';
 // createRoot() is the modern way to initialize React (React 18+).
 // Older code uses: ReactDOM.render(<App />, document.getElementById('root'))
 const root = ReactDOM.createRoot(document.getElementById('root')!);
-
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30000,              // 30 seconds (as requested)
+      refetchOnWindowFocus: false,   // (as requested)
+    },
+  },
+});
 // ── STEP 2: Render the App component ───────────────────────────────────────
 // root.render() tells React: "Take this component tree and display it."
 //
@@ -59,7 +69,10 @@ root.render(
   <React.StrictMode>
     <RecentActivityProvider>
       <AuthProvider>
-        <App />
+        <QueryClientProvider client={queryClient}>
+          <App />
+          <ReactQueryDevtools initialIsOpen={false} />
+        </QueryClientProvider>
       </AuthProvider>
     </RecentActivityProvider>
   </React.StrictMode>

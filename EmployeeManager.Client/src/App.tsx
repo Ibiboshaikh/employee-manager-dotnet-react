@@ -28,7 +28,6 @@
 // ── IMPORTS ────────────────────────────────────────────────────────────────
 
 // React is the core library. We need it for JSX to work.
-import React from "react";
 
 // React Router — handles navigation between pages WITHOUT page reloads.
 // BrowserRouter: wraps the whole app to enable routing

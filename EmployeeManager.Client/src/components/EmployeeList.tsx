@@ -7,7 +7,7 @@
 // This file is mostly JSX + a small amount of derived/local UI state.
 // ============================================================================
 
-import React, { useState, useEffect, Fragment, useCallback } from "react";
+import { useState, useEffect, Fragment, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
 import EmployeeRow from './EmployeeRow';

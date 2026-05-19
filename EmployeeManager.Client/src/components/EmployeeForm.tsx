@@ -53,7 +53,7 @@ import { createEmployee, getEmployee, updateEmployee } from "../services/api";
 // Toast for showing success/error notifications
 import { toast } from "react-toastify";
 import { Employee } from "../Types/Models";
-import { EmployeeId, toEmployeeId } from "../Types/Ids";
+import { toEmployeeId } from "../Types/Ids";
 
 interface FormErrors {
   firstName?: string;

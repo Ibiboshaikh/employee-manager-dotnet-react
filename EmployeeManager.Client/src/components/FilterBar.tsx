@@ -57,7 +57,7 @@ const FilterBar = ({
 }: FilterBarProps) => (
     <>
         {/* Department dropdown — value is controlled by prop */}
-        <select value={department} onChange={e => onDepartmentChange(e.target.value)}>
+        <select value={department} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => onDepartmentChange(e.target.value)}>
             <option value="">All Departments</option>
             {departments.map(dept => (
                 <option key={dept} value={dept}>{dept}</option>
@@ -69,7 +69,7 @@ const FilterBar = ({
             type="text"
             placeholder="Search Employees..."
             value={search}
-            onChange={e => {
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                 onSearchChange(e.target.value);
                 onViewChange(v => v + 1);
             }}
@@ -82,10 +82,10 @@ const FilterBar = ({
         <input
             type="checkbox"
             checked={hideBelow50K}
-            onChange={e => onHideBelow50KChange(e.target.checked)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => onHideBelow50KChange(e.target.checked)}
         />
-        <input type="number" placeholder="Minimum Salary" value={minSalary} onChange={ e => onMinSalaryChange(e.target.value)} />
-        <input type="number" placeholder="Maximum Salary" value={maxSalary} onChange={ e => onMaxSalaryChange(e.target.value)} />
+        <input type="number" placeholder="Minimum Salary" value={minSalary} onChange={ (e: React.ChangeEvent<HTMLInputElement>) => onMinSalaryChange(e.target.value)} />
+        <input type="number" placeholder="Maximum Salary" value={maxSalary} onChange={ (e: React.ChangeEvent<HTMLInputElement>) => onMaxSalaryChange(e.target.value)} />
         <button onClick={onClear}>Clear Filters</button>
     </>
 );

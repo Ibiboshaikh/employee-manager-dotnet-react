@@ -3469,7 +3469,85 @@ endpoints land. Future-proofed at zero cost today.
 
 CHALLENGE 16.3 — Discriminated unions for reducers          Target: 30 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~20 min (2026-05-19) — beat target by ~10 min. Took syntax help
+from Gemini because Claude's explanation of the union-of-object-types shape
+didn't land on first read; Gemini's rephrasing of the same pattern clicked.
+Once the syntax was clear, the work itself was small — only one reducer
+exists in src/.
+
+SCOPE NOTE: the spec mentions a "recent-activity reducer" but it doesn't
+exist — RecentActivityContext uses useState, not useReducer. The whole
+challenge collapsed onto confirmReducer in useEmployees.tsx (one file).
+
+THE REAL CONCEPT — UNION OF OBJECTS, not OBJECT WITH UNION FIELD:
+
+  The original ConfirmAction was:
+    type ConfirmAction = {
+      type: "open" | "close";
+      id?: EmployeeId;       // optional on BOTH branches
+      name?: string;         // optional on BOTH branches
+    }
+
+  This is a SINGLE object type whose `type` field happens to be a string
+  union. It is NOT a discriminated union. TS cannot narrow the payload —
+  inside `case "open"`, action.id is still `EmployeeId | undefined`, which
+  is why the code had defensive `action.id || null` and `action.name || ""`
+  juggling.
+
+  A real discriminated union is a UNION OF OBJECT TYPES, each tagged by a
+  literal `type`:
+    type ConfirmAction =
+      | { type: "open"; id: EmployeeId; name: string }   // payload REQUIRED
+      | { type: "close" };                                // no payload
+
+  Now inside `switch (action.type)`, TS narrows the entire object to the
+  matching variant. Under `case "open"` the compiler KNOWS id and name
+  are required — no defensive `|| null` needed. Under `case "close"`,
+  trying to read action.id is a compile error (the close variant has no
+  id field).
+
+  Same mental model: in the first shape, `{type, id?, name?}` is ONE
+  rectangle that can hold any combination. In the second shape, you have
+  TWO separate rectangles and the discriminator tells TS which one
+  you're holding right now.
+
+EXHAUSTIVENESS — the `never` trick:
+
+  Replaced silent `default: return state` (which hid forgotten cases) with:
+    default: {
+      const _exhaustive: never = action;
+      throw new Error(`unreachable: ${_exhaustive}`);
+    }
+
+  After handling "open" and "close", TS narrows `action` in the default
+  branch to `never` — because no remaining variant is possible. Assigning
+  `action` to `_exhaustive: never` only compiles when `action` is already
+  `never`. Add a third variant tomorrow → that line becomes a compile
+  error until the new case is handled. Compile-time guarantee that the
+  switch handles every variant.
+
+C# / F# ANALOGY:
+  - C# closest match: sealed class hierarchy + switch expression on the
+    runtime subtype. But C# does NOT enforce exhaustiveness at compile
+    time — you can miss a subtype and the compiler stays quiet.
+  - F# discriminated unions are the EXACT match — same exhaustiveness
+    behaviour, same compiler errors when a case is missing.
+  - The `never` trick is TS's way of getting F#-style exhaustiveness in
+    a structurally-typed language.
+
+WIN CONDITIONS HIT:
+  - ConfirmAction is now a real discriminated union (two distinct object
+    variants), not an object with a string-union tag.
+  - Defensive `action.id || null` / `action.name || ""` defaults gone.
+  - Silent `default: return state` removed; `never` exhaustiveness guard
+    in place.
+  - All three dispatch call sites (lines 81, 117, 138) compiled unchanged
+    — they already passed correct shapes for each variant.
+  - npx tsc --noEmit clean.
+
+ONE-LINE TAKEAWAY: a discriminated union is a UNION OF OBJECT TYPES tagged
+by a literal field, not a single object with a union-typed field. TS only
+narrows the payload in the first shape.
 
   NEW HERE — read this before TASK:
   - Every useReducer in your codebase should have an action union
@@ -3499,7 +3577,84 @@ YOUR TIME:
 
 CHALLENGE 16.4 — Tighten event handler types                Target: 25 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~10 min (2026-05-19) — beat target by ~15 min. No Gemini help
+needed. This was the round where Claude's task-intro format finally
+clicked: concrete-first (file/line lookup table + worked before/after on
+a real line + "what NOT to touch" list) instead of abstract-concept-first.
+User flagged the format difference explicitly ("why don't you always
+explain like this?") — saved as memory.
+
+HYGIENE, NOT BUG FIX: handlers worked before the change because TS uses
+CONTEXTUAL TYPING — when an arrow function is written inline in a JSX
+attribute, TS reads the attribute's expected signature and silently
+applies it to the parameter. So `(e) => e.target.value` was already
+typed `React.ChangeEvent<HTMLInputElement>` at compile time. The risk:
+the type is INVISIBLE — extract the handler to a const and `e` silently
+becomes `any`. Explicit annotations make the type survive extraction.
+
+THE ELEMENT-TYPE RULE — read from the HTML TAG, not the input behaviour:
+  <input type="text">        → HTMLInputElement
+  <input type="number">      → HTMLInputElement
+  <input type="checkbox">    → HTMLInputElement (still! just .checked
+                                instead of .value)
+  <select>                   → HTMLSelectElement
+  <textarea>                 → HTMLTextAreaElement
+  <form> (onSubmit)          → HTMLFormElement
+  <button> (onClick)         → HTMLButtonElement
+  There is no HTMLCheckboxElement — the semantic role doesn't change
+  the DOM class.
+
+THE EVENT-TYPE RULE — read from what the user did:
+  typed/changed value        → React.ChangeEvent<...>
+  clicked a button           → React.MouseEvent<HTMLButtonElement>
+  submitted a form           → React.FormEvent<HTMLFormElement>
+  pressed a key              → React.KeyboardEvent<...>
+  focused/blurred            → React.FocusEvent<...>
+For this round, all 7 inline handlers were onChange → ChangeEvent.
+
+THE 7 LINES THAT NEEDED ANNOTATING:
+  FilterBar.tsx:60  <select>            → ChangeEvent<HTMLSelectElement>
+  FilterBar.tsx:72  <input type=text>   → ChangeEvent<HTMLInputElement>
+                    (multi-line body — initially missed this on first
+                    pass because the {...} body looked different from
+                    the one-liners; Claude flagged it, fixed after)
+  FilterBar.tsx:85  <input type=checkbox> → ChangeEvent<HTMLInputElement>
+  FilterBar.tsx:87  <input type=number> → ChangeEvent<HTMLInputElement>
+  FilterBar.tsx:88  <input type=number> → ChangeEvent<HTMLInputElement>
+  Login.tsx:175     <input> (username)  → ChangeEvent<HTMLInputElement>
+  Login.tsx:197     <input> (password)  → ChangeEvent<HTMLInputElement>
+
+WHAT NOT TO TOUCH (and why):
+  - <button onClick={onConfirm}> — onConfirm is `() => void`, doesn't
+    take the event. React handler-signature contravariance: a handler
+    that ignores its argument satisfies a richer signature. Idiomatic.
+  - <button onClick={() => onEdit(id)}> — arrow ignores the event entirely.
+    No annotation needed because no `e` is referenced.
+  - EmployeeForm.handleChange, EmployeeForm.handleSubmit — already
+    annotated in 15.4.
+  - Login.handleSubmit — already annotated in 15.5.
+  - All Props interfaces (FilterBar, EmployeeRow, ConfirmModal,
+    RecentActivityModal) — they pass plain VALUES (string, boolean,
+    EmployeeId) via callbacks, not events. Cleaner than passing event
+    objects up — child stays decoupled from DOM event shape.
+
+WIN CONDITIONS HIT:
+  - Every `e =>` inside JSX in src/ now has an explicit
+    React.ChangeEvent<HTMLXxxElement> annotation.
+  - npx tsc --noEmit clean.
+  - Runtime behaviour identical — annotations are compile-time only.
+
+C# / .NET MENTAL MODEL: C# event handlers always carry their delegate
+signature (`EventHandler<T>`), and the compiler infers parameter types
+from that signature on subscription. TS does the same via contextual
+typing — BUT only as long as the function stays inline. Extract it and
+the contextual link is severed. C# delegates can't be "ripped from
+context" in the same way — once you say `EventHandler<MyArgs>`, the
+type is bound. TS's annotation step is what we'd get for free in C#.
+
+ONE-LINE TAKEAWAY: element type comes from the HTML TAG (not the input
+behaviour), event type comes from the USER ACTION (not the handler name).
+Annotations are hygiene that survives refactors.
 
   TASK:
   1. Find every onClick / onChange / onSubmit with an untyped
@@ -3522,7 +3677,98 @@ YOUR TIME:
 
 CHALLENGE 16.5 — Strict-mode pass                           Target: 20 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~5 min (2026-05-19) — beat target by ~15 min. Fastest round in
+Round 16 by a wide margin. No Gemini help. Codebase was already
+near-strict-clean from Rounds 15.x and 16.1-16.4, so enabling all 5 sub-
+flags only surfaced 4 real issues (1 reducer + 3 stale imports).
+
+ALL 5 STRICT FLAGS ENABLED in tsconfig.json:
+  - noUnusedLocals
+  - noUnusedParameters
+  - noImplicitReturns
+  - noFallthroughCasesInSwitch
+  - exactOptionalPropertyTypes
+None disabled. exactOptionalPropertyTypes worked first try because no
+third-party type collisions surfaced in this codebase.
+
+INITIAL ERRORS AFTER ENABLING FLAGS:
+  1. useEmployees.tsx:26 — noUnusedParameters on confirmReducer's `state`
+     parameter. The reducer never reads state (both branches build a
+     fresh ConfirmState from action). True positive — flag was right.
+  3 x stale `import React from 'react'`:
+  2. App.tsx:31, EmployeeList.tsx:10, ProtectedRoute.tsx:28 — React 17+
+     JSX transform makes the bare `import React` unnecessary (JSX gets
+     auto-transformed without needing React in scope). These imports
+     were leftover from when the files were .js (CRA's default JSX
+     transform back then needed React in scope). With strict-mode's
+     noUnusedLocals on, they finally got flagged. Deleted all three.
+
+THE WRONG-FIRST-FIX MOMENT (key learning beat):
+
+  Tried to silence the unused-state warning by DELETING the parameter:
+    function confirmReducer(action: ConfirmAction): ConfirmState { ... }
+
+  This compiled the reducer body fine — but broke the useReducer
+  CONTRACT. useReducer expects `(state, action) => state`. With the
+  parameter removed, TS inferred the reducer as `(action) => ConfirmState`,
+  so:
+    const [confirm, dispatch] = useReducer(confirmReducer, initialState);
+  TS now thinks `confirm` is `ConfirmAction` (not ConfirmState) because
+  it's reading the FIRST parameter type as the state type. Cascade: 10
+  errors across the file — every `confirm.id`, every `dispatch({type:...})`,
+  every `confirm.name` lost type narrowing because the entire signature
+  was wrong.
+
+  THE REAL FIX — underscore-prefix convention:
+    function confirmReducer(_state: ConfirmState, action: ConfirmAction): ConfirmState {
+  noUnusedParameters recognises a leading underscore as "intentionally
+  unused, do not warn." The parameter STAYS — preserving the useReducer
+  contract — but the lint rule is satisfied. Same convention exists in
+  Rust (`_state`), Go (`_`), Python (`_state`). Cross-language idiom for
+  "I know this is unused; it's required by the signature."
+
+CONCEPT LOCKED IN — FIXED-SIGNATURE CONTRACTS:
+  When a function's shape is dictated by an external contract (useReducer
+  callback, event handler signature, React.FC<P>, library API), you
+  CANNOT drop a parameter to satisfy a lint rule — the contract requires
+  it. The right move is to mark it intentionally unused. This came up
+  here for state; it'll come up again for any handler that ignores the
+  event object, any React.FC that ignores props, any Context.Provider
+  callback that ignores one of its args.
+
+C# / .NET ANALOGY:
+  C# 9+ has DISCARD patterns (`_`) but only in tuple deconstruction,
+  switch arms, and pattern matching — NOT in function parameters. C#
+  closest equivalents:
+    - Name the parameter `unused` or `_` (compiles but no lint
+      enforcement of intent).
+    - `[SuppressMessage("Style", "IDE0060:Remove unused parameter")]`
+      attribute — verbose but explicit.
+    - Just leave it; C# doesn't warn on unused parameters by default
+      unless an analyzer is configured.
+  TS's `_param` underscore convention is more lightweight than the
+  attribute and more enforced than just naming. Best-of-both.
+
+WIN CONDITIONS HIT:
+  - All 5 strict sub-flags enabled, none disabled.
+  - All errors fixed via REAL fixes (no flag disabling, no `// @ts-ignore`,
+    no `any` casts).
+  - useReducer contract preserved (signature intact, parameter marked
+    intentionally unused).
+  - 3 stale React imports removed — codebase now consistent with
+    React 17+ JSX transform.
+  - npx tsc --noEmit clean.
+
+ROUND 16 COMPLETE — TS HARDENING ARC DONE:
+  16.1 any-removal | 16.2 branded IDs | 16.3 discriminated unions |
+  16.4 event handler types | 16.5 strict-mode pass.
+  Total: ~65 min vs 135 min planned. Codebase is now fully strict-typed
+  with zero any, branded IDs, exhaustive reducers, explicit event types,
+  and all strict sub-flags on. Ready for Round 17 (React Query migration).
+
+ONE-LINE TAKEAWAY: when a function signature is fixed by an external
+contract, mark unused params with `_` — don't drop them. Same idiom
+across Rust/Go/Python; C# doesn't have it for parameters.
 
   NEW HERE — read this before TASK:
   - tsconfig.json `strict: true` is an UMBRELLA flag enabling 7+
@@ -3571,7 +3817,95 @@ mutation state baked in.
 
 CHALLENGE 17.1 — Install + QueryClientProvider              Target: 20 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~7 min (2026-05-19) — beat target by ~13 min. Took syntax help
+from Gemini, but the root cause was a PROCESS FAILURE on Claude's side,
+not a concept gap: Claude closed Round 16 with "Ready when you are" for
+17.1 instead of proactively pushing the v2 concrete-first breakdown.
+User flagged it explicitly — memory feedback_concrete_first_task_format
+updated with a "no passive cliffhangers between rounds" rule.
+
+WHAT WAS DONE:
+  Installed:  @tanstack/react-query@5.100.11
+              @tanstack/react-query-devtools@5.100.11
+  Wired in:   src/index.tsx (NOT App.tsx — single QueryClient instance
+              for the whole app, wired at the root render tree).
+  Configured: staleTime: 30000 (30 s window where cached data is "fresh"
+              and won't re-trigger network calls), refetchOnWindowFocus:
+              false (disables the default tab-back refetch behaviour —
+              fine in dev, would re-enable in prod for liveness).
+  Devtools:   <ReactQueryDevtools initialIsOpen={false} /> — adds the
+              overlay button bottom-left of the page in dev mode. Click
+              to see every active query, cache state, fetch status.
+
+PROVIDER LAYERING (the architectural call that matters):
+    <React.StrictMode>
+      <RecentActivityProvider>
+        <AuthProvider>
+          <QueryClientProvider client={queryClient}>
+            <App />
+            <ReactQueryDevtools initialIsOpen={false} />
+          </QueryClientProvider>
+        </AuthProvider>
+      </RecentActivityProvider>
+    </React.StrictMode>
+
+  QueryClientProvider sits INSIDE AuthProvider — correct. Reasoning:
+  every query useEmployees etc. will issue eventually needs the JWT in
+  the Axios interceptor (set up in services/api.ts), and the JWT lives
+  in AuthContext. Putting QueryClient OUTSIDE Auth would mean queries
+  could fire before the token is loaded → 401s. Inside means Auth's
+  state is already available when queries mount. Same pattern: outer
+  providers expose state the inner ones may need.
+
+NEW CONCEPTS LOCKED IN:
+  - QueryClient — the cache OBJECT. One instance per app. Holds every
+    query result keyed by its queryKey (the cache key — covered in
+    17.5).
+  - QueryClientProvider — a React Context provider that hands the
+    QueryClient down to every useQuery/useMutation hook in the tree.
+    Same Context pattern AuthProvider uses; QueryClient just happens
+    to be the value.
+  - staleTime — duration where cached data is considered FRESH. While
+    fresh: subsequent useQuery calls return cache without a fetch.
+    After staleTime expires: data becomes STALE — still served from
+    cache but a background refetch fires. Default is 0 (always stale,
+    always refetches on remount). 30s here = mild caching.
+  - refetchOnWindowFocus — defaults to true. Browsers tabbing back
+    triggers a refetch (useful for "see latest" UX). Turned off here
+    to keep dev quiet; would re-enable in production.
+
+.NET MENTAL MODEL:
+  QueryClient ≈ IMemoryCache instance (the singleton cache store).
+  QueryClientProvider ≈ adding IMemoryCache to the DI container — once
+  registered, every controller/service can ask for it.
+  staleTime ≈ AbsoluteExpiration on a MemoryCacheEntryOptions.
+  refetchOnWindowFocus ≈ a custom DelegatingHandler that revalidates
+  on a trigger — except React Query has it built in.
+  useQuery (next round) ≈ a service method that wraps IMemoryCache.GetOrCreateAsync
+  with retry, dedup, and background refresh. The killer feature React
+  Query has over IMemoryCache: REQUEST DEDUPLICATION — two components
+  calling the same query at the same time fire ONE network request.
+  IMemoryCache won't do that for you.
+
+WIN CONDITIONS HIT:
+  - Both packages installed at v5.100.11 (current major).
+  - QueryClientProvider wired at root in index.tsx, not App.tsx.
+  - QueryClient configured with the two spec-defined defaults.
+  - Devtools mounted with initialIsOpen={false}.
+  - Layered inside AuthProvider (correct for JWT-dependent queries).
+  - npm start works, devtools button visible in dev.
+  - npx tsc --noEmit clean.
+
+NOT YET WIRED (intentional — comes in 17.2):
+  useEmployees still uses useState + useEffect + manual fetch in
+  hooks/useEmployees.tsx. Round 17.2 replaces that with useQuery and
+  THIS is where the win actually shows up — automatic refetch, loading
+  state, error state, dedup, caching. 17.1 is plumbing only.
+
+ONE-LINE TAKEAWAY: QueryClient is a cache instance; QueryClientProvider
+hands it down via Context. Layer it INSIDE any provider whose state
+queries will depend on (auth/JWT here). 17.1 is plumbing — the payoff
+is 17.2.
 
   NEW HERE — read this before TASK:
   - `QueryClient`: the cache object that holds every cached query
@@ -3603,7 +3937,121 @@ YOUR TIME:
 
 CHALLENGE 17.2 — Convert useEmployees to useQuery           Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~15 min (2026-05-19) — beat target by ~20 min. First real win
+from React Query plumbing: ~12 lines of useState + useEffect + try/catch
+collapsed into a single useQuery call. Required two iteration passes
+because Claude's first breakdown had THREE inconsistencies the user
+caught while typing it up:
+
+CLAUDE-SIDE ERRORS IN THE INITIAL BREAKDOWN (all caught and fixed):
+  1. Told user to drop useEffect from imports, then immediately asked
+     them to add `useEffect` for the error toast. Contradictory — had
+     to add it back.
+  2. Wrote `query.isError` / `query.error` in the error-toast snippet,
+     but the worked example destructured useQuery as
+     `{ data, isLoading, dataUpdatedAt }` — no `query` alias bound.
+     Wrong identifier. Fix: destructure `isError` directly.
+  3. Listed "add `const queryClient = useQueryClient();`" inside prose
+     instead of as a numbered run-order step. User skipped it. Fix:
+     every prereq line becomes its own numbered step going forward.
+
+USER-SIDE COPY-PASTE BUGS (both two-sided refactor pattern — known issue
+from feedback_two_sided_refactor):
+  - PASS 1: pasted the UNDO updater `[...old, employee]` into the
+    DELETE slot. Caught by tsc.
+  - PASS 2 (after fix): pasted the DELETE filter
+    `old.filter(e => e.id !== confirm.id)` into the UNDO slot. Caught
+    by Claude on cleanup pass — tsc passed but runtime would have
+    silently broken undo (cache stayed empty after re-create). Fixed
+    during the comment/formatting cleanup.
+
+The recurring shape: setQueryData calls in delete and undo are
+SYMMETRIC INVERSES — one filters out, one appends in. Both have the
+same type signature, so the compiler doesn't catch a swap. Same
+two-sided refactor failure mode as past PR cleanups; new instance for
+the on-file count.
+
+WHAT FINAL STATE LOOKS LIKE (useEmployees.tsx):
+  - No useState for the employee list (reducer for the modal stays).
+  - One useQuery({queryKey:['employees'], queryFn}) call replaces three
+    useStates + useEffect + fetchEmployees.
+  - `loading` aliased from `isLoading`; `fetchedAt` derived from
+    `dataUpdatedAt`. No manual timestamp tracking.
+  - One useEffect remains — error-toast bridge (React Query doesn't
+    toast on its own; the side-effect-on-error wiring stays manual).
+  - Delete and Undo both write to the cache via
+    `queryClient.setQueryData<Employee[]>(['employees'], updater)`:
+        DELETE → (old = []) => old.filter(e => e.id !== confirm.id)
+        UNDO   → (old = []) => [...old, employee]
+  - UseEmployeesReturn shape unchanged — EmployeeList consumes the
+    same props it did before. Round 17.2 is an internal refactor, not
+    an API change.
+
+NEW CONCEPTS LOCKED IN:
+  - useQuery — the read-side hook. queryKey is the cache key (array);
+    queryFn is the async fetcher. On mount: fires queryFn, caches by
+    key. Returns { data, isLoading, isError, error, dataUpdatedAt,
+    refetch }. Multiple components calling the same queryKey share
+    one cache slot — REQUEST DEDUPLICATION at the hook level.
+  - useQueryClient — accessor for the QueryClient instance (wired in
+    17.1). Used to imperatively patch the cache after a mutation.
+  - setQueryData — direct cache write, synchronous, no refetch. Takes
+    queryKey + an updater function. Updater receives the old value
+    (defaulted to [] here to handle the "never fetched" case) and
+    returns the new value. Use when YOU know the new state locally
+    (delete/undo). Alternative: invalidateQueries — marks stale,
+    triggers refetch — used when you want server confirmation
+    (covered in 17.3).
+  - dataUpdatedAt — millisecond timestamp React Query maintains for
+    the last successful fetch. Replaces manual `setFetchedAt(...)` in
+    the catch-and-set pattern.
+
+.NET MENTAL MODEL — the big shift:
+  Before: manual `_cache.GetOrCreateAsync("employees", ...)` in a service
+  method, with hand-rolled loading flag and error try/catch. After:
+  useQuery is the whole pattern — cache key + fetch fn + auto-managed
+  state. Equivalent .NET-flavoured contract:
+
+    interface ICache<T> {
+      T? Data { get; }
+      bool IsLoading { get; }
+      bool IsError { get; }
+      DateTime? UpdatedAt { get; }
+    }
+
+  useQuery returns that shape, and additionally:
+   - DEDUP: two callers, one network request (IMemoryCache won't do
+     this for you; you'd need a SemaphoreSlim or polly cache-stale-while-
+     revalidate dance).
+   - BACKGROUND REVALIDATION: stale data is served from cache while
+     a fresh fetch runs in the background. Default IMemoryCache is
+     binary (in or out).
+   - CACHE-KEY-AS-IDENTITY: queryKey is the lookup. setQueryData
+     with the same key updates THE cache slot; readers re-render
+     automatically.
+
+WIN CONDITIONS HIT:
+  - All three useStates for the list/loading/timestamp removed.
+  - fetchEmployees + manual useEffect removed.
+  - Delete and Undo both write to the cache (after bug fix).
+  - UseEmployeesReturn shape unchanged.
+  - npx tsc --noEmit clean.
+  - Code shrank ~15 lines net; behaviour now includes dedup, background
+    refetch, and a free devtools view of the cache.
+
+CLEANUP PASS (done during the same round):
+  - Header comment rewritten to reflect React Query architecture
+    (IMemoryCache analog called out).
+  - Stale comments about fetchEmployees / mount-useEffect / "setEmployees
+    stays private" deleted.
+  - Indentation fixed (queryClient line was unindented; setQueryData
+    blocks had ragged spacing).
+  - Object literals formatted to multi-line where they spanned past
+    100 cols.
+
+ONE-LINE TAKEAWAY: useQuery is the read-side cache layer; setQueryData
+is the imperative write. Delete and undo are symmetric inverses on the
+same key — keep filter-vs-append straight or runtime breaks silently.
 
   NEW HERE — read this before TASK:
   - `useQuery({ queryKey, queryFn })`: the read-side hook. Returns
@@ -8659,11 +9107,11 @@ Fill this in as you complete each challenge:
   15.5       | 45 min  | ~20 min   | Beat target by ~25 min. Took help from Gemini when stucked. Migration mostly mechanical (rename + add prop interfaces); real learning came from EmployeeList.tsx surfacing a long-standing data-shape bug TS now refused: `hideBelow50K` was `useState('')` (string) in the hook but FilterBar correctly typed `boolean`, and on-clear called `sethideBelow50K(false)`. JS coercion (`!''` truthy, `!'on'` falsy) had masked the mismatch since Round 11. Fixed hook to `useState(false)` — boolean end-to-end. Canonical TS-migration moment: converting `.js → .tsx` doesn't ADD bugs, it REVEALS bugs JS was coercing past. Wrong reflex: relax the type (`useState('')`, `: any`, `as unknown`) — hides the bug again. Right move: ask "what should this value really be?" and fix the source of truth. Same pattern as 15.4's salary chain. Cleanup pass: deleted stray empty `src/Types/Employee.ts`, renamed `reportWebVitals.tsx`→`.ts` (no JSX), kept `App.test.js` (CRA boilerplate, needs @types/jest to migrate). Fixed `.JS`/`App.js`/`api.js`/`Login.js`/`index.js` references in comments. Removed dead duplicate import in EmployeeList. `npx tsc --noEmit` clean. Carryovers to Round 16: `>= 900` salary threshold bug, `AuthContext.user: any`, `Activity = any`, `error as any` casts, `Validate`→`validate`, FormErrors → `Partial<Record<keyof T, string>>`.
   16.1       | 30 min  | ~10 min   | Beat target by ~20 min. A bit of help from Gemini. Removed every hard `any` from src/ (only `global.d.ts` CSS module stub remains — CRA standard). Three fix categories: (1) AuthContext `user: any` → `LoginResponse | null` + try/catch around localStorage JSON parse; (2) RecentActivity Activity = any → real ActivityInterface{id,action,details,timestamp,userId?}, modal + useEmployees callers updated; (3) error catches in EmployeeForm/useEmployees/Login. Initial pass used `as AxiosError<...>` (compile-time assertion); cleanup pass swapped to `isAxiosError<{message?:string}>(error)` (true runtime type guard — TS narrows only when check passes). Concept drilled: generic parameter on error types (same idea as Promise<T> / Array<T>, .NET analogy Task<T>/List<T>); type assertion vs type guard (`as X` is a compile-time lie, `is X`/guard fn is a real runtime check — same family as `error is X` pattern matching in C#). Cleanup pass also fixed: handleUndo toast.error regression (was console.error — would silently lose data on undo failure), EmployeeForm catch indent at column 1. Open: Activity.id semantic mismatch (stores employee id, commented as log-entry id); `ActivityInterface` redundant naming (TS drops the `Interface` suffix — .NET reflex).
   16.2       | 25 min  | ~20 min   | Beat target by ~5 min. Some Gemini help on initial brand syntax. Gemini gave `unique symbol` + `declare const` pattern instead of the spec's string-literal `__brand` — more rigorous, unforgeable (symbol is module-private, no outside file can construct the key). NEW CONCEPTS: `unique symbol` (a type referring to one specific symbol value, distinguishable at type level), `declare const` (compiles to zero bytes — pure compile-time marker). Real learning was the subtype-direction gotcha: after changing Models.ts to EmployeeId, tsc had NO errors because `EmployeeId = string & {brand}` is a SUBTYPE of string — flows silently into `string` parameters. **The brand only bites when CONSUMERS are also tightened.** Initial wrong move: scattered `as EmployeeId` casts at every call site (defeats the point — bare `as` is `as any` in disguise). Correct fix: tighten signatures (handleDelete, ConfirmState.id, useCallback types, EmployeeRow props, api.ts params) so brand flows naturally; use `toEmployeeId(...)` named constructor ONLY at true boundaries (useParams() in EmployeeForm). Win condition: `as EmployeeId` appears only inside Ids.ts (constructor), `toEmployeeId(...)` at exactly the two URL-param boundaries, zero casts in the propagation chain. INTERSECTION-DONE-RIGHT contrast vs 15.4: `Omit<E,'id'> & {salary:string}` failed because `number & string = never` (override primitive); `string & {brand}` succeeds because intersection ADDS a marker field, doesn't override. Same `&` operator, two different shapes. C# analogy: `record EmployeeId(Guid Value)` vs `record UserId(Guid Value)` — different names, identical data, distinct types. Brand is TS's hack for nominal distinction in a structural language. UserId branded but unused (no User CRUD yet) — future-proofed at zero cost.
-  16.3       | 30 min  |           |  TS Hardening: discriminated reducers
-  16.4       | 25 min  |           |  TS Hardening: tighten event handlers
-  16.5       | 20 min  |           |  TS Hardening: strict-mode pass
-  17.1       | 20 min  |           |  React Query: install + Provider
-  17.2       | 35 min  |           |  React Query: useEmployees → useQuery
+  16.3       | 30 min  | ~20 min   | Beat target by ~10 min. Took syntax help from Gemini — Claude's explanation of the discriminated union shape (two object variants with literal `type` field) didn't land on first read; Gemini's rephrasing of the same pattern clicked. Once syntax was clear, the work itself was small. Only one reducer in src/ (confirmReducer in useEmployees.tsx) — the spec's "recent-activity reducer" doesn't exist (Context uses useState, not useReducer). Rewrote ConfirmAction from `{ type: "open"|"close"; id?; name? }` (union ONLY on discriminator, payload optional on both branches → forced `action.id || null` defensive juggling) to a true union of two object types: `{ type: "open"; id: EmployeeId; name: string } | { type: "close" }` — payload REQUIRED on open variant, absent on close. TS now narrows each `case` to the matching object; defensive defaults gone. Replaced silent `default: return state` with `never` exhaustiveness guard: `const _exhaustive: never = action; throw new Error(...)`. Locked-in concept: a discriminated union is a UNION OF OBJECT TYPES (each tagged by a literal), not a single object with a union-typed tag — the latter is what the original code had and is why TS couldn't narrow payload. .NET false friend: closest is sealed class hierarchy + switch expression, but C# doesn't enforce exhaustiveness at compile time; F# DU is the exact match. All three dispatch call sites compiled unchanged — already passed correct shapes. tsc clean.
+  16.4       | 25 min  | ~10 min   | Beat target by ~15 min. No Gemini help. Format-shift round: Claude's task-intro switched from abstract-concept-first (16.3) to concrete-first (file/line lookup table + worked before/after on a real line + "what NOT to touch" list); user explicitly validated "why don't you always explain like this" — saved as feedback_concrete_first_task_format memory. Hygiene round, not bug fix: inline JSX handlers ALREADY had correct types via CONTEXTUAL TYPING (TS reads JSX attribute signature, applies to bare `e =>`), but the type is INVISIBLE — extract handler to a const and `e` silently becomes any. Explicit annotations protect against future extraction. Two lookup rules locked in: (1) element type comes from HTML TAG, not input behaviour — `<input type="checkbox">` is still HTMLInputElement, just `.checked` instead of `.value`; there is no HTMLCheckboxElement. (2) event type comes from USER ACTION — onChange→ChangeEvent, onSubmit→FormEvent, onClick→MouseEvent. All 7 inline handlers in src/ annotated: FilterBar.tsx (5: select, text, checkbox, 2x number), Login.tsx (2: username, password). Initially missed FilterBar.tsx:72 (search input with multi-line body) on first pass — multi-line `{...}` body looked different from the one-liners; Claude flagged it via grep, fixed after. WHAT NOT TO TOUCH: `<button onClick={onConfirm}>` style (onConfirm is `() => void`, handler-signature contravariance lets a no-arg fn satisfy a richer signature — idiomatic); arrow handlers that ignore the event entirely (`() => onEdit(id)`); EmployeeForm/Login named handlers (already typed in 15.4/15.5); Props interfaces (pass plain values, not events — child stays decoupled from DOM event shape). C# analogy: EventHandler<T> binds the type permanently on subscription; TS's contextual typing gives the same inference but only while inline — annotations are what we'd get free in C#. tsc clean.
+  16.5       | 20 min  | ~5 min    | Beat target by ~15 min. Fastest round in 16 — codebase was already near-strict-clean from 15.x and 16.1-16.4, so enabling all 5 sub-flags only surfaced 4 real issues. ALL 5 STRICT FLAGS ENABLED: noUnusedLocals, noUnusedParameters, noImplicitReturns, noFallthroughCasesInSwitch, exactOptionalPropertyTypes. None disabled. exactOptionalPropertyTypes worked first try (no third-party collisions). Errors split into two groups: (1) confirmReducer's `state` param flagged unused — reducer never reads state since both branches build a fresh ConfirmState from action. WRONG FIRST FIX: deleted the parameter entirely → broke useReducer's `(state, action) => state` contract → 10 cascade errors because TS now inferred `confirm` as ConfirmAction (reading first param as state type). RIGHT FIX: underscore-prefix convention `_state: ConfirmState` — noUnusedParameters recognises leading `_` as "intentionally unused, don't warn." Parameter stays (contract preserved), lint satisfied. Cross-language idiom (Rust/Go/Python all use `_param` the same way). (2) 3x stale `import React from 'react'` in App.tsx, EmployeeList.tsx, ProtectedRoute.tsx — React 17+ JSX transform doesn't need React in scope; these were .js-era leftovers finally flagged by noUnusedLocals. Deleted all three. CONCEPT LOCKED IN — FIXED-SIGNATURE CONTRACTS: when a function shape is dictated externally (useReducer, event handlers, React.FC, library callbacks), you CAN'T drop a parameter to satisfy a lint rule — mark it intentionally unused. Will recur for event handlers that ignore the event, FCs that ignore props, etc. C# has discard patterns (`_`) for tuples/switch arms but NOT for function parameters — closest C# equivalent is [SuppressMessage] attribute or just naming the param `unused`. TS underscore is lighter than the attribute, more enforced than just naming. ROUND 16 COMPLETE — TS HARDENING ARC DONE: 16.1 any-removal | 16.2 branded IDs | 16.3 discriminated unions | 16.4 event handler types | 16.5 strict-mode. Total ~65 min vs 135 min planned. Zero `any`, branded IDs, exhaustive reducers, explicit event types, all strict sub-flags on. Ready for Round 17 (React Query migration).
+  17.1       | 20 min  | ~7 min    | Beat target by ~13 min. Took Gemini help, but root cause was PROCESS FAILURE on Claude's side: closed Round 16 with "Ready when you are" for 17.1 instead of proactively pushing the v2 concrete-first breakdown. User flagged it; memory feedback_concrete_first_task_format updated with "no passive cliffhangers between rounds" rule. Installed @tanstack/react-query@5.100.11 + @tanstack/react-query-devtools@5.100.11. Wired in index.tsx (NOT App.tsx — single QueryClient instance for the whole app). Configured staleTime: 30000 (30s window of "fresh" data — subsequent useQuery returns cache without fetch) and refetchOnWindowFocus: false (disables tab-back refetch — fine in dev). Devtools mounted with initialIsOpen={false}. ARCHITECTURAL CALL THAT MATTERS — provider layering: <RecentActivityProvider><AuthProvider><QueryClientProvider><App/></QueryClientProvider></AuthProvider></RecentActivityProvider>. QueryClient INSIDE Auth — correct, because every query will eventually need the JWT in the Axios interceptor, and JWT lives in AuthContext; outside Auth would mean queries could fire before token loads → 401s. NEW CONCEPTS: QueryClient (the cache OBJECT, one per app), QueryClientProvider (Context provider handing it down — same pattern as AuthProvider), staleTime (fresh vs stale window), refetchOnWindowFocus (browser tab-back trigger). .NET MENTAL MODEL: QueryClient ≈ IMemoryCache singleton; QueryClientProvider ≈ DI registration; staleTime ≈ AbsoluteExpiration on MemoryCacheEntryOptions; refetchOnWindowFocus ≈ DelegatingHandler revalidation trigger; useQuery (next round) ≈ IMemoryCache.GetOrCreateAsync with retry/dedup/background refresh. Killer feature over IMemoryCache: REQUEST DEDUPLICATION — two components calling same query at same time fire ONE network request; IMemoryCache won't do that. PLUMBING ONLY — useEmployees still uses useState + useEffect + manual fetch; 17.2 replaces it with useQuery (where the win actually shows up: auto refetch, loading/error states, dedup, caching). tsc clean, devtools button visible in dev.
+  17.2       | 35 min  | ~15 min   | Beat target by ~20 min. First real React Query win: ~12 lines of useState + useEffect + try/catch collapsed into one useQuery call. Required iteration because Claude's first breakdown had three inconsistencies (told user to drop useEffect then asked them to use it; wrote `query.isError` referencing an unbound name; buried `const queryClient = useQueryClient()` in prose instead of as a numbered step). All three caught + fixed; new rule baked into feedback_concrete_first_task_format memory: every prereq line is its own numbered step. USER-SIDE PATTERN — two-sided refactor copy-paste bugs (recurring per feedback_two_sided_refactor): PASS 1 pasted UNDO `[...old, employee]` into DELETE slot — tsc caught it. PASS 2 (after fix) pasted DELETE `filter(...)` into UNDO slot — tsc PASSED, runtime would have silently broken undo (cache stayed empty after re-create). Claude caught the second one during cleanup. Symmetric-inverse cache writes have identical type signatures, so the compiler can't help — filter-vs-append must stay straight manually. NEW CONCEPTS: useQuery (read-side hook, queryKey + queryFn, returns data/isLoading/isError/dataUpdatedAt; multiple callers same key = ONE network request via dedup), useQueryClient (imperative cache accessor), setQueryData (direct synchronous write, no refetch — use when new state is known locally; vs invalidateQueries which marks stale + refetches), dataUpdatedAt (auto-tracked timestamp, replaces manual setFetchedAt). FINAL STATE: zero useState for the employee list (reducer for modal stays), one useQuery, one useEffect (error-toast bridge — RQ doesn't toast on its own), setQueryData on delete (filter out) and undo (append back). UseEmployeesReturn shape UNCHANGED — internal refactor, no API change for EmployeeList. .NET MENTAL MODEL: useQuery = ICache<T> contract that bundles data/loading/error/updatedAt — equivalent to IMemoryCache.GetOrCreateAsync + manual flags, PLUS dedup (IMemoryCache won't dedup concurrent gets), PLUS background revalidation (IMemoryCache is binary in/out), PLUS cache-key-as-identity (setQueryData on same key updates THE slot, readers re-render automatically). CLEANUP PASS (same round): header comment rewritten for RQ architecture, stale comments about fetchEmployees/mount-useEffect/private-setEmployees deleted, indentation fixed (unindented queryClient line, ragged setQueryData blocks), multi-line object literals where they spanned past 100 cols. tsc clean.
   17.3       | 40 min  |           |  React Query: delete + optimistic
   17.4       | 35 min  |           |  React Query: create + edit mutations
   17.5       | 30 min  |           |  React Query: query-key hierarchy
