@@ -4089,7 +4089,12 @@ same key — keep filter-vs-append straight or runtime breaks silently.
 
 CHALLENGE 17.3 — Convert delete to useMutation (optimistic) Target: 40 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 35 min — took help from Gemini. Claude's challenge spec did
+not actually state what needed to be done — TASK step 1 just pointed
+at "the canonical pattern in the existing spec from earlier 16.3 (now
+17.3)" which doesn't exist anywhere in this file. Empty pointer, no
+worked example, no before/after. Concrete-first format failed again.
+Going forward I'll ask Gemini only for the help.
 
   NEW HERE — read this before TASK:
   - `useMutation`: the write-side hook. Returns `.mutate(args)`,
@@ -4126,7 +4131,9 @@ YOUR TIME:
 
 CHALLENGE 17.4 — Create + Edit mutations                    Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 20 min — took help from Gemini again. Same story as 17.3:
+don't know the useMutation syntax well enough yet, Claude's spec listed
+WHAT to do but no syntax example to anchor the HOW.
 
   TASK:
   1. Add useCreateEmployee + useUpdateEmployee mutations.
@@ -4145,7 +4152,10 @@ YOUR TIME:
 
 CHALLENGE 17.5 — Query keys hierarchy + capstone            Target: 30 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 15 min — understood the concept (query keys are the cache's
+public API, centralize like route strings). Took Gemini's help for the
+implementation in EmployeeForm and useEmployee. Understood WHY we use
+the key builders.
 
   NEW HERE — read this before TASK:
   - Query key hierarchy: `['employees']` (list), `['employees', id]`
@@ -9112,9 +9122,9 @@ Fill this in as you complete each challenge:
   16.5       | 20 min  | ~5 min    | Beat target by ~15 min. Fastest round in 16 — codebase was already near-strict-clean from 15.x and 16.1-16.4, so enabling all 5 sub-flags only surfaced 4 real issues. ALL 5 STRICT FLAGS ENABLED: noUnusedLocals, noUnusedParameters, noImplicitReturns, noFallthroughCasesInSwitch, exactOptionalPropertyTypes. None disabled. exactOptionalPropertyTypes worked first try (no third-party collisions). Errors split into two groups: (1) confirmReducer's `state` param flagged unused — reducer never reads state since both branches build a fresh ConfirmState from action. WRONG FIRST FIX: deleted the parameter entirely → broke useReducer's `(state, action) => state` contract → 10 cascade errors because TS now inferred `confirm` as ConfirmAction (reading first param as state type). RIGHT FIX: underscore-prefix convention `_state: ConfirmState` — noUnusedParameters recognises leading `_` as "intentionally unused, don't warn." Parameter stays (contract preserved), lint satisfied. Cross-language idiom (Rust/Go/Python all use `_param` the same way). (2) 3x stale `import React from 'react'` in App.tsx, EmployeeList.tsx, ProtectedRoute.tsx — React 17+ JSX transform doesn't need React in scope; these were .js-era leftovers finally flagged by noUnusedLocals. Deleted all three. CONCEPT LOCKED IN — FIXED-SIGNATURE CONTRACTS: when a function shape is dictated externally (useReducer, event handlers, React.FC, library callbacks), you CAN'T drop a parameter to satisfy a lint rule — mark it intentionally unused. Will recur for event handlers that ignore the event, FCs that ignore props, etc. C# has discard patterns (`_`) for tuples/switch arms but NOT for function parameters — closest C# equivalent is [SuppressMessage] attribute or just naming the param `unused`. TS underscore is lighter than the attribute, more enforced than just naming. ROUND 16 COMPLETE — TS HARDENING ARC DONE: 16.1 any-removal | 16.2 branded IDs | 16.3 discriminated unions | 16.4 event handler types | 16.5 strict-mode. Total ~65 min vs 135 min planned. Zero `any`, branded IDs, exhaustive reducers, explicit event types, all strict sub-flags on. Ready for Round 17 (React Query migration).
   17.1       | 20 min  | ~7 min    | Beat target by ~13 min. Took Gemini help, but root cause was PROCESS FAILURE on Claude's side: closed Round 16 with "Ready when you are" for 17.1 instead of proactively pushing the v2 concrete-first breakdown. User flagged it; memory feedback_concrete_first_task_format updated with "no passive cliffhangers between rounds" rule. Installed @tanstack/react-query@5.100.11 + @tanstack/react-query-devtools@5.100.11. Wired in index.tsx (NOT App.tsx — single QueryClient instance for the whole app). Configured staleTime: 30000 (30s window of "fresh" data — subsequent useQuery returns cache without fetch) and refetchOnWindowFocus: false (disables tab-back refetch — fine in dev). Devtools mounted with initialIsOpen={false}. ARCHITECTURAL CALL THAT MATTERS — provider layering: <RecentActivityProvider><AuthProvider><QueryClientProvider><App/></QueryClientProvider></AuthProvider></RecentActivityProvider>. QueryClient INSIDE Auth — correct, because every query will eventually need the JWT in the Axios interceptor, and JWT lives in AuthContext; outside Auth would mean queries could fire before token loads → 401s. NEW CONCEPTS: QueryClient (the cache OBJECT, one per app), QueryClientProvider (Context provider handing it down — same pattern as AuthProvider), staleTime (fresh vs stale window), refetchOnWindowFocus (browser tab-back trigger). .NET MENTAL MODEL: QueryClient ≈ IMemoryCache singleton; QueryClientProvider ≈ DI registration; staleTime ≈ AbsoluteExpiration on MemoryCacheEntryOptions; refetchOnWindowFocus ≈ DelegatingHandler revalidation trigger; useQuery (next round) ≈ IMemoryCache.GetOrCreateAsync with retry/dedup/background refresh. Killer feature over IMemoryCache: REQUEST DEDUPLICATION — two components calling same query at same time fire ONE network request; IMemoryCache won't do that. PLUMBING ONLY — useEmployees still uses useState + useEffect + manual fetch; 17.2 replaces it with useQuery (where the win actually shows up: auto refetch, loading/error states, dedup, caching). tsc clean, devtools button visible in dev.
   17.2       | 35 min  | ~15 min   | Beat target by ~20 min. First real React Query win: ~12 lines of useState + useEffect + try/catch collapsed into one useQuery call. Required iteration because Claude's first breakdown had three inconsistencies (told user to drop useEffect then asked them to use it; wrote `query.isError` referencing an unbound name; buried `const queryClient = useQueryClient()` in prose instead of as a numbered step). All three caught + fixed; new rule baked into feedback_concrete_first_task_format memory: every prereq line is its own numbered step. USER-SIDE PATTERN — two-sided refactor copy-paste bugs (recurring per feedback_two_sided_refactor): PASS 1 pasted UNDO `[...old, employee]` into DELETE slot — tsc caught it. PASS 2 (after fix) pasted DELETE `filter(...)` into UNDO slot — tsc PASSED, runtime would have silently broken undo (cache stayed empty after re-create). Claude caught the second one during cleanup. Symmetric-inverse cache writes have identical type signatures, so the compiler can't help — filter-vs-append must stay straight manually. NEW CONCEPTS: useQuery (read-side hook, queryKey + queryFn, returns data/isLoading/isError/dataUpdatedAt; multiple callers same key = ONE network request via dedup), useQueryClient (imperative cache accessor), setQueryData (direct synchronous write, no refetch — use when new state is known locally; vs invalidateQueries which marks stale + refetches), dataUpdatedAt (auto-tracked timestamp, replaces manual setFetchedAt). FINAL STATE: zero useState for the employee list (reducer for modal stays), one useQuery, one useEffect (error-toast bridge — RQ doesn't toast on its own), setQueryData on delete (filter out) and undo (append back). UseEmployeesReturn shape UNCHANGED — internal refactor, no API change for EmployeeList. .NET MENTAL MODEL: useQuery = ICache<T> contract that bundles data/loading/error/updatedAt — equivalent to IMemoryCache.GetOrCreateAsync + manual flags, PLUS dedup (IMemoryCache won't dedup concurrent gets), PLUS background revalidation (IMemoryCache is binary in/out), PLUS cache-key-as-identity (setQueryData on same key updates THE slot, readers re-render automatically). CLEANUP PASS (same round): header comment rewritten for RQ architecture, stale comments about fetchEmployees/mount-useEffect/private-setEmployees deleted, indentation fixed (unindented queryClient line, ragged setQueryData blocks), multi-line object literals where they spanned past 100 cols. tsc clean.
-  17.3       | 40 min  |           |  React Query: delete + optimistic
-  17.4       | 35 min  |           |  React Query: create + edit mutations
-  17.5       | 30 min  |           |  React Query: query-key hierarchy
+  17.3       | 40 min  | ~35 min   |  React Query: delete + optimistic. Took Gemini's help — Claude's spec was an empty pointer ("see canonical pattern in earlier 16.3 (now 17.3)") with no actual pattern written out. User: "going forward I'll ask Gemini only for the help."
+  17.4       | 35 min  | ~20 min   |  React Query: create + edit mutations. Beat target by ~15 min but took Gemini's help — useMutation syntax not yet held solo. Spec listed WHAT (add hooks, isPending, invalidate, navigate) but no syntax anchor for HOW. Same gap as 17.3.
+  17.5       | 30 min  | ~15 min   |  React Query: query-key hierarchy. Beat target by ~15 min. Concept clicked solo (query keys = cache's public API, centralize like route strings); Gemini's help on the implementation in EmployeeForm and useEmployee. Understood WHY, syntax-recall still the gap.
   18.1       | 25 min  |           |  Router: createBrowserRouter
   18.2       | 25 min  |           |  Router: URL params
   18.3       | 30 min  |           |  Router: nested routes + AuthLayout

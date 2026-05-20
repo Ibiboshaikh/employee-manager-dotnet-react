@@ -46,7 +46,7 @@ import { isAxiosError } from 'axios';
 // useNavigate: programmatic navigation (go to another page)
 // useParams: read URL parameters (the :id from /employees/edit/:id)
 import { useNavigate, useParams } from "react-router-dom";
-
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 // API functions — each maps to a .NET endpoint
 import { createEmployee, getEmployee, updateEmployee } from "../services/api";
 
@@ -54,7 +54,7 @@ import { createEmployee, getEmployee, updateEmployee } from "../services/api";
 import { toast } from "react-toastify";
 import { Employee } from "../Types/Models";
 import { toEmployeeId } from "../Types/Ids";
-
+import { employeeKeys } from "../Queries/employeeKeys";
 interface FormErrors {
   firstName?: string;
   lastName?: string;
@@ -68,7 +68,6 @@ type EmployeeFormData = Omit<Employee, 'id' | 'salary'> & {salary: string};
 // ── THE EMPLOYEEFORM COMPONENT ─────────────────────────────────────────────
 
 const EmployeeForm = () => {
-
   // ── URL PARAMETERS & NAVIGATION ────────────────────────────────────────
 
   // useParams() extracts named parameters from the URL.
@@ -105,12 +104,9 @@ const EmployeeForm = () => {
   });
 
   // loading: true while an API call is in progress (submit button shows "Saving...")
-  const [loading, setLoading] = useState(false);
-
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
   const [errors, setErrors] = useState<FormErrors>({}); // For future validation error handling
-
+  const queryClient = useQueryClient();
+  
   // ── FETCH EMPLOYEE DATA FOR EDIT MODE ──────────────────────────────────
   //
   // useEffect runs AFTER the component renders.
@@ -190,6 +186,51 @@ const EmployeeForm = () => {
   // SPREAD OPERATOR: { ...prev, [name]: value }
   // This copies ALL existing formData properties, then overrides the one that changed.
   // Example: { firstName: "old", lastName: "Doe", ...rest } → { firstName: "John", lastName: "Doe", ...rest }
+
+  const createMutation = useMutation({
+    mutationFn: async (employee: Omit<Employee, 'id'>) =>{
+      await createEmployee(employee);
+    },
+    onSuccess: () =>{
+      queryClient.invalidateQueries({ queryKey: employeeKeys.all });
+      toast.success("Employee created successfully");
+      navigate("/employees");
+    }
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async (updatedData: Employee) =>{
+      await updateEmployee(updatedData.id, updatedData);
+    },
+    onMutate: (updatedData) =>{
+      queryClient.cancelQueries({ queryKey: employeeKeys.all });
+      const previousEmployees = queryClient.getQueryData<Employee[]>(employeeKeys.all);
+      queryClient.setQueryData<Employee[]>(employeeKeys.all, (old = []) =>
+        old.map(emp => emp.id === updatedData.id ? updatedData : emp)
+      );
+      return { previousEmployees };
+    },
+    onError: (error, _updatedData, context) =>{
+      const errorMessage = isAxiosError<{ message?: string }>(error)
+      ? error.response?.data?.message || "Failed to update employee"
+      : "Failed to update employee";
+      toast.error(errorMessage);
+
+      if (context?.previousEmployees) {
+        queryClient.setQueryData(employeeKeys.all, context.previousEmployees);
+      }
+    },
+    onSettled: () =>{
+      queryClient.invalidateQueries({ queryKey: employeeKeys.all });
+    },
+    onSuccess: () =>{
+      toast.success("Employee updated successfully");
+      navigate("/employees");
+    }
+  });
+
+  const isPending = createMutation.isPending || updateMutation.isPending;
+
   const handleChange = (e:  React.ChangeEvent<HTMLInputElement| HTMLSelectElement>) => {
     // Destructure the event target to get the input's properties
     const { name, value, type, checked } = e.target as HTMLInputElement;
@@ -229,43 +270,21 @@ const EmployeeForm = () => {
       return;
     }
     setErrors({});
-    setIsSubmitting(true);
-
-    // Show loading state (button text changes to "Saving...")
-    setLoading(true);
-
-    try {
-      // Build the employee object to send to the API.
-      // We need to convert salary from string to number because
-      // HTML inputs always give us strings, but the API expects a number.
-      const salaryNumber = parseFloat(formData.salary);
-      const employeeData = {
+    const salaryNumber = parseFloat(formData.salary);
+    if(isEditMode){
+      const payload: Employee ={
         ...formData,
-        salary: salaryNumber,  // number, not .toString()
+        id: toEmployeeId(id!),
+        salary: salaryNumber
       };
-
-      if (isEditMode) {
-        // EDIT MODE: PUT /api/employee/{id} with the updated data
-        await updateEmployee(toEmployeeId(id!), employeeData);
-        toast.success("Employee updated successfully");
-      } else {
-        // CREATE MODE: POST /api/employee with the new employee data
-        await createEmployee(employeeData);
-        toast.success("Employee created successfully");
-      }
-
-      // Navigate back to the employee list after successful save
-      navigate("/employees");
-
-    } catch (error) {
-      const errorMessage = isAxiosError<{ message?: string }>(error)
-        ? error.response?.data?.message || "Failed to save employee"
-        : "Failed to save employee";
-      toast.error(errorMessage);
-    } finally {
-      // Always reset loading state
-      setLoading(false);
-      setIsSubmitting(false);
+      updateMutation.mutate(payload);
+    }
+    else{
+      const payload: Omit<Employee, 'id'> ={
+        ...formData,
+        salary: salaryNumber
+      };
+      createMutation.mutate(payload);
     }
   };
 
@@ -439,14 +458,14 @@ const EmployeeForm = () => {
               ══════════════════════════════════════════════════════════════ */}
           <div style={styles.buttonRow}>
             {/* SUBMIT BUTTON — triggers the form's onSubmit event */}
+            <button type="submit" style={styles.submitBtn} disabled={isPending}>
             {/* <button type="submit" style={styles.submitBtn} disabled={loading}> */}
-            <button type="submit" style={styles.submitBtn} disabled={isSubmitting}>
               {/* Triple ternary: loading → "Saving..." | edit → "Update" | create → "Create"
                   This is equivalent to:
                   if (loading) return "Saving...";
                   else if (isEditMode) return "Update Employee";
                   else return "Create Employee"; */}
-              {loading
+              {isPending
                 ? "Saving..."
                 : isEditMode
                 ? "Update Employee"

@@ -15,7 +15,8 @@ import { Employee } from "../Types/Models";
 import { useRecentActivity } from "../Context/RecentActivityContext";
 import { isAxiosError } from "axios";
 import { EmployeeId } from "../Types/Ids";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { employeeKeys } from "../Queries/employeeKeys";
 
 type ConfirmState = {
   open: boolean;
@@ -46,7 +47,7 @@ export interface UseEmployeesReturn {
   fetchedAt: string | null;
   confirm: ConfirmState;
   handleDelete: (id: EmployeeId, name: string) => void;
-  onConfirm: () => Promise<void>;
+  onConfirm: () => void;
   onCancel: () => void;
 }
 
@@ -58,7 +59,7 @@ function useEmployees(): UseEmployeesReturn {
   // is cached under ['employees']. data / loading / error states all come
   // from React Query — no manual useState or useEffect for fetching.
   const { data: employees = [], isLoading: loading, isError, dataUpdatedAt } = useQuery({
-    queryKey: ["employees"],
+    queryKey: employeeKeys.all,
     queryFn: async () => {
       const response = await getEmployees();
       return response.data;
@@ -84,6 +85,65 @@ function useEmployees(): UseEmployeesReturn {
     name: "",
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (id: EmployeeId) => {
+      await deleteEmployee(id);
+    },
+
+    onMutate: async (id) =>{
+      await queryClient.cancelQueries({ queryKey: employeeKeys.all });
+      const previousEmployees = queryClient.getQueryData<Employee[]>(employeeKeys.all);
+      queryClient.setQueryData<Employee[]>(employeeKeys.all, (old = []) =>
+        old.filter(e => e.id !== id)
+      );
+      return { previousEmployees };
+    },
+    
+    onError: (error, _id, context) =>{
+      const errorMessage = isAxiosError<{ message?: string}>(error)? error.response?.data?.message 
+        || "Failed to delete" : "Failed to delete";
+      toast.error(errorMessage);
+    
+    // Rollback to the exact state it was before the delete button was clicked
+    if (context?.previousEmployees) {
+      queryClient.setQueryData(employeeKeys.all, context.previousEmployees);
+    }
+    },
+    onSettled: () =>{
+      queryClient.invalidateQueries({ queryKey: employeeKeys.all });
+    }
+  });
+
+  const undoMutation = useMutation({
+    mutationFn: async (employees: Employee) => {
+      await createEmployee(employees);
+    },
+
+    onMutate: async (employee) =>{
+      await queryClient.cancelQueries({ queryKey: employeeKeys.all });
+      const previousEmployees = queryClient.getQueryData<Employee[]>(employeeKeys.all);
+      queryClient.setQueryData<Employee[]>(employeeKeys.all, (old = []) =>[
+        ...old,
+        employee,
+      ]);
+      return { previousEmployees };
+    },
+
+    onError: (error, _employee, context) =>{
+      const errorMessage = isAxiosError<{ message?: string}>(error)? error.response?.data?.message 
+        || "Failed to undo delete" : "Failed to undo delete";
+      toast.error(errorMessage);
+
+      if (context?.previousEmployees) {
+        queryClient.setQueryData<Employee[]>(employeeKeys.all, context.previousEmployees);
+      }
+    },
+
+    onSettled: () =>{
+      queryClient.invalidateQueries({ queryKey: employeeKeys.all });
+    }
+  });
+
   // Step 1 of delete flow: open the confirm modal. No API call yet —
   // the user must click "Yes, Delete" first.
   const handleDelete = (id: EmployeeId, name: string) => {
@@ -94,73 +154,47 @@ function useEmployees(): UseEmployeesReturn {
   // then patch the row out of the React Query cache. Direct setQueryData
   // (not invalidateQueries) keeps the UI instant — no refetch needed
   // because we know the new state locally.
-  const onConfirm = async () => {
-    try {
-      if (confirm.id === null) return;
-      await deleteEmployee(confirm.id);
+  const onConfirm = () => {
+    if (!confirm.id) return;
 
-      // Capture the full employee BEFORE removing — Undo needs to restore it.
-      const deletedEmployee = employees.find((e) => e.id === confirm.id) as Employee;
+    const deletedEmployee = employees.find(e=> e.id === confirm.id);
+    
+    if (deletedEmployee) {
       addActivity({
-        action: "Deleted Employee",
+        action: "Deleted employee",
         details: `${deletedEmployee.firstName} ${deletedEmployee.lastName} was deleted`,
         timestamp: new Date().toISOString(),
         id: confirm.id,
       });
 
-      // Toast holds an inline Undo button. Capture the toastId so the button
-      // can dismiss the toast on click (closure reads it at click time, by
-      // which point toast.success has returned and assigned the value).
       const toastId = toast.success(
         <span>
-          {deletedEmployee.firstName} {deletedEmployee.lastName} deleted.{" "}
-          <button
-            onClick={() => {
-              handleUndo(deletedEmployee);
-              toast.dismiss(toastId);
-            }}
-          >
-            Undo
-          </button>
+          {deletedEmployee.firstName} {deletedEmployee.lastName} deleted. {" "}
+          <button onClick={() => {
+            handleUndo(deletedEmployee);
+            toast.dismiss(toastId);
+          }}>Undo</button>
         </span>,
         { autoClose: 5000 }
       );
-
-      // Filter the deleted row out of the cache — synchronous cache write.
-      queryClient.setQueryData<Employee[]>(["employees"], (old = []) =>
-        old.filter((e) => e.id !== confirm.id)
-      );
-    } catch (error) {
-      toast.error("Failed to delete employee");
-    } finally {
-      // Close the modal whether the delete succeeded or failed.
-      dispatch({ type: "close" });
+    
     }
+    deleteMutation.mutate(confirm.id);
+    dispatch({ type: "close" });
   };
 
   // Restore a deleted employee by re-creating it on the server and
   // appending it back into the React Query cache. Symmetric inverse
   // of onConfirm's delete: filter out → append back.
-  const handleUndo = async (employee: Employee) => {
-    try {
-      await createEmployee(employee);
-      queryClient.setQueryData<Employee[]>(["employees"], (old = []) => [
-        ...old,
-        employee,
-      ]);
-      toast.success("Delete undone.");
-      addActivity({
-        action: "Undo Delete",
-        details: `Undo delete: ${employee.firstName} ${employee.lastName}`,
-        timestamp: new Date().toISOString(),
-        id: employee.id,
-      });
-    } catch (error) {
-      const errorMessage = isAxiosError<{ message?: string }>(error)
-        ? error.response?.data?.message || "Failed to undo delete"
-        : "Failed to undo delete";
-      toast.error(errorMessage);
-    }
+  const handleUndo = (employee: Employee) => {
+    undoMutation.mutate(employee);
+    toast.success("Delete undone");
+    addActivity({
+      action: "Undo Delete",
+      details: `Restored ${employee.firstName} ${employee.lastName}`,
+      timestamp: new Date().toISOString(),
+      id: employee.id,
+    });
   };
 
   // Close the modal without deleting.
