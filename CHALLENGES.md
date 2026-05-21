@@ -4330,7 +4330,17 @@ Internalize the RHF + Zod combo NOW — you'll write it 8+ more times.
 
 CHALLENGE 19.1 — Install RHF + first form                   Target: 25 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~20 min. Took Gemini's help on the TestForm wiring (useForm
++ register + handleSubmit shape — first contact with RHF). Side detour:
+tried routing the login redirect to TestForm by hijacking the
+`employees: () => "/employees"` helper to return "/TestForm" — it
+"worked" only because the helper is the single source of truth for both
+`navigate(routes.employees())` and `path: routes.employees()`, so both
+sides flipped together. Hijacking would have silently broken every
+other site that calls routes.employees() (EmployeeForm post-save,
+AuthLayout brand link, App.tsx catch-all). Restored employees helper to
+"/employees"; right pattern is add testForm helper + register a new
+route, not rewrite an existing one.
 
   NEW HERE — read this before TASK:
   - React Hook Form (RHF): a 3rd-party library that manages form state
@@ -9140,7 +9150,7 @@ Fill this in as you complete each challenge:
   18.3       | 30 min  | ~20 min   |  Router: nested routes + AuthLayout. Beat target by ~10 min. Took Gemini's help for syntax. ARCHITECTURAL CALL OWNED SOLO — Gemini suggested localStorage for the header's user-name; rejected and pulled from AuthContext (single source of truth, no sync bugs on logout). EmployeeList's inline nav deleted; AuthLayout header now owns top-right user name + logout for every authenticated page. <Outlet /> + protected branch wired in router.
   18.4       | 25 min  | ~10 min   |  Router: search params for filters. Beat target by ~15 min. Took Gemini's help for syntax. Replaced local useState for search/department/hideBelow50K with useSearchParams. INTERESTING BUG — clear-filter wasn't working with key-by-key `.delete()` calls; Gemini's fix was to swap in `setSearchParams(new URLSearchParams(), { replace: true })` (wipe all params atomically) + keep `setView(0)` since `view` is still local state, not URL-bound. Filters now bookmarkable.
   18.5       | 25 min  | ~5 min    |  Router: typed route helpers. Beat target by ~20 min. NO Gemini — concrete-first lookup table (file/line/before/after) for all 14 call sites + "NOT TO TOUCH" list for the `:id` pattern and comments worked first try. Created src/routes.ts with 4 helpers (login/employees/newEmployee/editEmployee — last takes EmployeeId). `as const` on every return keeps literal types; functions (not values) for uniform call syntax + param support. Replaced literals in App.tsx, AuthLayout, EmployeeForm (3 sites), EmployeeList (2), Login, ProtectedRoute, api.ts. Round 18 COMPLETE.
-  19.1       | 25 min  |           |  RHF: install + first form
+  19.1       | 25 min  | ~20 min   |  RHF: install + first form. Beat target by ~5 min. Took Gemini's help on TestForm wiring (useForm/register/handleSubmit). Installed react-hook-form; created throwaway TestForm.tsx with one field + handleSubmit logging the data. SIDE DETOUR — routing experiment: tried sending login redirect to TestForm by changing the `employees` helper to return "/TestForm". Got it working because the helper is single-source-of-truth for BOTH navigate(routes.employees()) AND path: routes.employees() — flipping one literal flips both ends together. But that's hijacking, not adding: every other caller of routes.employees() (EmployeeForm post-save x3, AuthLayout brand link, App.tsx catch-all) would have silently redirected to TestForm. CONCEPT LOCKED IN: React Router doesn't auto-discover routes from navigate() calls — the URL string in navigate() must match a `path` in the route config exactly, char-for-char. .NET parallel: navigate("/x") = Response.Redirect("/x"); route config = [Route] attributes / MapControllerRoute. Restored employees helper to "/employees"; correct add-a-route pattern is helper + route entry + navigate target, three sites updated.
   19.2       | 35 min  |           |  RHF: EmployeeForm refactor
   19.3       | 30 min  |           |  Zod: schema validation
   19.4       | 30 min  |           |  RHF + Zod: zodResolver
