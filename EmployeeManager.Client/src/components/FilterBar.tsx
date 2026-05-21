@@ -48,12 +48,12 @@ const FilterBar = ({
     onHideBelow50KChange,
     view,
     onViewChange,
-    departments,
-    onClear,
     minSalary,
     onMinSalaryChange,
     maxSalary,
-    onMaxSalaryChange
+    onMaxSalaryChange,
+    departments,
+    onClear
 }: FilterBarProps) => (
     <>
         {/* Department dropdown — value is controlled by prop */}

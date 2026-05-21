@@ -46,7 +46,7 @@ import { isAxiosError } from 'axios';
 // useNavigate: programmatic navigation (go to another page)
 // useParams: read URL parameters (the :id from /employees/edit/:id)
 import { useNavigate, useParams } from "react-router-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 // API functions — each maps to a .NET endpoint
 import { createEmployee, getEmployee, updateEmployee } from "../services/api";
 
@@ -55,6 +55,8 @@ import { toast } from "react-toastify";
 import { Employee } from "../Types/Models";
 import { toEmployeeId } from "../Types/Ids";
 import { employeeKeys } from "../Queries/employeeKeys";
+import { routes } from "../routes";
+
 interface FormErrors {
   firstName?: string;
   lastName?: string;
@@ -64,6 +66,18 @@ interface FormErrors {
 
 type EmployeeFormData = Omit<Employee, 'id' | 'salary'> & {salary: string};
 
+const useEmployee = (id: ReturnType<typeof toEmployeeId> | undefined) => {
+  return useQuery({
+    // Uses your centralized key factory builder detail structure
+    queryKey: employeeKeys.detail(id!),
+    queryFn: async () => {
+      const response = await getEmployee(id!);
+      return response.data;
+    },
+    // Safely prevents running if there is no ID (Create Mode)
+    enabled: Boolean(id),
+  });
+};
 
 // ── THE EMPLOYEEFORM COMPONENT ─────────────────────────────────────────────
 
@@ -76,7 +90,10 @@ const EmployeeForm = () => {
   //
   // We destructure { id } to get just the id value.
   // ANALOGY TO .NET: This is like [HttpGet("{id}")] — extracting {id} from the route.
-  const { id } = useParams();
+  const { id } = useParams<{ id: string }>();
+  const employeeId = id ? toEmployeeId(id) : undefined;
+  
+  const { data: employeeData } = useEmployee(employeeId);
 
   // navigate() function for programmatic URL changes.
   const navigate = useNavigate();
@@ -119,52 +136,24 @@ const EmployeeForm = () => {
   // (new function reference each time). The disable comment must sit DIRECTLY
   // above the line it disables — no other comments in between.
   useEffect(() => {
-    if (isEditMode) {
-      // Only fetch if we're editing an existing employee
-      fetchEmployee();
+    if (employeeData) {
+      setFormData({
+        firstName: employeeData.firstName,
+        lastName: employeeData.lastName,
+        email: employeeData.email,
+        phoneNumber: employeeData.phoneNumber || "",
+        department: employeeData.department,
+        position: employeeData.position,
+        salary: employeeData.salary.toString(),
+        dateOfJoining: employeeData.dateOfJoining
+          ? new Date(employeeData.dateOfJoining).toISOString().split("T")[0]
+          : "",
+        isActive: employeeData.isActive,
+      });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [employeeData]); // Triggers automatically the exact millisecond data arrives
 
   // Fetch a single employee's data from the API and fill the form.
-  const fetchEmployee = async () => {
-    try {
-      // GET /api/employee/{id} — fetch this specific employee
-      const response = await getEmployee(toEmployeeId(id!));
-
-      // response.data is the employee object from the API:
-      // { id, firstName, lastName, email, department, position, salary, dateOfJoining, isActive }
-      const emp = response.data;
-
-      // Set all form fields to the employee's current values.
-      // This "pre-fills" the form so the user can see what they're editing.
-      setFormData({
-        firstName: emp.firstName,
-        lastName: emp.lastName,
-        email: emp.email,
-        phoneNumber: emp.phoneNumber || "",  // Fallback for old records without this field
-        department: emp.department,
-        position: emp.position,
-        salary: emp.salary.toString(),
-        // DATE FORMATTING:
-        // The API returns dates as ISO 8601 strings: "2024-01-15T00:00:00"still
-        // But HTML <input type="date"> requires: "2024-01-15" (just the date part)
-        //
-        // new Date("2024-01-15T00:00:00") creates a Date object
-        // .toISOString() converts to "2024-01-15T00:00:00.000Z"
-        // .split("T")[0] splits on "T" and takes the first part: "2024-01-15"
-        dateOfJoining: emp.dateOfJoining
-          ? new Date(emp.dateOfJoining).toISOString().split("T")[0]
-          : "",
-        isActive: emp.isActive,
-      });
-
-    } catch (error) {
-      // If the employee doesn't exist (404) or other error
-      toast.error("Failed to load employee data");
-      navigate("/employees"); // Go back to the list
-    }
-  };
 
   // ── GENERIC CHANGE HANDLER ─────────────────────────────────────────────
   //
@@ -194,7 +183,7 @@ const EmployeeForm = () => {
     onSuccess: () =>{
       queryClient.invalidateQueries({ queryKey: employeeKeys.all });
       toast.success("Employee created successfully");
-      navigate("/employees");
+      navigate(routes.employees());
     }
   });
 
@@ -225,7 +214,7 @@ const EmployeeForm = () => {
     },
     onSuccess: () =>{
       toast.success("Employee updated successfully");
-      navigate("/employees");
+      navigate(routes.employees());
     }
   });
 
@@ -477,7 +466,7 @@ const EmployeeForm = () => {
                 (Default type for <button> inside <form> is "submit") */}
             <button
               type="button"
-              onClick={() => navigate("/employees")}
+              onClick={() => navigate(routes.employees())}
               style={styles.cancelBtn}
             >
               Cancel

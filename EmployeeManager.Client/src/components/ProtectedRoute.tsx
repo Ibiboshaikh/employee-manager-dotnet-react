@@ -28,7 +28,7 @@
 // Navigate: component that redirects to another URL (like RedirectToAction)
 // Outlet: special component that renders the matching child route
 import { Navigate, Outlet } from "react-router-dom";
-
+import { routes } from "../routes";
 // ── THE PROTECTEDROUTE COMPONENT ───────────────────────────────────────────
 const ProtectedRoute = () => {
   // Check if a JWT token exists in localStorage.
@@ -49,7 +49,7 @@ const ProtectedRoute = () => {
     // With replace={true}:
     //   /employees is REPLACED with /login in history → Back button goes to
     //   whatever page was before /employees (no loop).
-    return <Navigate to="/login" replace />;
+    return <Navigate to={routes.login()} replace />;
   }
 
   // If token EXISTS → user is logged in → render the child route.

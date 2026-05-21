@@ -1,17 +1,38 @@
-import { useState, useEffect } from "react";
+import { SetURLSearchParams } from "react-router-dom";
+import { useEffect } from "react";
 import { Employee } from "../Types/Models";
-function useEmployeeFilter(employees: Employee[]) {
-    const [search, setSearch] = useState(
-    ()=> localStorage.getItem('search') || ''
-  );
 
-  useEffect(() => {
+function useEmployeeFilter(
+  employees: Employee[],
+  searchParam: URLSearchParams,
+  setSearchParam: SetURLSearchParams
+) {
+    const search = searchParam.get("search") || "";
+    const department = searchParam.get("department") || "";
+    const hideBelow50K = searchParam.get("hideBelow50K") === "true";
+    const minSalary = searchParam.get("minSalary") || "";
+    const maxSalary = searchParam.get("maxSalary") || "";
+
+    const updateParam = (key: string, value: string | boolean) => {
+      const newParams = new URLSearchParams(searchParam.toString());
+      if(!value || value === "false") {
+        newParams.delete(key);
+      }
+      else{
+        newParams.set(key, String(value));
+      }
+      setSearchParam(newParams, { replace: true });
+    };
+    const setSearch = (value: string) => updateParam("search", value);
+    const setDepartment = (value: string) => updateParam("department", value);
+    const sethideBelow50K = (value: boolean) => updateParam("hideBelow50K", value);
+    const setMinSalary = (value: string) => updateParam("minSalary", value);
+    const setMaxSalary = (value: string) => updateParam("maxSalary", value);
+
+
+    useEffect(() => {
     localStorage.setItem('search', search);
   }, [search])
-    const [department, setDepartment] = useState('');
-    const [hideBelow50K, sethideBelow50K] = useState(false);
-    const [minSalary, setMinSalary] = useState('');
-    const [maxSalary, setMaxSalary] = useState('');
 
     const filtered = employees
     .filter(emp =>
