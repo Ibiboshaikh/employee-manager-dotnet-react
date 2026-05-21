@@ -4192,7 +4192,7 @@ adds 1-2 new routes. The patterns here become rote — that's the goal.
 
 CHALLENGE 18.1 — createBrowserRouter config                 Target: 25 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~8 min. Took Gemini's help for syntax.
 
   NEW HERE — read this before TASK:
   - `createBrowserRouter([...])`: the v6.4+ way to declare routes as
@@ -4218,7 +4218,7 @@ YOUR TIME:
 
 CHALLENGE 18.2 — URL params with useParams                  Target: 25 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~30 min. Took Gemini's help for syntax.
 
   NEW HERE — read this before TASK:
   - `useParams<{ id: string }>()`: returns the URL params object. For
@@ -4242,7 +4242,11 @@ YOUR TIME:
 
 CHALLENGE 18.3 — Nested routes + Outlet (AuthLayout)        Target: 30 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~20 min. Took Gemini's help for syntax. Gemini suggested
+localStorage for the user-name in the header; rejected that and read it
+straight from AuthContext instead. Removed the nav block from
+EmployeeList — the user name now lives top-right in the AuthLayout
+header.
 
   NEW HERE — read this before TASK:
   - Nested route: parent route's `element` is a layout containing
@@ -4265,7 +4269,11 @@ YOUR TIME:
 
 CHALLENGE 18.4 — Search params via useSearchParams          Target: 25 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~10 min. Took Gemini's help for syntax. After implementing,
+filter clearing wasn't working — Gemini's fix was to replace the
+key-by-key delete pattern with a single
+`setSearchParams(new URLSearchParams(), { replace: true })` + keep
+`setView(0)` since `view` is still local state. Works now.
 
   NEW HERE — read this before TASK:
   - `useSearchParams()`: returns `[searchParams, setSearchParams]`.
@@ -4290,7 +4298,9 @@ YOUR TIME:
 
 CHALLENGE 18.5 — Typed route helpers                        Target: 25 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~5 min. Beat target by ~20 min. Concrete-first lookup-table
+breakdown worked — every literal route string swapped in one pass, no
+Gemini needed.
 
   TASK:
   1. src/routes.ts:
@@ -9125,11 +9135,11 @@ Fill this in as you complete each challenge:
   17.3       | 40 min  | ~35 min   |  React Query: delete + optimistic. Took Gemini's help — Claude's spec was an empty pointer ("see canonical pattern in earlier 16.3 (now 17.3)") with no actual pattern written out. User: "going forward I'll ask Gemini only for the help."
   17.4       | 35 min  | ~20 min   |  React Query: create + edit mutations. Beat target by ~15 min but took Gemini's help — useMutation syntax not yet held solo. Spec listed WHAT (add hooks, isPending, invalidate, navigate) but no syntax anchor for HOW. Same gap as 17.3.
   17.5       | 30 min  | ~15 min   |  React Query: query-key hierarchy. Beat target by ~15 min. Concept clicked solo (query keys = cache's public API, centralize like route strings); Gemini's help on the implementation in EmployeeForm and useEmployee. Understood WHY, syntax-recall still the gap.
-  18.1       | 25 min  |           |  Router: createBrowserRouter
-  18.2       | 25 min  |           |  Router: URL params
-  18.3       | 30 min  |           |  Router: nested routes + AuthLayout
-  18.4       | 25 min  |           |  Router: search params for filters
-  18.5       | 25 min  |           |  Router: typed route helpers
+  18.1       | 25 min  | ~8 min    |  Router: createBrowserRouter. Beat target by ~17 min. Took Gemini's help for syntax — pattern of "routes-as-config array" not yet held solo. App.tsx restructured: providers (QueryClientProvider, AuthProvider, RecentActivityProvider) now wrap RouterProvider rather than living inside <Routes>.
+  18.2       | 25 min  | ~30 min   |  Router: URL params. Over target by ~5 min. Took Gemini's help for syntax. EmployeeForm now reads `:id` from useParams, fetches via useEmployee(id), and prefills via reset(employee). EmployeeList navigates to `/employees/${id}/edit`. id===undefined ⇒ create mode (single source of truth, no local id state).
+  18.3       | 30 min  | ~20 min   |  Router: nested routes + AuthLayout. Beat target by ~10 min. Took Gemini's help for syntax. ARCHITECTURAL CALL OWNED SOLO — Gemini suggested localStorage for the header's user-name; rejected and pulled from AuthContext (single source of truth, no sync bugs on logout). EmployeeList's inline nav deleted; AuthLayout header now owns top-right user name + logout for every authenticated page. <Outlet /> + protected branch wired in router.
+  18.4       | 25 min  | ~10 min   |  Router: search params for filters. Beat target by ~15 min. Took Gemini's help for syntax. Replaced local useState for search/department/hideBelow50K with useSearchParams. INTERESTING BUG — clear-filter wasn't working with key-by-key `.delete()` calls; Gemini's fix was to swap in `setSearchParams(new URLSearchParams(), { replace: true })` (wipe all params atomically) + keep `setView(0)` since `view` is still local state, not URL-bound. Filters now bookmarkable.
+  18.5       | 25 min  | ~5 min    |  Router: typed route helpers. Beat target by ~20 min. NO Gemini — concrete-first lookup table (file/line/before/after) for all 14 call sites + "NOT TO TOUCH" list for the `:id` pattern and comments worked first try. Created src/routes.ts with 4 helpers (login/employees/newEmployee/editEmployee — last takes EmployeeId). `as const` on every return keeps literal types; functions (not values) for uniform call syntax + param support. Replaced literals in App.tsx, AuthLayout, EmployeeForm (3 sites), EmployeeList (2), Login, ProtectedRoute, api.ts. Round 18 COMPLETE.
   19.1       | 25 min  |           |  RHF: install + first form
   19.2       | 35 min  |           |  RHF: EmployeeForm refactor
   19.3       | 30 min  |           |  Zod: schema validation

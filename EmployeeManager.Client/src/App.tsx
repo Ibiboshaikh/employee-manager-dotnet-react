@@ -34,10 +34,16 @@
 // Routes: container for all <Route> definitions
 // Route: maps a URL path to a component
 // Navigate: redirects to a different URL (like RedirectToAction in .NET)
+// import {
+//   BrowserRouter as Router, // Renamed to "Router" for cleaner JSX
+//   Routes,
+//   Route,
+//   Navigate,
+// } from "react-router-dom";
+
 import {
-  BrowserRouter as Router, // Renamed to "Router" for cleaner JSX
-  Routes,
-  Route,
+  createBrowserRouter,
+  RouterProvider,
   Navigate,
 } from "react-router-dom";
 
@@ -45,7 +51,7 @@ import {
 // ToastContainer is a component that renders the popup container.
 // Individual components call toast.success() or toast.error() to show popups.
 import { ToastContainer } from "react-toastify";
-
+import { routes } from "./routes"; 
 // Toastify's CSS — required for the popup notifications to look correct.
 // Without this import, toasts would appear but look broken (no styling).
 import "react-toastify/dist/ReactToastify.css";
@@ -59,6 +65,42 @@ import EmployeeList from "./components/EmployeeList"; // Employee dashboard
 import EmployeeForm from "./components/EmployeeForm"; // Create/Edit form
 import ProtectedRoute from "./components/ProtectedRoute"; // Auth guard
 import ErrorBoundary from "./components/ErrorBoundary";
+import  AuthLayout  from "./Context/AuthLayout";
+const router = createBrowserRouter([
+  {
+    path: routes.login(),
+    element: <Login />,
+  },
+  {
+    element: <ProtectedRoute />, // This layout wraps all protected routes
+    children: [
+      {
+        element: <AuthLayout />, // This layout wraps all employee-related routes
+        children: [
+          {
+            path: routes.employees(),
+            element: <EmployeeList />,
+          },
+          {
+            path: routes.newEmployee(),
+            element: <EmployeeForm />,
+          },
+          {
+            path: "/employees/:id/edit",
+            element: <EmployeeForm />,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    path: "*",
+    element: <Navigate to={routes.employees()} replace />,
+  },
+]);
+
+
+
 // ── THE APP COMPONENT ──────────────────────────────────────────────────────
 
 // This is a functional component — a JavaScript function that returns JSX.
@@ -69,55 +111,8 @@ function App() {
     // It uses the browser's URL bar to determine which component to show.
     // Everything that uses routing (Links, Routes, useNavigate) must be inside this.
     <ErrorBoundary>
-    <Router>
-
-      {/* ── TOAST NOTIFICATION CONTAINER ────────────────────────────────
-          This renders an invisible container in the top-right corner.
-          When any component calls toast.success("message"), a popup
-          appears here and auto-closes after 3000ms (3 seconds).
-
-          position: where on screen the toast appears
-          autoClose: milliseconds before the toast disappears (3000 = 3 seconds) */}
       <ToastContainer position="top-right" autoClose={3000} />
-
-      {/* ── ROUTE DEFINITIONS ───────────────────────────────────────────
-          <Routes> is like a switch statement — it matches the current URL
-          to the first matching <Route> and renders that component.
-
-          Only ONE route matches at a time (first match wins). */}
-      <Routes>
-
-        {/* PUBLIC ROUTE — anyone can access this, no token needed.
-            When URL is "/login", render the Login component. */}
-        <Route path="/login" element={<Login />} />
-
-        {/* PROTECTED ROUTES — wrapped in ProtectedRoute.
-            ProtectedRoute checks localStorage for a JWT token.
-            - If token exists → renders <Outlet /> (which shows the child route)
-            - If no token → redirects to /login
-
-            This is a "layout route" — it doesn't have a path, it just wraps
-            its children with authentication logic. */}
-        <Route element={<ProtectedRoute />}>
-          {/* These routes are "children" of ProtectedRoute.
-              They only render if ProtectedRoute allows them to. */}
-          <Route path="/employees" element={<EmployeeList />} />
-          <Route path="/employees/new" element={<EmployeeForm />} />
-
-          {/* :id is a URL PARAMETER — it captures whatever value is in that position.
-              Example: /employees/edit/abc123 → id = "abc123"
-              The component reads it with: const { id } = useParams();
-              This is like [HttpGet("{id}")] in .NET controllers. */}
-          <Route path="/employees/edit/:id" element={<EmployeeForm />} />
-        </Route>
-
-        {/* CATCH-ALL ROUTE — if URL doesn't match any route above,
-            redirect to /employees. The "*" means "match anything".
-            replace={true} prevents this redirect from adding to browser history
-            (so the back button doesn't get stuck in a redirect loop). */}
-        <Route path="*" element={<Navigate to="/employees" replace />} />
-      </Routes>
-    </Router>
+      <RouterProvider router={router} />
     </ErrorBoundary>
   );
 }

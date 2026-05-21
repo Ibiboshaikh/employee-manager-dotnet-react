@@ -27,6 +27,8 @@
 import axios, { AxiosResponse } from "axios";
 import { Employee, LoginRequest, LoginResponse } from "../Types/Models";
 import { EmployeeId } from "../Types/Ids";
+import { routes } from "../routes";
+
 // ── CREATE AXIOS INSTANCE ──────────────────────────────────────────────────
 // axios.create() creates a custom instance with pre-configured settings.
 // All requests made through this instance will use these settings.
@@ -96,7 +98,7 @@ api.interceptors.response.use(
       // We use window.location.href instead of React's navigate() because
       // this interceptor runs OUTSIDE of React's component tree —
       // we don't have access to React hooks here.
-      window.location.href = "/login";
+      window.location.href = routes.login();
     }
 
     // Re-throw the error so the calling component's catch block can handle it.

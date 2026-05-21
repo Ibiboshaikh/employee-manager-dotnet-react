@@ -17,10 +17,12 @@ import useSort from '../hooks/useSort';
 import useEmployeeFilter from '../hooks/useEmployeeFilter';
 import useEmployees from '../hooks/useEmployees';
 import ConfirmModal from "./ConfirmModal";
-import { useAuth } from "../Context/AuthContext";
+// import { useAuth } from "../Context/AuthContext";
 import RecentActivityModal from "./RecentActivityModal";
 import { Employee } from "../Types/Models";
 import { EmployeeId } from "../Types/Ids";
+import { useSearchParams } from "react-router-dom";
+import { routes } from "../routes";
 
 const EmployeeList = () => {
   // ── HOOKS ──────────────────────────────────────────────────────────────
@@ -28,6 +30,7 @@ const EmployeeList = () => {
   const { employees, loading, handleDelete, fetchedAt, confirm, onConfirm, onCancel } = useEmployees();
 
   // Filter values, setters, and the filtered array.
+const [searchParams, setSearchParams] = useSearchParams();
   const {
     search, setSearch,
     department, setDepartment,
@@ -35,9 +38,9 @@ const EmployeeList = () => {
     minSalary, setMinSalary,
     maxSalary, setMaxSalary,
     filtered,
-  } = useEmployeeFilter(employees);
+  } = useEmployeeFilter(employees, searchParams, setSearchParams);
 
-  const { user, logout } = useAuth();
+  // const { user, logout } = useAuth();
 
   // Current { field, order } and a toggler.
   const [sort, handleSort] = useSort<Employee>('firstName');
@@ -89,14 +92,17 @@ const EmployeeList = () => {
   }, [filtered.length]);
 
   // ── HANDLERS ───────────────────────────────────────────────────────────
-  const handleLogout = () => {
-    logout();
-    navigate("/login");
-  };
+  // const handleLogout = () => {
+  //   logout();
+  //   navigate("/login");
+  // };
 
   // Stable callbacks for memoized EmployeeRow. Without useCallback, a new
   // function identity each render defeats React.memo on the row.
-  const onEdit = useCallback((id: EmployeeId) => navigate(`/employees/edit/${id}`), [navigate]);
+
+  
+
+  const onEdit = useCallback((id: EmployeeId) => navigate(routes.editEmployee(id)), [navigate]);
   const onDelete = useCallback((id: EmployeeId, name: string) => handleDelete(id, name), [handleDelete]);
 
   // ── RENDER ─────────────────────────────────────────────────────────────
@@ -106,7 +112,7 @@ const EmployeeList = () => {
     <div style={styles.container}>
 
       {/* NAVBAR — title left, user info + logout right */}
-      <div style={styles.navbar}>
+      {/* <div style={styles.navbar}>
         <h2 style={styles.navTitle}>Employee Manager</h2>
         <div style={styles.navRight}>
           <span style={styles.userName}>Hello, {user?.fullName}</span>
@@ -114,7 +120,7 @@ const EmployeeList = () => {
             Logout
           </button>
         </div>
-      </div>
+      </div> */}
 
       {/* HEADER — fetch timestamp, count, stats, add button */}
       <div style={styles.header}>
@@ -122,7 +128,7 @@ const EmployeeList = () => {
         <h3>Employees ({filtered.length})</h3>
         <StatsBar filtered={filtered} />
         <button
-          onClick={() => navigate("/employees/new")}
+          onClick={() => navigate(routes.newEmployee())}
           style={styles.addBtn}
         >
           + Add Employee
@@ -145,12 +151,8 @@ const EmployeeList = () => {
             maxSalary={maxSalary} onMaxSalaryChange={setMaxSalary}
             departments={[...new Set(employees.map(e => e.department))]}
             onClear={() => {
-              setSearch('');
-              setDepartment('');
-              sethideBelow50K(false);
-              setView(0);
-              setMinSalary('');
-              setMaxSalary('');
+              setSearchParams(new URLSearchParams(), { replace: true });
+              setView(0); // Kept since 'view' is a separate local state variable
             }}
           />
 
