@@ -4370,7 +4370,7 @@ route, not rewrite an existing one.
 
 CHALLENGE 19.2 — Refactor EmployeeForm to RHF               Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~60 min. Over target by ~25 min. Complete help from Gemini.
 
   TASK:
   1. Replace useState + handleChange + validate in EmployeeForm with:
@@ -4391,7 +4391,33 @@ YOUR TIME:
 
 CHALLENGE 19.3 — Zod schema validation                      Target: 30 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~70 min combined with 19.4 (rolled together because Gemini's
+fix path crossed both rounds). Over 19.3's target by ~40 min. Complete
+Gemini help on the install + schema build. Bugs faced: (1) npm peer-dep
+strict block — used --legacy-peer-deps to install @hookform/resolvers
+(rolled in early from 19.4). (2) Local TS engine too old to parse zod's
+type defs → upgraded TS, set tsconfig moduleResolution: "bundler" to
+silence the deprecation warning. (3) Resolver-type mismatch surfaced once
+the schema landed in useForm; Gemini's band-aids were `as any` on the
+resolver + hand-writing `interface EmployeeFormData` instead of
+`z.infer<typeof employeeSchema>` — both kept the bug, neither fixed it.
+PROPER FIX (own pass, no Gemini, ~70 min): swapped `z.coerce.number()` →
+`z.number()`. ROOT CAUSE — Zod has TWO types per schema:
+`z.input<typeof S>` (what you pass IN, before parsing) and
+`z.output<typeof S>` (what you get OUT). `z.infer` aliases output.
+`z.coerce.number()` is a TRANSFORMER: input `unknown`, output `number`.
+RHF's `Resolver<TFieldValues>` types against INPUT; useForm<z.infer<...>>
+types against OUTPUT — mismatch, hence Gemini's `as any`. Dropping
+`z.coerce` makes input === output, types align, `as any` removable.
+Coercion moves to the form layer (RHF's `valueAsNumber: true` on the
+salary register, already there). .NET MENTAL MODEL: `z.coerce.X()` is
+Convert.ChangeType running inside your DTO validator and changing the
+DTO's effective shape — vs. doing the conversion at the model-binder
+layer (RHF's job) and letting the validator see the already-typed value.
+Modern RHF + Zod = ALWAYS keep input === output; never coerce inside the
+schema. Replaced hand-written interface with `export type
+EmployeeFormData = z.infer<typeof employeeSchema>` — single source of
+truth, schema is now the only file to touch for shape OR rules.
 
   NEW HERE — read this before TASK:
   - Zod: a SCHEMA validation library. Declare shape + rules once;
@@ -4418,7 +4444,25 @@ YOUR TIME:
 
 CHALLENGE 19.4 — Wire Zod into RHF (resolver)               Target: 30 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: Rolled into 19.3's ~70 min combined session. Done in two
+passes: PASS 1 (with Gemini, inside 19.3's hour) — resolver wired with
+`as any` cast, inline `{ required: ... }` rules left on 7 of 8 fields
+(only salary cleaned up). Compiled green but kept the type mismatch
+hidden + had rules in two places. PASS 2 (own work, no Gemini) — removed
+`as any` (now safe because 19.3 fixed input === output), removed inline
+rules from firstName/lastName/email/department/position/dateOfJoining/
+phoneNumber. Salary kept `{ valueAsNumber: true }` — that's RHF
+coercion, not a validation rule, and is what makes z.number() in the
+schema work. Zod messages now flow through `errors.<field>.message` via
+the resolver — JSX error displays unchanged (4 of 8 fields show errors;
+the other 4 are silent, will be addressed in 19.5 UX polish round). WHAT
+GEMINI COULDN'T DO: read the architectural intent of the round. Its job
+was "make tsc green", which `as any` satisfies. The point of 19.4 ("Zod
+owns rules, register loses inline rules") is a single-source-of-truth
+move — invisible to a tool optimizing for compile success. Lesson: when
+Gemini's fix involves `as any`, hand-written types parallel to inferred
+ones, or "FIX TS<number>" comments, treat that as a flag — green tsc
+hides the bug; the architectural failure is silent.
 
   NEW HERE — read this before TASK:
   - "Resolver": adapter connecting a validation library to RHF.
@@ -4443,7 +4487,51 @@ YOUR TIME:
 
 CHALLENGE 19.5 — Field UX polish                            Target: 25 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~20 min (2026-05-25). Beat target by ~5 min. NO Gemini — done
+with concrete-first task table (8 numbered edits, before/after pairs).
+First pass landed 6 of 8 cleanly: setError destructured, touchedFields +
+isValid pulled from formState, touched-gating added to all 8 fields'
+error displays (including the 4 that previously had none — phoneNumber,
+department, position, dateOfJoining), createMutation got an onError that
+calls setError("root", {...}) + toast, updateMutation onError extended
+with the same setError("root", {...}) before the existing toast +
+optimistic rollback. Three items missed in pass 1, caught on review:
+(1) `mode: 'onTouched'` never added to useForm — without it, validation
+only fires on submit, so isValid stays false indefinitely and the
+disabled-until-valid Submit looks broken. (2) Submit button still
+`disabled={isPending}` — needed `!isValid || isPending`. (3) Root-error
+JSX display never added — the setError("root", ...) calls in both
+mutations were firing but had no on-screen anchor (only the toast). All
+three patched in pass 2. ADAPTATION FROM SPEC: spec said
+`!isValid || isSubmitting` but THIS form uses React Query mutations and
+`onValidSubmit` calls `.mutate()` fire-and-forget (not awaited), so
+RHF's `isSubmitting` flips false the instant mutate() returns and never
+reflects the real server call. Substituted `isPending` (from
+`createMutation.isPending || updateMutation.isPending`) — same intent,
+correct flag for the actual async lifecycle in this form. Bug along the
+way — typed `error.root` (singular) in JSX; tsc surfaced an oddly
+informative error: `Property 'root' does not exist on type
+'(...data: any[]) => void'`. The "type is a void-returning vararg
+function" is the giveaway — unbound `error` resolved to the global
+`console.error`. Renamed to `errors` (plural) to match the destructure.
+Concept locked: typo'd variable names that COMPILE because they
+shadow-resolve to a global (console, window, etc.) are silent killers
+— tsc only catches them because the global's TYPE doesn't have the
+property you're reaching for. PATTERNS LOCKED IN — REUSE FOR EVERY
+FUTURE FORM: (a) mode:'onTouched' + touchedFields-gated error JSX =
+"no errors until you've touched, then live feedback." (b) Disable
+Submit until form is valid AND no in-flight mutation. (c) Server
+errors → setError("root", {message}) inside mutation onError + inline
+{errors.root && ...} display at top of form, with toast as the
+ephemeral companion. ROUND 19 COMPLETE — RHF + ZOD ARC DONE: 19.1
+install + first form | 19.2 EmployeeForm refactor | 19.3 Zod schema |
+19.4 zodResolver wiring | 19.5 touched-aware UX + root errors. Total
+hands-on ~210 min (19.1: 20 + 19.2: 60 + 19.3+19.4 combined: ~140
+including pass-2 cleanup + 19.5: 20). Heavy Gemini reliance in 19.2 +
+19.3 PASS 1; 19.3 PASS 2 + 19.4 PASS 2 + 19.5 done solo. EmployeeForm
+is now the canonical RHF+Zod template — every Round 22+ feature form
+copies this shape (useForm config, schema co-located in
+src/schemas/, touched-aware errors, root-error inline + toast).
 
   NEW HERE — read this before TASK:
   - `formState.touchedFields`: map of `{ field: true }` for fields
@@ -9151,10 +9239,10 @@ Fill this in as you complete each challenge:
   18.4       | 25 min  | ~10 min   |  Router: search params for filters. Beat target by ~15 min. Took Gemini's help for syntax. Replaced local useState for search/department/hideBelow50K with useSearchParams. INTERESTING BUG — clear-filter wasn't working with key-by-key `.delete()` calls; Gemini's fix was to swap in `setSearchParams(new URLSearchParams(), { replace: true })` (wipe all params atomically) + keep `setView(0)` since `view` is still local state, not URL-bound. Filters now bookmarkable.
   18.5       | 25 min  | ~5 min    |  Router: typed route helpers. Beat target by ~20 min. NO Gemini — concrete-first lookup table (file/line/before/after) for all 14 call sites + "NOT TO TOUCH" list for the `:id` pattern and comments worked first try. Created src/routes.ts with 4 helpers (login/employees/newEmployee/editEmployee — last takes EmployeeId). `as const` on every return keeps literal types; functions (not values) for uniform call syntax + param support. Replaced literals in App.tsx, AuthLayout, EmployeeForm (3 sites), EmployeeList (2), Login, ProtectedRoute, api.ts. Round 18 COMPLETE.
   19.1       | 25 min  | ~20 min   |  RHF: install + first form. Beat target by ~5 min. Took Gemini's help on TestForm wiring (useForm/register/handleSubmit). Installed react-hook-form; created throwaway TestForm.tsx with one field + handleSubmit logging the data. SIDE DETOUR — routing experiment: tried sending login redirect to TestForm by changing the `employees` helper to return "/TestForm". Got it working because the helper is single-source-of-truth for BOTH navigate(routes.employees()) AND path: routes.employees() — flipping one literal flips both ends together. But that's hijacking, not adding: every other caller of routes.employees() (EmployeeForm post-save x3, AuthLayout brand link, App.tsx catch-all) would have silently redirected to TestForm. CONCEPT LOCKED IN: React Router doesn't auto-discover routes from navigate() calls — the URL string in navigate() must match a `path` in the route config exactly, char-for-char. .NET parallel: navigate("/x") = Response.Redirect("/x"); route config = [Route] attributes / MapControllerRoute. Restored employees helper to "/employees"; correct add-a-route pattern is helper + route entry + navigate target, three sites updated.
-  19.2       | 35 min  |           |  RHF: EmployeeForm refactor
-  19.3       | 30 min  |           |  Zod: schema validation
-  19.4       | 30 min  |           |  RHF + Zod: zodResolver
-  19.5       | 25 min  |           |  RHF: touched-aware + root errors
+  19.2       | 35 min  | ~60 min   |  RHF: EmployeeForm refactor. Over target by ~25 min. Complete help from Gemini.
+  19.3       | 30 min  | ~70 min   |  Zod: schema validation (combined w/ 19.4 — Gemini's fix path crossed both rounds). Over target by ~40 min. PASS 1 (Gemini): npm peer-dep block (--legacy-peer-deps), TS engine too old to parse zod types (upgraded TS + moduleResolution: "bundler"), resolver-type mismatch from `z.coerce.number()` band-aided with `as any` + hand-written `interface EmployeeFormData`. PASS 2 (own, no Gemini): root-cause fix — `z.coerce.number()` → `z.number()`. ROOT CAUSE LOCKED IN: Zod has z.input<S> (passed IN) and z.output<S> (got OUT after parsing); z.infer aliases output. z.coerce.X() is a TRANSFORMER, input=unknown, output=number. RHF's Resolver<T> types against INPUT, useForm<z.infer<...>> against OUTPUT → mismatch. Drop z.coerce → input === output → types align → `as any` removable. Coercion moves to form layer (valueAsNumber:true). .NET model: z.coerce.X() = Convert.ChangeType inside the DTO validator changing the DTO's effective shape; cleaner is conversion at the model-binder layer (RHF). Modern RHF+Zod RULE: never coerce inside the schema; keep input === output. Replaced hand-written interface with `export type EmployeeFormData = z.infer<typeof employeeSchema>` — schema now single source of truth for shape AND rules.
+  19.4       | 30 min  |           |  RHF + Zod: zodResolver. Rolled into 19.3's combined hour. PASS 1 (Gemini): resolver wired with `as any`, inline `{ required: ... }` left on 7 of 8 fields. PASS 2 (own, no Gemini): removed `as any` (safe after 19.3's input===output fix), stripped all 7 inline rules. Salary kept `valueAsNumber:true` (RHF coercion, not a rule — what makes z.number() in schema work). GEMINI'S BLIND SPOT: optimized for "tsc green" which `as any` satisfies; architectural intent of "Zod owns rules, no rule duplication" is invisible to that goal. Heuristic: `as any`, hand-written types parallel to inferred ones, or `// FIX TS<number>` comments = green tsc hides bug, silent architectural failure.
+  19.5       | 25 min  | ~20 min   |  RHF: touched-aware + root errors (2026-05-25). Beat target by ~5 min. NO Gemini — concrete-first 8-edit task table. PASS 1: 6 of 8 clean (setError + touchedFields + isValid destructured, touch-gating on all 8 fields including the 4 missing displays, setError("root",...) in both mutation onErrors). PASS 2: caught missing `mode:'onTouched'` (without it isValid stays false → Submit looks permanently broken), missing `!isValid` on Submit disabled, missing `{errors.root && ...}` inline display (setError firing but no anchor). ADAPTATION: spec said `!isValid || isSubmitting` but with RQ mutations `.mutate()` is fire-and-forget so RHF's isSubmitting is useless here — substituted `isPending` (createMutation.isPending || updateMutation.isPending), same intent, right flag for this lifecycle. BUG: `error.root` typo (singular) — tsc error `Property 'root' does not exist on type '(...data: any[]) => void'` revealed it shadow-resolved to global console.error; renamed to `errors` (plural). Concept: typo'd identifiers that compile because they bind to a global (console/window/etc.) are silent killers — tsc only catches them when the global's TYPE doesn't have the property you reached for. PATTERNS LOCKED IN: (a) mode:'onTouched' + touchedFields-gated JSX = "no errors until interacted." (b) Submit disabled until isValid && no in-flight mutation. (c) Server errors → setError("root",{message}) in mutation onError + inline `{errors.root && ...}` at top of form + toast as ephemeral companion. ROUND 19 COMPLETE — RHF+ZOD ARC DONE. EmployeeForm is canonical template for every Round 22+ feature form (schema in src/schemas/, touched-aware errors, root inline+toast).
   20.1       | 35 min  |           |  Auth: refresh token endpoint
   20.2       | 40 min  |           |  Auth: refresh interceptor
   20.3       | 40 min  |           |  Auth: first-login forced password

@@ -41,7 +41,7 @@
 
 // ── IMPORTS ────────────────────────────────────────────────────────────────
 
-import React, { useState, useEffect } from "react";
+import { useEffect } from "react";
 import { isAxiosError } from 'axios';
 // useNavigate: programmatic navigation (go to another page)
 // useParams: read URL parameters (the :id from /employees/edit/:id)
@@ -56,15 +56,9 @@ import { Employee } from "../Types/Models";
 import { toEmployeeId } from "../Types/Ids";
 import { employeeKeys } from "../Queries/employeeKeys";
 import { routes } from "../routes";
-
-interface FormErrors {
-  firstName?: string;
-  lastName?: string;
-  email?: string;
-  salary?: string;
-}
-
-type EmployeeFormData = Omit<Employee, 'id' | 'salary'> & {salary: string};
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { employeeSchema, EmployeeFormData } from "../schemas/employeeSchema";
 
 const useEmployee = (id: ReturnType<typeof toEmployeeId> | undefined) => {
   return useQuery({
@@ -108,20 +102,33 @@ const EmployeeForm = () => {
   //
   // Each property matches the "name" attribute of its corresponding <input>.
   // This is important for the handleChange function to work correctly.
-  const [formData, setFormData] = useState<EmployeeFormData>({
-    firstName: "",       // Text input
-    lastName: "",        // Text input
-    email: "",           // Email input
-    phoneNumber: "",     // Text input (matches Employee.PhoneNumber in domain)
-    department: "",      // Select dropdown
-    position: "",        // Text input
-    salary: "",          // Number input (stored as string until submission)
-    dateOfJoining: "",   // Date input (format: "YYYY-MM-DD")
-    isActive: true,      // Checkbox (true/false)
+
+  // RHF + Zod: the schema owns all validation rules (see employeeSchema.ts).
+  // That's why register() calls below have no inline { required: ... } — one
+  // source of truth, change the schema and both rules + type update.
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setError,
+    formState: { errors, touchedFields, isValid }
+  } = useForm<EmployeeFormData>({
+    resolver: zodResolver(employeeSchema),
+    mode: "onTouched", // Validate fields when they are touched (blurred)
+    defaultValues: {
+      firstName: "",
+      lastName: "",
+      email: "",
+      phoneNumber: "",
+      department: "",
+      position: "",
+      salary: 0,
+      dateOfJoining: "",
+      isActive: true,
+    }
   });
 
   // loading: true while an API call is in progress (submit button shows "Saving...")
-  const [errors, setErrors] = useState<FormErrors>({}); // For future validation error handling
   const queryClient = useQueryClient();
   
   // ── FETCH EMPLOYEE DATA FOR EDIT MODE ──────────────────────────────────
@@ -137,21 +144,21 @@ const EmployeeForm = () => {
   // above the line it disables — no other comments in between.
   useEffect(() => {
     if (employeeData) {
-      setFormData({
+      reset({
         firstName: employeeData.firstName,
         lastName: employeeData.lastName,
         email: employeeData.email,
         phoneNumber: employeeData.phoneNumber || "",
         department: employeeData.department,
         position: employeeData.position,
-        salary: employeeData.salary.toString(),
+        salary: employeeData.salary,
         dateOfJoining: employeeData.dateOfJoining
           ? new Date(employeeData.dateOfJoining).toISOString().split("T")[0]
           : "",
         isActive: employeeData.isActive,
       });
     }
-  }, [employeeData]); // Triggers automatically the exact millisecond data arrives
+  }, [employeeData, reset]); // Triggers automatically the exact millisecond data arrives
 
   // Fetch a single employee's data from the API and fill the form.
 
@@ -184,6 +191,12 @@ const EmployeeForm = () => {
       queryClient.invalidateQueries({ queryKey: employeeKeys.all });
       toast.success("Employee created successfully");
       navigate(routes.employees());
+    },
+    onError: (error) =>{
+      const message = isAxiosError<{ message?: string }>(error)? error.response?.data?.message || "Failed to create employee"
+      : "Failed to create employee";
+      setError("root", { message });
+      toast.error(message);
     }
   });
 
@@ -203,6 +216,7 @@ const EmployeeForm = () => {
       const errorMessage = isAxiosError<{ message?: string }>(error)
       ? error.response?.data?.message || "Failed to update employee"
       : "Failed to update employee";
+      setError("root", { message: errorMessage });
       toast.error(errorMessage);
 
       if (context?.previousEmployees) {
@@ -220,145 +234,79 @@ const EmployeeForm = () => {
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
-  const handleChange = (e:  React.ChangeEvent<HTMLInputElement| HTMLSelectElement>) => {
-    // Destructure the event target to get the input's properties
-    const { name, value, type, checked } = e.target as HTMLInputElement;
-    // name: the input's name attribute (e.g., "firstName", "salary")
-    // value: the current text/number in the input
-    // type: the input type (e.g., "text", "checkbox", "number")
-    // checked: for checkboxes only — true if checked, false if unchecked
-
-    setFormData((prev) => ({
-      ...prev,  // Copy all existing fields (spread operator)
-      // For checkboxes, use "checked" (boolean). For everything else, use "value" (string).
-      [name]: type === "checkbox" ? checked : value,
-      // ^^^ [name] is a "computed property name" — uses the variable's VALUE as the key.
-      // If name = "firstName", this becomes: { firstName: value }
-    }));
-  };
-
-  const Validate = (): FormErrors =>{
-    const errs: FormErrors = {};
-      if(!formData.firstName) errs.firstName = "First Name is required";
-      if(!formData.lastName) errs.lastName = "Last Name is required";
-      if(!formData.email) errs.email = "Email is required";
-      if (parseFloat(formData.salary) <=0) errs.salary = "Salary must be greater than zero";
-    return errs;
+  const onValidSubmit = (data: EmployeeFormData) => {
+    if (isEditMode) {
+      const payload: Employee = {
+        ...data,
+        id: toEmployeeId(id!),
+        salary: data.salary
+      };
+      updateMutation.mutate(payload);
+    }
+    else {
+      const payload: Omit<Employee, 'id'> = {
+        ...data,
+        salary: data.salary
+      };
+      createMutation.mutate(payload);
+    }
   }
 
   // ── FORM SUBMISSION HANDLER ────────────────────────────────────────────
   //
   // Called when the user clicks "Create Employee" or "Update Employee".
   // Determines which API call to make based on isEditMode.
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    // Prevent default form behavior (page reload)
-    e.preventDefault();
-    const errs = Validate();
-    if(Object.keys(errs).length > 0){
-      setErrors(errs);
-      return;
-    }
-    setErrors({});
-    const salaryNumber = parseFloat(formData.salary);
-    if(isEditMode){
-      const payload: Employee ={
-        ...formData,
-        id: toEmployeeId(id!),
-        salary: salaryNumber
-      };
-      updateMutation.mutate(payload);
-    }
-    else{
-      const payload: Omit<Employee, 'id'> ={
-        ...formData,
-        salary: salaryNumber
-      };
-      createMutation.mutate(payload);
-    }
-  };
-
+  
   // ── JSX RETURN (the form UI) ───────────────────────────────────────────
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-
-        {/* Dynamic title based on mode */}
         <h2 style={styles.title}>
           {isEditMode ? "Edit Employee" : "Add New Employee"}
-        </h2>
+        </h2> 
 
-        {/* THE FORM — onSubmit triggers our handleSubmit function */}
-        <form onSubmit={handleSubmit}>
-
-          {/* ══════════════════════════════════════════════════════════════
-              ROW 1: First Name + Last Name (side by side)
-              The "row" style uses display: "flex" to place them horizontally.
-              Each "formGroup" has flex: 1 so they share width equally.
-              ══════════════════════════════════════════════════════════════ */}
+        {/* Bind your form submission run wrapper */}
+        <form onSubmit={handleSubmit(onValidSubmit)}>
+          {errors.root && <p style={{color: 'Red', fontSize: '14px', marginBottom: '20px'}}>{errors.root.message}</p>}
           <div style={styles.row}>
             <div style={styles.formGroup}>
               <label style={styles.label}>First Name *</label>
               <input
-                type="text"               // Standard text input
-                name="firstName"          // Links to formData.firstName (for handleChange)
-                value={formData.firstName} // Controlled: value comes from state
-                onChange={handleChange}    // Every keystroke → handleChange → state update
+                type="text"
                 style={styles.input}
+                {...register("firstName")}
               />
-              {errors.firstName && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>
-                {errors.firstName}
-              </p>}
+              {touchedFields.firstName && errors.firstName && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.firstName.message}</p>}
             </div>
+
             <div style={styles.formGroup}>
               <label style={styles.label}>Last Name *</label>
               <input
                 type="text"
-                name="lastName"            // Links to formData.lastName
-                value={formData.lastName}
-                onChange={handleChange}
                 style={styles.input}
+                {...register("lastName")}
               />
-              {errors.lastName && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>
-                {errors.lastName}
-              </p>}
+              {touchedFields.lastName && errors.lastName && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.lastName.message}</p>}
             </div>
           </div>
 
-          {/* ══════════════════════════════════════════════════════════════
-              ROW 2: Email (full width)
-              ══════════════════════════════════════════════════════════════ */}
           <div style={styles.formGroup}>
             <label style={styles.label}>Email *</label>
             <input
-              type="email"               // Email type — browser validates format (must contain @)
-              name="email"
-              value={formData.email}
-              onChange={handleChange}
+              type="email"
               style={styles.input}
+              {...register("email")}
             />
-            {errors.email && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>
-              {errors.email}
-            </p>}
+            {touchedFields.email && errors.email && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.email.message}</p>}
           </div>
 
-          {/* ══════════════════════════════════════════════════════════════
-              ROW 3: Department (dropdown) + Position (text)
-              ══════════════════════════════════════════════════════════════ */}
           <div style={styles.row}>
             <div style={styles.formGroup}>
               <label style={styles.label}>Department *</label>
-              {/* SELECT DROPDOWN — works exactly like text inputs with handleChange.
-                  The name="department" links to formData.department.
-                  When user selects an option, onChange fires with the option's value. */}
               <select
-                name="department"
-                value={formData.department}  // Controlled: selected option comes from state
-                onChange={handleChange}       // Selection change → state update
                 style={styles.input}
-                required
+                {...register("department")}
               >
-                {/* The first option with value="" acts as a placeholder.
-                    "required" validation prevents submitting with this selected. */}
                 <option value="">Select Department</option>
                 <option value="Engineering">Engineering</option>
                 <option value="Human Resources">Human Resources</option>
@@ -367,103 +315,71 @@ const EmployeeForm = () => {
                 <option value="Sales">Sales</option>
                 <option value="Operations">Operations</option>
               </select>
+              {touchedFields.department && errors.department && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.department.message}</p>}
             </div>
+
             <div style={styles.formGroup}>
               <label style={styles.label}>Position *</label>
               <input
                 type="text"
-                name="position"
-                value={formData.position}
-                onChange={handleChange}
                 style={styles.input}
-                required
+                {...register("position")}
               />
+              {touchedFields.position && errors.position && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.position.message}</p>}
             </div>
           </div>
 
-          {/* ══════════════════════════════════════════════════════════════
-              ROW 4: Salary + Date of Joining
-              ══════════════════════════════════════════════════════════════ */}
           <div style={styles.row}>
             <div style={styles.formGroup}>
               <label style={styles.label}>Salary (USD) *</label>
               <input
-                type="number"            // Number input — only allows numeric values
-                name="salary"
-                value={formData.salary}
-                onChange={handleChange}
+                type="number"
                 style={styles.input}
-                min="0"                  // Minimum value (can't type negative)
-                step="0.01"             // Allows cents (e.g., 75000.50)
+                step="0.01"
+                // valueAsNumber: RHF coerces string→number BEFORE Zod validates.
+                // That's what lets the schema use z.number(), not z.coerce.number().
+                {...register("salary", { valueAsNumber: true })}
               />
-              {errors.salary && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>
-                {errors.salary}
-              </p>}
+              {touchedFields.salary && errors.salary && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.salary.message}</p>}
             </div>
+
             <div style={styles.formGroup}>
               <label style={styles.label}>Date of Joining *</label>
               <input
-                type="date"              // Date picker — shows calendar UI
-                name="dateOfJoining"
-                value={formData.dateOfJoining}  // Must be "YYYY-MM-DD" format
-                onChange={handleChange}
+                type="date"
                 style={styles.input}
-                required
+                {...register("dateOfJoining")}
               />
+              {touchedFields.dateOfJoining && errors.dateOfJoining && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.dateOfJoining.message}</p>}
             </div>
+
             <div style={styles.formGroup}>
               <label style={styles.label}>Phone Number *</label>
               <input
                 type="tel"
-                name="phoneNumber"            // Links to formData.phoneNumber
-                value={formData.phoneNumber}
-                onChange={handleChange}
                 style={styles.input}
-                required
+                {...register("phoneNumber")}
               />
+              {touchedFields.phoneNumber && errors.phoneNumber && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.phoneNumber.message}</p>}
             </div>
           </div>
 
-          {/* ══════════════════════════════════════════════════════════════
-              ROW 5: Active Status (checkbox)
-              ══════════════════════════════════════════════════════════════ */}
           <div style={styles.checkboxGroup}>
             <input
-              type="checkbox"            // Checkbox — true/false toggle
-              name="isActive"            // Links to formData.isActive
-              checked={formData.isActive} // IMPORTANT: checkboxes use "checked", not "value"
-              onChange={handleChange}     // handleChange uses e.target.checked for checkboxes
-              id="isActive"              // id links this input to the label below (for accessibility)
+              type="checkbox"
+              id="isActive"
+              {...register("isActive")}
             />
-            {/* htmlFor (not "for") links the label to the checkbox by id.
-                Clicking the label text also toggles the checkbox. */}
             <label htmlFor="isActive" style={styles.checkboxLabel}>
               Active Employee
             </label>
           </div>
 
-          {/* ══════════════════════════════════════════════════════════════
-              ACTION BUTTONS: Submit + Cancel
-              ══════════════════════════════════════════════════════════════ */}
           <div style={styles.buttonRow}>
-            {/* SUBMIT BUTTON — triggers the form's onSubmit event */}
-            <button type="submit" style={styles.submitBtn} disabled={isPending}>
-            {/* <button type="submit" style={styles.submitBtn} disabled={loading}> */}
-              {/* Triple ternary: loading → "Saving..." | edit → "Update" | create → "Create"
-                  This is equivalent to:
-                  if (loading) return "Saving...";
-                  else if (isEditMode) return "Update Employee";
-                  else return "Create Employee"; */}
-              {isPending
-                ? "Saving..."
-                : isEditMode
-                ? "Update Employee"
-                : "Create Employee"}
+            <button type="submit" style={styles.submitBtn} disabled={!isValid || isPending}>
+              {isPending ? "Saving..." : isEditMode ? "Update Employee" : "Create Employee"}
             </button>
 
-            {/* CANCEL BUTTON — goes back to employee list without saving.
-                type="button" prevents this from triggering form submission.
-                (Default type for <button> inside <form> is "submit") */}
             <button
               type="button"
               onClick={() => navigate(routes.employees())}
