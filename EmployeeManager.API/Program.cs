@@ -30,10 +30,10 @@
 // ── IMPORTS ────────────────────────────────────────────────────────────────
 using System.Text;                             // Encoding.UTF8 for JWT key
 using EmployeeManager.Application.Services;    // IEmployeeService, IAuthService, etc.
-using EmployeeManager.Domain.Models;           // Employee, User models
-using EmployeeManager.Domain.Repositories;     // IEmployeeRepository, IUserRepository
+using EmployeeManager.Domain.Models;           // Employee model
+using EmployeeManager.Domain.Repositories;     // IEmployeeRepository
 using EmployeeManager.Infrastructure.Data;     // JsonDataStore
-using EmployeeManager.Infrastructure.Repositories; // EmployeeRepository, UserRepository
+using EmployeeManager.Infrastructure.Repositories; // EmployeeRepository
 using Microsoft.AspNetCore.Authentication.JwtBearer; // JWT authentication scheme
 using Microsoft.IdentityModel.Tokens;          // TokenValidationParameters
 using Serilog;                                 // Structured logging library
@@ -98,20 +98,17 @@ try
     // ^^^ AppContext.BaseDirectory = the folder where the compiled DLL lives.
     //     Path.Combine joins path parts: "bin/Debug/net10.0" + "Data" + "employees.json"
 
-    builder.Services.AddSingleton(new JsonDataStore<User>(
-        Path.Combine(AppContext.BaseDirectory, "Data", "users.json")));
-
     // ── REPOSITORY LAYER (Scoped) ──────────────────────────────────────────
     // "When someone asks for IEmployeeRepository, give them an EmployeeRepository."
     // This is the core of DI: classes depend on INTERFACES, and we configure
     // which IMPLEMENTATION to use HERE — in one central place.
     builder.Services.AddScoped<IEmployeeRepository, EmployeeRepository>();
-    builder.Services.AddScoped<IUserRepository, UserRepository>();
 
     // ── SERVICE LAYER (Scoped) ─────────────────────────────────────────────
     // Same pattern: interface → implementation.
     builder.Services.AddScoped<IEmployeeService, EmployeeService>();
     builder.Services.AddScoped<IAuthService, AuthService>();
+    builder.Services.AddSingleton<IRefreshTokenStore, RefreshTokenStore>();
 
     // ── STEP 4: Configure JWT Authentication ───────────────────────────────
     //

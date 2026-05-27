@@ -1,5 +1,10 @@
 # Employee Manager - Learning Challenges
 
+Domain: Employee self-service system. Every employee logs in to manage
+their own documents, attendance, leave, etc. `admin` is an Employee
+with `Role=Admin`. (Decided 2026-05-27 during Round 20.3 planning —
+the early `User`/`Employee` split was wrong; collapsed in Round 20.3.)
+
 Rules:
   - Do them IN ORDER. Each one builds on the previous.
   - Don't skip ahead. Don't read ahead.
@@ -4569,7 +4574,62 @@ This round directly enables Phase 3 features that need role checks.
 
 CHALLENGE 20.1 — Refresh token endpoint (.NET)              Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~120 min (2026-05-26). Over target by ~85 min. NO Gemini —
+Claude help across multiple revisions. Scaffolding pass landed cleanly
+(LoginResponse renamed Token→AccessToken + ExpiresIn=900; access JWT
+lifetime dropped 24h→15min; IRefreshTokenStore + RefreshTokenStore new
+files w/ ConcurrentDictionary<string,(username,expiresAt)> singleton +
+RandomNumberGenerator-based 64-byte opaque tokens; RefreshResult DTO;
+DI as Singleton in Program.cs). Cascade of compile errors all rooted in
+ONE design mistake on the store interface: ValidateAndRotate originally
+typed `string?` (just the new token) — but AuthService also needs the
+USERNAME to look up the user and generate a JWT. Fix required widening
+to `(string NewToken, string UserName)?`. Three sub-bugs surfaced along
+the way: (1) wrote `rotated.value.userName` (lowercase .value, doesn't
+exist on string) — C# concept locked in: Nullable<T>.Value is only on
+NULLABLE VALUE TYPES (int?, DateTime?, value-tuple?); `string?` is just
+a reference type with a compiler nullability annotation — no .Value
+accessor. (2) On fix pass, dropped the trailing `?` — `(string, string)`
+is non-nullable so `rotated == null` errored because the comparison is
+provably impossible; compiler caught it. (3) Field-name drift between
+interface (OldToken) and impl (Username) — picked Username since the
+old token is gone after TryRemove, returning it would be useless. Also
+caught: IAuthService.LogoutAsync() declared no-param but impl took
+(string refreshToken) — interface method unimplemented, build broke
+until interface updated. AuthController buildout: injected
+IRefreshTokenStore, added SetRefreshCookie/DeleteRefreshCookie helpers,
+new [HttpPost("refresh")] and [HttpPost("logout")] endpoints, Login
+now Issues + SetRefreshCookies before Ok(response). THREE BUGS IN
+CONTROLLER PASS 1 caught by Claude review: (a) Login didn't Issue or
+SetRefreshCookie at all — endpoint compiled but did nothing useful;
+(b) /refresh returned `{ token = ... }` instead of `{ accessToken = ... }`
+— shape drift between login and refresh would have forced React to
+special-case two shapes in 20.2; (c) cookie helpers had no Path —
+default is "/" which ships the refresh cookie on EVERY API call
+(employee, etc.) wasting bandwidth + slight info leak; also Delete
+silently no-ops if Path doesn't match Append (browser treats different-
+Path same-name cookies as different cookies). Fixed to Path="/api/auth"
+on both. GOTCHA DEFERRED (not blocking): Secure=true on http://localhost
+means the browser silently drops the cookie on response — production-
+correct, dev-broken. Will gate on IWebHostEnvironment.IsDevelopment()
+or flip when wiring 20.2 React side; for now Secure stays true and
+local cookie testing happens via Postman (which doesn't enforce Secure).
+CONCEPTS LOCKED IN: (1) `T?` on a value type wraps Nullable<T> — use
+.Value to unwrap. (2) `T?` on a reference type is a compiler hint, no
+runtime wrapper — use it directly after null-check. (3) value tuples
+ARE value types — `(string,string)?` is Nullable<(string,string)>,
+.Value gets the tuple, then .FieldName. (4) Refresh-token store needs
+to return both new-token AND identity; one-output APIs leak
+responsibility back to caller. (5) Cookie Path is part of the cookie's
+identity — different Path = different cookie for Append/Delete
+matching. (6) `Secure` flag is a hard browser rule, not a soft
+preference — HTTP origins drop Secure cookies silently. .NET MENTAL
+MODEL: ConcurrentDictionary.TryRemove + TryAdd ≈ atomic rotate; an
+in-memory IRefreshTokenStore singleton ≈ IDistributedCache in a
+single-instance config; for real prod swap to IDistributedCache(Redis)
+so refresh tokens survive restarts/scale-out. ROUND 20.1 COMPLETE —
+build clean (0 warnings, 0 errors). Backend acceptance test pending
+(login→refresh→rotate→logout→refresh-401 via Postman).
 
   NEW HERE — read this before TASK:
   - REFRESH TOKEN PATTERN: short-lived access token (15 min) + long-
@@ -4627,20 +4687,136 @@ YOUR TIME:
   that re-attempts on 401.
 
 
-CHALLENGE 20.3 — First-login forced password change         Target: 40 min
+CHALLENGE 20.3 — Merge User into Employee                   Target: 60 min
+--------------------------------------------------------------------------
+YOUR TIME: ~30 min (2026-05-27). Beat target by ~30 min. Round started
+as planning, escalated to a domain reframe mid-conversation — pushed
+back on "this is an HR system" framing in favour of employee SELF-
+SERVICE (every employee logs in). Pivoted from Option B (Employee→User
+FK link) to Option A (merge) and updated CHALLENGES.md FIRST (new
+Round 20.3 inserted, 20.3→20.4→20.5→20.6 renumbered, Round 24 + Round
+39 cross-references swapped, top-of-file domain framing line added)
+before touching any code. EXECUTION-ORDER GOTCHA: migrated admin from
+users.json into employees.json by hand BEFORE adding Username/Password
+Hash/Role fields to Employee.cs — caught the risk in time (System.Text
+.Json would have silently dropped the three unknown fields on the next
+ReadModifyWrite and erased them); kept the backend stopped until step
+1 ran. TWO-SIDED REFACTOR CALLER MISS (recurring pattern, now in auth
+code, +1 to the count): field rename _userRepository → _employee
+Repository updated cleanly in the constructor + LoginAsync + Refresh
+Async but FIVE consumer sites missed — SeedDefaultUserAsync (stale
+_userRepository call + `new User` type + FullName property), Generate
+JwtToken signature (User → Employee param), and two `user.FullName`
+references that needed `$"{u.FirstName} {u.LastName}"` since Employee
+has no FullName. NEW: `user.Username` is now `string?` (nullable on
+Employee — not every row has login access yet), so passing to `new
+Claim(...)` needs `!` (null-forgiving) — same .NET nullable-reference-
+type rules from 20.1's `T?` lesson. INTERFACE-WITHOUT-IMPL CAUGHT BY
+COMPILER: declared GetByUsernameAsync on IEmployeeRepository but
+skipped the impl in EmployeeRepository.cs — `dotnet build` failed with
+CS0535 "does not implement interface member"; added body matching
+existing GetByIdAsync style (case-insensitive Username.Equals + null
+guard since Username is nullable). SERIALIZER SIDE EFFECT: first write
+after schema change rewrote employees.json and added `"Username":
+null, "PasswordHash": null, "Role": "Employee"` to ALL 73 pre-existing
+rows — System.Text.Json writes every model property by default, no
+data loss but the diff is misleading at first glance. PATH BUG IN
+ROUND SPEC: originally wrote `Domain/Interfaces/IEmployeeRepository.cs`
+but the actual path is `Domain/Repositories/` — caught the typo, fixed
+the spec. STALE COMMENTS DEFERRED: AuthService header docstring still
+says "users.json" in 4 places + Program.cs `using` comment + lingering
+"User" doc references — not compile errors, deliberately not touched
+(per Minimal Scope memory). POST-MERGE STATE: 74 employee rows (73
+originals + 1 system admin), admin / admin123 login works against the
+new lookup path, new employee creates correctly default the auth
+fields to null. CONCEPTS LOCKED IN: aggregate consolidation (two
+entities mapping 1:1 onto the same real-world thing → merge; separate
+aggregates carry hidden FK + transaction costs forever); execution
+order in schema migrations is load-bearing (model first, then data,
+then consumers, else silent data loss via serializer); interface-only
+changes aren't free — the compiler enforces total impl coverage, you
+can't "stub later" without breaking the build; `dotnet build` after
+every step is the cheapest validation gate. .NET MENTAL MODEL: same
+pattern as collapsing Customer + CustomerProfile in DDD when CRM
+bolted on fields that should have been on Customer from day one —
+usually a sign the original aggregate boundary was drawn around the
+access pattern (auth vs. HR) rather than the real-world identity.
+
+  NEW HERE — read this before TASK:
+  - Domain reframe: this is an employee SELF-SERVICE system, not an HR
+    system. Every employee logs in to manage their own documents,
+    attendance, leave, etc. The early `User`/`Employee` split was
+    wrong — one person, one row. `admin` becomes an Employee with
+    `Role=Admin` and HR fields null/placeholder.
+  - Refactor pattern (aggregate consolidation): when two entities map
+    1:1 onto the same real-world thing, merge them — separate
+    aggregates carry hidden FK + transaction costs forever. Same as
+    collapsing Customer + CustomerProfile in .NET DDD when CRM bolted
+    on fields that should have been on Customer from day one.
+
+  TASK (concrete edits):
+  1. EmployeeManager.Domain/Models/Employee.cs — add:
+       public string? Username { get; set; }
+       public string? PasswordHash { get; set; }
+       public string Role { get; set; } = "Employee";   // Admin|Manager|Employee
+     (Username/PasswordHash nullable — legacy rows may not have them.)
+  2. Migrate admin from users.json into employees.json by hand:
+       - Copy Id, Username, PasswordHash from users.json
+       - Set FirstName="System", LastName="Administrator", Role="Admin",
+         Email="admin@local", IsActive=true
+       - Leave HR fields (Dept, Position, Salary, DateOfJoining,
+         PhoneNumber) as defaults.
+  3. EmployeeManager.Domain/Repositories/IEmployeeRepository.cs — add:
+       Task<Employee?> GetByUsernameAsync(string username);
+     Implement in EmployeeManager.Infrastructure/Repositories/EmployeeRepository.cs.
+  4. EmployeeManager.Application/Services/AuthService.cs:
+       - Replace IUserRepository dep with IEmployeeRepository.
+       - Replace _users.GetByUsernameAsync(...) with _employees....
+       - Update seed-default-user logic (~line 131) to seed an
+         Employee row, not a User.
+  5. EmployeeManager.API/Program.cs:
+       Remove IUserRepository / JsonDataStore<User> registrations
+       (~line 102). Confirm Employee registrations are intact.
+  6. Delete now-unused files:
+       - EmployeeManager.Domain/Models/User.cs
+       - EmployeeManager.Infrastructure/Repositories/UserRepository.cs
+       - EmployeeManager.Domain/Repositories/IUserRepository.cs (if present)
+       - EmployeeManager.API/bin/Debug/net10.0/Data/users.json
+  7. Run backend. Login with admin / admin123 must still work.
+  8. Smoke test: create a new employee via the existing form. New row
+     in employees.json should have Username/PasswordHash as null
+     (the onboarding wizard fills those in Round 39).
+
+  RULES:
+  - Don't introduce a FK between Employee and any other table — this
+    is a merge, not a relationship.
+  - Username uniqueness can wait until Round 39 (you have only one
+    username-bearing row right now: admin).
+  - Don't touch React yet — login response shape doesn't change
+    (still { accessToken, user: {...} }); the server's internal
+    model changed, not its public contract.
+
+  WHAT YOU JUST LEARNED:
+  Aggregate consolidation. Merging two 1:1 entities removes hidden
+  coordination cost. The .NET DDD parallel: don't model a separate
+  aggregate just because the data was originally introduced via a
+  different feature.
+
+
+CHALLENGE 20.4 — First-login forced password change         Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
   NEW HERE — read this before TASK:
-  - First-login pattern: when an admin creates a user, they set a
-    DEFAULT password (e.g. "user123") and a `mustChangePassword:
-    true` flag on the user record. On first login, the API includes
-    this flag in the response. The client redirects to a forced
-    change-password page and DOESN'T let the user navigate anywhere
-    else until they change it.
+  - First-login pattern: when an admin creates an employee with login
+    access, they set a DEFAULT password (e.g. "user123") and a
+    `mustChangePassword: true` flag on the employee record. On first
+    login, the API includes this flag in the response. The client
+    redirects to a forced change-password page and DOESN'T let the
+    user navigate anywhere else until they change it.
 
   TASK:
-  1. .NET side: User model gains `MustChangePassword: bool`. Login
+  1. .NET side: Employee model gains `MustChangePassword: bool`. Login
      response includes it: `{ accessToken, user: { ..., mustChangePassword } }`.
   2. Add POST /api/auth/change-password — body `{ oldPassword,
      newPassword }`. On success: clears `MustChangePassword`.
@@ -4663,7 +4839,7 @@ YOUR TIME:
   (TOS acceptance, profile completion, etc.).
 
 
-CHALLENGE 20.4 — Role-based route guards                    Target: 25 min
+CHALLENGE 20.5 — Role-based route guards                    Target: 25 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
@@ -4686,7 +4862,7 @@ YOUR TIME:
   manager/admin views.
 
 
-CHALLENGE 20.5 — useAuth narrowing + capstone               Target: 25 min
+CHALLENGE 20.6 — useAuth narrowing + capstone               Target: 25 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
@@ -5082,7 +5258,7 @@ YOUR TIME:
 ROUND 24 — FEATURE: CHANGE PASSWORD (designed 2026-05-15)
 ================================================================================
 
-Pacing: One challenge per day. Builds on Round 20.3 (forced first-login
+Pacing: One challenge per day. Builds on Round 20.4 (forced first-login
 flow). This round covers the NORMAL change-password path (already
 logged in, voluntary change).
 
@@ -5092,7 +5268,7 @@ CHALLENGE 24.1 — Change-password endpoint                   Target: 25 min
 YOUR TIME:
 
   TASK:
-  1. POST /api/auth/change-password from Round 20.3 is already there.
+  1. POST /api/auth/change-password from Round 20.4 is already there.
      Verify it works when MustChangePassword is false (normal path).
   2. Validate password strength server-side: min 8 chars, contains
      digit + letter + special.
@@ -5103,7 +5279,7 @@ YOUR TIME:
   - Don't return the new password back in any response.
 
   WHAT YOU JUST LEARNED:
-  One endpoint, two callers: forced flow (Round 20.3) and voluntary
+  One endpoint, two callers: forced flow (Round 20.4) and voluntary
   flow (this round). Same endpoint, different UX wrappers.
 
 
@@ -6776,9 +6952,10 @@ YOUR TIME:
 ROUND 39 — FEATURE: ONBOARDING WIZARD (designed 2026-05-15)
 ================================================================================
 
-Pacing: One challenge per day. HR creates a new employee via a multi-
-step form. Includes the default password + first-login flag from
-Round 20.3.
+Pacing: One challenge per day. Admin creates a new employee via a
+multi-step form. Includes the default password + first-login flag
+from Round 20.4. (Post-20.3 merge: Employee is the single entity —
+auth fields live on Employee, no separate User row.)
 
 
 CHALLENGE 39.1 — Wizard state machine                        Target: 30 min
@@ -6838,8 +7015,9 @@ YOUR TIME:
   TASK:
   1. Account step: username, default password (defaults to "user123",
      editable), role select.
-  2. Final submit: POST /api/admin/onboard — creates Employee + User
-     in one transaction with `mustChangePassword: true`.
+  2. Final submit: POST /api/admin/onboard — creates Employee row
+     with auth fields filled in (Username, hashed password, Role,
+     `MustChangePassword: true`).
   3. Success: navigate /admin/employees, toast with credentials shown
      (HR copies + delivers to user).
 
@@ -6848,7 +7026,8 @@ YOUR TIME:
   - `mustChangePassword: true` is implicit on this endpoint.
 
   WHAT YOU JUST LEARNED:
-  Multi-entity creation. One server call, transactional.
+  Single-entity creation with combined identity + HR profile + auth.
+  Onboarding is one write, not a two-aggregate transaction.
 
 
 CHALLENGE 39.4 — Confirmation step                            Target: 25 min
@@ -9243,11 +9422,12 @@ Fill this in as you complete each challenge:
   19.3       | 30 min  | ~70 min   |  Zod: schema validation (combined w/ 19.4 — Gemini's fix path crossed both rounds). Over target by ~40 min. PASS 1 (Gemini): npm peer-dep block (--legacy-peer-deps), TS engine too old to parse zod types (upgraded TS + moduleResolution: "bundler"), resolver-type mismatch from `z.coerce.number()` band-aided with `as any` + hand-written `interface EmployeeFormData`. PASS 2 (own, no Gemini): root-cause fix — `z.coerce.number()` → `z.number()`. ROOT CAUSE LOCKED IN: Zod has z.input<S> (passed IN) and z.output<S> (got OUT after parsing); z.infer aliases output. z.coerce.X() is a TRANSFORMER, input=unknown, output=number. RHF's Resolver<T> types against INPUT, useForm<z.infer<...>> against OUTPUT → mismatch. Drop z.coerce → input === output → types align → `as any` removable. Coercion moves to form layer (valueAsNumber:true). .NET model: z.coerce.X() = Convert.ChangeType inside the DTO validator changing the DTO's effective shape; cleaner is conversion at the model-binder layer (RHF). Modern RHF+Zod RULE: never coerce inside the schema; keep input === output. Replaced hand-written interface with `export type EmployeeFormData = z.infer<typeof employeeSchema>` — schema now single source of truth for shape AND rules.
   19.4       | 30 min  |           |  RHF + Zod: zodResolver. Rolled into 19.3's combined hour. PASS 1 (Gemini): resolver wired with `as any`, inline `{ required: ... }` left on 7 of 8 fields. PASS 2 (own, no Gemini): removed `as any` (safe after 19.3's input===output fix), stripped all 7 inline rules. Salary kept `valueAsNumber:true` (RHF coercion, not a rule — what makes z.number() in schema work). GEMINI'S BLIND SPOT: optimized for "tsc green" which `as any` satisfies; architectural intent of "Zod owns rules, no rule duplication" is invisible to that goal. Heuristic: `as any`, hand-written types parallel to inferred ones, or `// FIX TS<number>` comments = green tsc hides bug, silent architectural failure.
   19.5       | 25 min  | ~20 min   |  RHF: touched-aware + root errors (2026-05-25). Beat target by ~5 min. NO Gemini — concrete-first 8-edit task table. PASS 1: 6 of 8 clean (setError + touchedFields + isValid destructured, touch-gating on all 8 fields including the 4 missing displays, setError("root",...) in both mutation onErrors). PASS 2: caught missing `mode:'onTouched'` (without it isValid stays false → Submit looks permanently broken), missing `!isValid` on Submit disabled, missing `{errors.root && ...}` inline display (setError firing but no anchor). ADAPTATION: spec said `!isValid || isSubmitting` but with RQ mutations `.mutate()` is fire-and-forget so RHF's isSubmitting is useless here — substituted `isPending` (createMutation.isPending || updateMutation.isPending), same intent, right flag for this lifecycle. BUG: `error.root` typo (singular) — tsc error `Property 'root' does not exist on type '(...data: any[]) => void'` revealed it shadow-resolved to global console.error; renamed to `errors` (plural). Concept: typo'd identifiers that compile because they bind to a global (console/window/etc.) are silent killers — tsc only catches them when the global's TYPE doesn't have the property you reached for. PATTERNS LOCKED IN: (a) mode:'onTouched' + touchedFields-gated JSX = "no errors until interacted." (b) Submit disabled until isValid && no in-flight mutation. (c) Server errors → setError("root",{message}) in mutation onError + inline `{errors.root && ...}` at top of form + toast as ephemeral companion. ROUND 19 COMPLETE — RHF+ZOD ARC DONE. EmployeeForm is canonical template for every Round 22+ feature form (schema in src/schemas/, touched-aware errors, root inline+toast).
-  20.1       | 35 min  |           |  Auth: refresh token endpoint
+  20.1       | 35 min  | ~120 min  |  Auth: refresh token endpoint (2026-05-26). Over target by ~85 min. NO Gemini — Claude help across multiple revisions. Scaffolding (DTOs, store, AuthService methods, DI registration, 15-min JWT lifetime, opaque 64-byte refresh tokens via RandomNumberGenerator, ConcurrentDictionary-backed singleton store) landed cleanly; cascade of compile errors all rooted in one design mistake — IRefreshTokenStore.ValidateAndRotate originally returned `string?` (new token only) but AuthService also needs USERNAME to issue a fresh JWT; fix: widen to `(string NewToken, string UserName)?`. Three sub-bugs along the way: (a) `rotated.value.userName` — lowercase .value doesn't exist on `string?` because string is a REFERENCE type and `?` is just a compiler hint, NOT a Nullable<T> wrapper; .Value only exists on nullable value types (int?, DateTime?, tuple?); (b) on fix pass dropped trailing `?` making the tuple non-nullable, `rotated == null` errored because the comparison is provably impossible; (c) field-name drift between interface (OldToken) and impl (Username) — picked Username since old token is gone after TryRemove. Also IAuthService.LogoutAsync() declared no-param but impl took (string refreshToken) — interface mismatch caught at build. AuthController buildout (Login Issues+SetCookies, [HttpPost("refresh")], [HttpPost("logout")], helpers) had THREE bugs in pass 1: Login didn't Issue/SetCookie at all (endpoint compiled but did nothing); /refresh returned `{ token = ... }` instead of `{ accessToken = ... }` (shape drift between login and refresh would force React to special-case in 20.2); cookie helpers had no Path so default `/` ships cookie on every API call AND Delete silently no-ops when Path doesn't match Append (browser treats different-Path same-name cookies as different cookies). Fixed Path="/api/auth" on both. GOTCHA DEFERRED: Secure=true on http://localhost silently drops cookie on response — production-correct, dev-broken; testing via Postman for now (doesn't enforce Secure); will gate on IWebHostEnvironment.IsDevelopment() when wiring 20.2. CONCEPTS LOCKED IN: `T?` on value type = Nullable<T>, use .Value; `T?` on ref type = compiler hint, no .Value; value tuples ARE value types so `(string,string)?` IS Nullable<(string,string)>; refresh-token store must return identity + new token together (one-output APIs leak responsibility to caller); Cookie Path is part of cookie identity for Append/Delete matching; Secure is a hard browser rule, HTTP origins drop Secure cookies silently. .NET MENTAL MODEL: ConcurrentDictionary.TryRemove + TryAdd ≈ atomic rotate; in-memory IRefreshTokenStore singleton ≈ IDistributedCache in single-instance config; prod swap to IDistributedCache(Redis) so refresh tokens survive restarts/scale-out. Build clean (0 warnings, 0 errors). Backend acceptance test (login→refresh→rotate→logout→refresh-401 via Postman) pending.
   20.2       | 40 min  |           |  Auth: refresh interceptor
-  20.3       | 40 min  |           |  Auth: first-login forced password
-  20.4       | 25 min  |           |  Auth: role-based route guards
-  20.5       | 25 min  |           |  Auth: useAuth narrowing
+  20.3       | 60 min  | ~30 min   |  Auth: merge User into Employee (2026-05-27). Beat target by ~30 min. Mid-round design pivot: pushed back on "HR system" framing in favour of employee SELF-SERVICE (every employee logs in). Pivoted Option B (Employee→User FK link) → Option A (merge) and updated CHALLENGES.md FIRST (new 20.3 inserted, 20.3→20.4→20.5→20.6 renumbered, Round 24 + Round 39 cross-refs swapped, top-of-file domain framing line added) before touching code. EXECUTION-ORDER GOTCHA: migrated admin from users.json into employees.json by hand BEFORE adding Username/PasswordHash/Role to Employee.cs — caught the risk in time (System.Text.Json would have silently dropped the three unknown fields on next ReadModifyWrite and erased them); kept backend stopped until step 1 ran. TWO-SIDED REFACTOR CALLER MISS (+1 to the count, now in auth code): field rename _userRepository → _employeeRepository landed cleanly in ctor + LoginAsync + RefreshAsync but FIVE consumer sites missed — SeedDefaultUserAsync (stale field call + `new User` type + FullName property), GenerateJwtToken signature (User → Employee), two `user.FullName` refs needing `$"{u.FirstName} {u.LastName}"` since Employee has no FullName. NEW: `user.Username` is now `string?` (nullable — not every employee has login access yet), so `new Claim(...)` needs `!` (null-forgiving) — same .NET nullable-reference-type rules from 20.1's `T?` lesson. INTERFACE-WITHOUT-IMPL CAUGHT BY COMPILER: declared GetByUsernameAsync on IEmployeeRepository but skipped the impl in EmployeeRepository.cs — `dotnet build` failed with CS0535 "does not implement interface member"; added body matching GetByIdAsync style (case-insensitive Username.Equals + null guard since Username is nullable). SERIALIZER SIDE EFFECT: first write after schema change rewrote employees.json and added `"Username": null, "PasswordHash": null, "Role": "Employee"` to ALL 73 pre-existing rows — System.Text.Json writes every model property by default, no data loss but diff is misleading at first glance. PATH BUG IN ROUND SPEC: originally wrote `Domain/Interfaces/IEmployeeRepository.cs` but actual path is `Domain/Repositories/` — user caught the typo; fixed in spec. STALE COMMENTS DEFERRED: AuthService header docstring still says "users.json" in 4 places + Program.cs `using` comment — not compile errors, deliberately untouched (Minimal Scope). POST-MERGE STATE: 74 employee rows (73 originals + 1 system admin), admin/admin123 login works against the new lookup path, new employee creates correctly default auth fields to null (onboarding wizard in Round 39 will fill them). CONCEPTS LOCKED IN: aggregate consolidation (two entities mapping 1:1 onto the same real-world thing → merge; separate aggregates carry hidden FK + transaction costs forever); execution order in schema migrations is load-bearing (model first, then data, then consumers, else silent data loss via serializer); interface-only changes aren't free — compiler enforces total impl coverage, no "stub later" without breaking the build; `dotnet build` after every step is the cheapest validation gate. .NET MENTAL MODEL: same pattern as collapsing Customer + CustomerProfile in DDD when CRM bolted on fields that should have been on Customer from day one — sign the original aggregate boundary was drawn around the access pattern (auth vs. HR), not the real-world identity.
+  20.4       | 40 min  |           |  Auth: first-login forced password
+  20.5       | 25 min  |           |  Auth: role-based route guards
+  20.6       | 25 min  |           |  Auth: useAuth narrowing
   21.1       | 20 min  |           |  Tailwind: install + config
   21.2       | 30 min  |           |  Tailwind: refactor StatusBadge/Row
   21.3       | 35 min  |           |  Tailwind: EmployeeList + Form

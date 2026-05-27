@@ -25,7 +25,8 @@ export interface LoginRequest {
 }
 
 export interface LoginResponse {
-    token: string;
+    accessToken: string;
+    expiresIn: number; // Token lifetime in seconds
     fullName: string;
     role: User['role'];
 }

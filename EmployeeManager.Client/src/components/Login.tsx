@@ -115,7 +115,7 @@ const Login = () => {
       // useAuth() sees the new user immediately.
       // Aliased to `loginCredentials` here because the API's `login`
       // function (imported above) shadows the same name.
-      loginCredentials(response.data, response.data.token);
+      loginCredentials(response.data, response.data.accessToken);
 
       // Show a green success toast popup
       toast.success(`Welcome, ${response.data.fullName}!`);

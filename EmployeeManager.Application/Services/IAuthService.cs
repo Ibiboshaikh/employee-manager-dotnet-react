@@ -32,4 +32,6 @@ public interface IAuthService
     /// Default credentials: admin / admin123
     /// </summary>
     Task SeedDefaultUserAsync();
+    Task<RefreshResult?> RefreshAsync(string refreshToken);
+    Task LogoutAsync(string refreshToken);
 }

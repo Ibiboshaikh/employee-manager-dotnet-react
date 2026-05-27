@@ -87,4 +87,7 @@ public class Employee
     public bool IsActive { get; set; } = true;
     public string PhoneNumber { get; set; } = string.Empty;
     
+    public string? Username { get; set; }
+    public string? PasswordHash { get; set; }
+    public string Role { get; set; } = "Employee";   // Admin|Manager|Employee
 }

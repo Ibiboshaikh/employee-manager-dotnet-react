@@ -81,6 +81,19 @@ public class EmployeeRepository : IEmployeeRepository
     }
 
     /// <summary>
+    /// Finds a single employee by their login Username (case-insensitive).
+    /// Returns null if no employee has that username, or has no username at all.
+    /// Called by: AuthService during login + refresh.
+    /// </summary>
+    public async Task<Employee?> GetByUsernameAsync(string username)
+    {
+        var employees = await _store.ReadAllAsync();
+        return employees.FirstOrDefault(e =>
+            e.Username != null &&
+            e.Username.Equals(username, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// Adds a new employee to the JSON file.
     /// Generates a new GUID for the employee's Id before saving.
     /// Returns the employee with the newly generated Id.

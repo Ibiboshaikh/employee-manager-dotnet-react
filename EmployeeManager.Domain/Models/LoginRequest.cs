@@ -60,7 +60,7 @@ public class LoginResponse
     /// "Authorization: Bearer {token}" header for all API requests.
     /// Valid for 24 hours (configured in AuthService).
     /// </summary>
-    public string Token { get; set; } = string.Empty;
+    public string AccessToken { get; set; } = string.Empty;
 
     /// <summary>
     /// Display name to show in the UI (e.g., in the navbar greeting: "Hello, System Administrator").
@@ -72,4 +72,10 @@ public class LoginResponse
     /// The React app can show/hide features based on role (e.g., admin panel).
     /// </summary>
     public string Role { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Expiration time of the JWT token in seconds since Unix epoch.
+    /// The React app can use this to automatically log out the user when the token expires.
+    /// </summary>
+    public int ExpiresIn { get; set; }
 }

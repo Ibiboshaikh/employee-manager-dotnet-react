@@ -47,8 +47,8 @@ namespace EmployeeManager.Application.Services;
 public class AuthService : IAuthService
 {
     // Repository for user data access (reads/writes users.json)
-    private readonly IUserRepository _userRepository;
-
+    private readonly IEmployeeRepository _employeeRepository;
+    private readonly IRefreshTokenStore _refreshTokenStore;
     // Configuration — reads values from appsettings.json
     // Used to get JWT secret key, issuer, and audience.
     // Example: _configuration["Jwt:Secret"] reads the "Secret" value under the "Jwt" section.
@@ -61,11 +61,13 @@ public class AuthService : IAuthService
     /// Constructor — all dependencies injected by .NET's DI container.
     /// </summary>
     public AuthService(
-        IUserRepository userRepository,
+        IEmployeeRepository employeeRepository,
+        IRefreshTokenStore refreshTokenStore,
         IConfiguration configuration,
         ILogger<AuthService> logger)
     {
-        _userRepository = userRepository;
+        _employeeRepository = employeeRepository;
+        _refreshTokenStore = refreshTokenStore;
         _configuration = configuration;
         _logger = logger;
     }
@@ -86,7 +88,7 @@ public class AuthService : IAuthService
         _logger.LogInformation("Login attempt for user: {Username}", request.Username);
 
         // STEP 1: Find the user by username (case-insensitive)
-        var user = await _userRepository.GetByUsernameAsync(request.Username);
+        var user = await _employeeRepository.GetByUsernameAsync(request.Username);
         if (user == null)
         {
             // User doesn't exist — log a warning and return null
@@ -114,9 +116,10 @@ public class AuthService : IAuthService
         // Return the token and user info to the React frontend
         return new LoginResponse
         {
-            Token = token,            // The JWT token string
-            FullName = user.FullName, // Display name for the UI
-            Role = user.Role          // Role for conditional UI rendering
+            AccessToken = token,            // The JWT token string
+            FullName = $"{user.FirstName} {user.LastName}", // Display name for the UI
+            Role = user.Role,          // Role for conditional UI rendering
+            ExpiresIn = 900       // Token expiration time in seconds (15 minutes)
         };
     }
 
@@ -134,20 +137,41 @@ public class AuthService : IAuthService
     public async Task SeedDefaultUserAsync()
     {
         // Check if the admin user already exists
-        var existingUser = await _userRepository.GetByUsernameAsync("admin");
+        var existingUser = await _employeeRepository.GetByUsernameAsync("admin");
         if (existingUser != null)
             return;  // Already seeded — do nothing
 
         _logger.LogInformation("Seeding default admin user");
 
         // Create the default admin user with a hashed password
-        await _userRepository.CreateAsync(new User
+        await _employeeRepository.CreateAsync(new Employee
         {
             Username = "admin",
             PasswordHash = HashPassword("admin123"), // Hash the password BEFORE storing
-            FullName = "System Administrator",
+            FirstName = "System",
+            LastName = "Administrator",
             Role = "Admin"
         });
+    }
+
+    public async Task<RefreshResult?> RefreshAsync(string refreshToken)
+    {
+        var rotated = _refreshTokenStore.ValidateAndRotate(refreshToken);
+        if (rotated is null) return null;
+        var user = await _employeeRepository.GetByUsernameAsync(rotated.Value.UserName);
+        if (user is null) return null;
+        return new RefreshResult
+        {
+            AccessToken = GenerateJwtToken(user),
+            NewRefreshToken = rotated.Value.NewToken,
+            ExpiresIn = 15*60
+        };
+    }
+
+    public Task LogoutAsync(string refreshToken)
+    {
+        _refreshTokenStore.Invalidate(refreshToken);
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -163,10 +187,10 @@ public class AuthService : IAuthService
     /// This signature proves the token was created by our server and hasn't been modified.
     /// If anyone changes the payload, the signature won't match → the token is rejected.
     ///
-    /// EXPIRATION: The token expires after 24 hours. After that, the user must log in again.
+    /// EXPIRATION: The token expires after 15 minutes. After that, the user must log in again.
     /// The React frontend detects expired tokens (401 response) and redirects to /login.
     /// </summary>
-    private string GenerateJwtToken(User user)
+    private string GenerateJwtToken(Employee user)
     {
         // Create a symmetric security key from the JWT secret in appsettings.json.
         // "Symmetric" means the same key is used to both SIGN and VERIFY the token.
@@ -183,9 +207,9 @@ public class AuthService : IAuthService
         var claims = new[]
         {
             // JwtRegisteredClaimNames are standard claim names defined by the JWT specification.
-            new Claim(JwtRegisteredClaimNames.Sub, user.Username),       // Subject: who is this token for
+            new Claim(JwtRegisteredClaimNames.Sub, user.Username!),       // Subject: who is this token for
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()), // Unique token ID
-            new Claim(ClaimTypes.Name, user.FullName),                    // .NET claim: display name
+            new Claim(ClaimTypes.Name, $"{user.FirstName} {user.LastName}"),                    // .NET claim: display name
             new Claim(ClaimTypes.Role, user.Role)                         // .NET claim: role for [Authorize(Roles="Admin")]
         };
 
@@ -194,7 +218,7 @@ public class AuthService : IAuthService
             issuer: _configuration["Jwt:Issuer"],       // Who created the token (e.g., "EmployeeManager")
             audience: _configuration["Jwt:Audience"],    // Who the token is for (e.g., "EmployeeManagerApp")
             claims: claims,                              // The user information
-            expires: DateTime.UtcNow.AddHours(24),       // Token expires in 24 hours
+            expires: DateTime.UtcNow.AddMinutes(15),       // Token expires in 15 minutes
             signingCredentials: credentials               // The signature
         );
 
