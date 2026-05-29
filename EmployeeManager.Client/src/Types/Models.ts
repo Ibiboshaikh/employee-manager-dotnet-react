@@ -10,6 +10,7 @@ export interface Employee {
     salary: number;
     dateOfJoining: string;
     isActive: boolean;
+    mustChangePassword: boolean;
 }
 
 export interface User {
@@ -25,7 +26,8 @@ export interface LoginRequest {
 }
 
 export interface LoginResponse {
-    token: string;
+    accessToken: string;
+    expiresIn: number; // Token lifetime in seconds
     fullName: string;
     role: User['role'];
 }

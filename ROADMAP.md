@@ -70,7 +70,7 @@ exclusively over HTTP/JSON.
 | Server state   | TanStack Query 5                          | In use         |
 | HTTP client    | axios 1.14                                | In use         |
 | Notifications  | react-toastify                            | In use         |
-| Forms          | React Hook Form + Zod                     | Planned        |
+| Forms          | React Hook Form + Zod                     | In use         |
 | Styling        | Tailwind CSS                              | Planned        |
 | Client state   | Zustand                                   | Planned        |
 | Build tooling  | react-scripts → Vite                      | Migration planned |
@@ -88,11 +88,72 @@ EmployeeManager/
 └── EmployeeManager.Client/         React SPA
 ```
 
+### Frontend dependencies (installed)
+
+Packages currently in `EmployeeManager.Client/package.json`. Each entry
+records the version, the round it was introduced, and the reason it
+was chosen over the alternatives.
+
+| Package                          | Version | Introduced | Why                                                                                     |
+| -------------------------------- | ------- | ---------- | --------------------------------------------------------------------------------------- |
+| `react`                          | 19.2    | Round 2    | Core UI library. The project's reason to exist.                                         |
+| `react-dom`                      | 19.2    | Round 2    | React's renderer for the browser DOM.                                                   |
+| `react-scripts`                  | 5.0.1   | Round 2    | Create React App build tooling. Migration to Vite planned (Round 48).                   |
+| `typescript`                     | 6.0     | Round 14   | Compile-time type safety. Strict mode enforced from Round 16.                           |
+| `@types/react`                   | 19.2    | Round 14   | TypeScript definitions for React's JSX and hooks.                                       |
+| `@types/react-dom`               | 19.2    | Round 14   | TypeScript definitions for `react-dom`.                                                 |
+| `@types/node`                    | 25.7    | Round 14   | TypeScript definitions for Node globals used in tooling.                                |
+| `react-router-dom`               | 7.13    | Round 18   | Client-side routing. v7 ships the data-router API used for typed route helpers.         |
+| `axios`                          | 1.14    | Round 17   | HTTP client. Used over `fetch` for interceptors (auth header injection, 401 refresh).   |
+| `@tanstack/react-query`          | 5.100   | Round 17   | Server-state cache. Replaced the hand-rolled `useEmployees` hook with caching, retries, mutations, and devtools. |
+| `@tanstack/react-query-devtools` | 5.100   | Round 17   | In-browser query inspector. Visualises cache state, query lifecycle, and invalidations. |
+| `react-toastify`                 | 11.0    | Round 7    | Pop-up notifications for success/error feedback. Single `<ToastContainer />` in App.tsx.|
+| `react-hook-form`                | 7.76    | Round 19   | Form state management. Chosen for uncontrolled-input performance and minimal re-renders.|
+| `zod`                            | 4.4     | Round 19   | Runtime schema validation. Drives both validation rules and inferred TypeScript types.  |
+| `@hookform/resolvers`            | 5.4     | Round 19   | Bridges Zod schemas into React Hook Form via `zodResolver(schema)`.                     |
+| `@testing-library/react`         | 16.3    | (CRA default) | Component testing library. Active use begins Round 42.                              |
+| `@testing-library/jest-dom`      | 6.9     | (CRA default) | Custom Jest matchers for DOM assertions (`toBeInTheDocument`, etc.).                |
+| `@testing-library/user-event`    | 13.5    | (CRA default) | User-interaction simulation for tests.                                              |
+| `@testing-library/dom`           | 10.4    | (CRA default) | Core querying primitives used by React Testing Library.                             |
+| `web-vitals`                     | 2.1     | (CRA default) | Browser performance metric collection. Reactivated during Round 45 perf pass.       |
+
+### Frontend dependencies (planned)
+
+Reserved for upcoming rounds. Listed here so the rationale is recorded
+before installation, not retrofitted afterwards.
+
+| Package                  | Planned round | Why                                                                                  |
+| ------------------------ | ------------- | ------------------------------------------------------------------------------------ |
+| `tailwindcss`, `postcss`, `autoprefixer` | Round 21 | Utility-first CSS. Replaces inline `style={{ }}` objects; supports dark mode + design tokens. |
+| `clsx`                   | Round 21.2    | Conditional `className` composition. Standard companion to Tailwind.                  |
+| `date-fns`               | Round 23.3    | Deterministic date formatting. Avoids `toLocaleDateString` locale drift.              |
+| `zustand`                | Round 22      | Lightweight global-state library. Replaces Context for theme + recent activity with selective subscriptions. |
+| `react-day-picker`       | Round 29.4    | Date-range picker for leave-request form.                                             |
+| `recharts`               | Round 34.3    | Chart library for manager dashboard KPIs.                                             |
+| `@microsoft/signalr`     | Round 41      | Real-time client for SignalR hub (live notifications, presence).                      |
+| `vitest`                 | Round 42      | Test runner. Pairs with Vite migration (Round 48).                                    |
+| `@playwright/test`       | Round 43      | End-to-end browser testing.                                                           |
+| `framer-motion`          | Round 51      | Animation primitives (page transitions, list enter/exit).                             |
+
+### Backend NuGet packages (installed)
+
+All backend dependencies ship with the .NET 10 SDK; no additional NuGet
+packages have been added yet. References used:
+
+| Reference                                               | Purpose                                |
+| ------------------------------------------------------- | -------------------------------------- |
+| `Microsoft.AspNetCore.Authentication.JwtBearer`         | JWT validation middleware              |
+| `Microsoft.IdentityModel.Tokens` / `System.IdentityModel.Tokens.Jwt` | JWT token generation      |
+| `Microsoft.AspNetCore.Http.Features`                    | `IFormFile` for multipart uploads (Round 25) |
+
+Planned: `BCrypt.Net-Next` when the password hashing is upgraded from
+HMAC-SHA256 (security review, Round 56).
+
 ---
 
 ## Current state
 
-As of 2026-05-21, the foundation work is approximately 82% complete.
+As of 2026-05-29, the foundation work is approximately 88% complete.
 Feature modules begin once the foundation closes.
 
 | Area                                   | State       |
@@ -101,10 +162,18 @@ Feature modules begin once the foundation closes.
 | React migration to TypeScript (strict) | Complete    |
 | Server-state layer (TanStack Query)    | Complete    |
 | Routing layer (data router, typed URLs) | Complete   |
-| Forms (RHF + Zod)                      | In progress |
-| Auth hardening (refresh, first-login)   | Pending    |
+| Forms (RHF + Zod)                      | Complete    |
+| Auth hardening (refresh, first-login)   | In progress |
 | Styling (Tailwind)                     | Pending     |
 | Client state (Zustand)                 | Pending     |
+
+Auth hardening detail: refresh-token rotation (Round 20.1) and axios
+refresh interceptor (Round 20.2) are complete. User-into-Employee
+aggregate consolidation (Round 20.3) merged on 2026-05-27. Remaining
+work: forced first-login password change (20.4), role-based route
+guards (20.5), and Context narrowing capstone (20.6). After Round 20
+closes, Rounds 21 (Tailwind) and 22 (Zustand) complete the
+foundation; feature modules begin at Round 23.
 
 Detailed per-task history is tracked in [`CHALLENGES.md`](./CHALLENGES.md).
 
@@ -147,11 +216,12 @@ responsive/mobile pass, design-system primitives.
 Estimates assume sustained progress at the current cadence and include
 slack for unplanned work. Dates are target windows, not commitments.
 
-| Milestone                          | Target          |
-| ---------------------------------- | --------------- |
-| Foundation complete                | End of May 2026 |
-| Phase 1 modules complete           | Mid-July 2026   |
-| Phase 2 platform work complete     | September 2026  |
+| Milestone                          | Target              |
+| ---------------------------------- | ------------------- |
+| Foundation complete                | Mid-June 2026       |
+| Round 30 (Leave approval flow)     | End of June 2026    |
+| Phase 1 modules complete           | Late August 2026    |
+| Phase 2 platform work complete     | Mid-December 2026   |
 
 ---
 

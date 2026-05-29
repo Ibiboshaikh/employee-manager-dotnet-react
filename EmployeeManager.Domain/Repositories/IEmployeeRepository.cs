@@ -55,6 +55,13 @@ public interface IEmployeeRepository
     //     The caller must handle the null case (employee not found).
 
     /// <summary>
+    /// Gets a single employee by their login username.
+    /// Returns null if no employee has that username (or has no username at all).
+    /// Used by AuthService during login.
+    /// </summary>
+    Task<Employee?> GetByUsernameAsync(string username);
+
+    /// <summary>
     /// Creates a new employee in the data store.
     /// The implementation generates a new GUID for the Id property.
     /// Returns the created employee (with the generated Id).

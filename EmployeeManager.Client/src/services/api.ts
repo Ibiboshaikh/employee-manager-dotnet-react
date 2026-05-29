@@ -45,6 +45,7 @@ const api = axios.create({
   //
   // WHY? Hardcoding URLs breaks across environments (dev, staging, prod).
   //   Relative URLs + proxy is the enterprise-standard pattern.
+  withCredentials: true, // Include cookies in cross-origin requests (for refresh token)
 });
 
 // ── REQUEST INTERCEPTOR ────────────────────────────────────────────────────
@@ -83,22 +84,47 @@ api.interceptors.request.use((config) => {
 // - No token was sent at all
 //
 // In any of these cases, we clear the stored auth data and force a login.
+
+let refreshPromise: Promise<string> | null = null; // To track ongoing refresh token request
+
 api.interceptors.response.use(
   // SUCCESS handler — if the response is 2xx, just pass it through unchanged.
   (response) => response,
 
   // ERROR handler — if the response is an error (4xx, 5xx), check if it's 401.
-  (error) => {
+  async (error) => {
     if (error.response?.status === 401) {
-      // Token is expired or invalid — clear all auth data from localStorage
-      localStorage.removeItem("token"); // Remove the JWT token
-      localStorage.removeItem("user");  // Remove the user info (name, role)
+      const originalRequest = error.config as (typeof error.config & { _retry?: boolean }) | undefined;
 
-      // Force redirect to login page.
-      // We use window.location.href instead of React's navigate() because
-      // this interceptor runs OUTSIDE of React's component tree —
-      // we don't have access to React hooks here.
-      window.location.href = routes.login();
+      const is401 = error.response?.status === 401;
+      const isRefreshCall = originalRequest?.url?.includes("/auth/refresh");
+      const alreadyRetried = originalRequest?._retry === true;
+
+      if(!is401 || !originalRequest || isRefreshCall || alreadyRetried) {
+        return Promise.reject(error); // Don't handle 401 errors for refresh calls or if already retried
+      }
+
+      originalRequest._retry = true; // Mark the request as already retried
+
+      try {
+        refreshPromise ??= refresh().then((res) =>{
+          localStorage.setItem("token", res.data.accessToken); // Update token in localStorage
+          return res.data.accessToken;
+        }).finally(() =>{
+          refreshPromise = null; // Reset the refresh promise after completion
+        });
+
+        const newToken = await refreshPromise;
+        originalRequest.headers = originalRequest.headers || {};
+        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+        return api(originalRequest); // Retry the original request with the new token
+
+      } catch (refreshError){
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        window.location.href = routes.login(); // Redirect to login page
+        return Promise.reject(refreshError); // Reject the original error after handling refresh failure
+      }
     }
 
     // Re-throw the error so the calling component's catch block can handle it.
@@ -117,12 +143,16 @@ api.interceptors.response.use(
  *
  * Usage in Login.tsx:
  *   const response = await login({ username: 'admin', password: 'admin123' });
- *   const token = response.data.token;
+ *   const token = response.data.accessToken;
  *
  * Maps to: POST http://localhost:5000/api/auth/login
  * .NET endpoint: AuthController.Login()
  */
 export const login = (credentials: LoginRequest): Promise<AxiosResponse<LoginResponse>> => api.post<LoginResponse>("/auth/login", credentials);
+
+export const refresh = (): Promise<AxiosResponse<LoginResponse>> => api.post<LoginResponse>("/auth/refresh");
+
+export const logout = (): Promise<AxiosResponse<void>> => api.post("/auth/logout");
 
 // ── EMPLOYEE CRUD API CALLS ────────────────────────────────────────────────
 // Each function maps to one REST endpoint on the .NET EmployeeController.
