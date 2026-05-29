@@ -4803,85 +4803,809 @@ access pattern (auth vs. HR) rather than the real-world identity.
   different feature.
 
 
-CHALLENGE 20.4 — First-login forced password change         Target: 40 min
+CHALLENGE 20.4 — First-login forced password change         Target: 60 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - First-login pattern: when an admin creates an employee with login
-    access, they set a DEFAULT password (e.g. "user123") and a
-    `mustChangePassword: true` flag on the employee record. On first
-    login, the API includes this flag in the response. The client
-    redirects to a forced change-password page and DOESN'T let the
-    user navigate anywhere else until they change it.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Real apps don't let admins create users with a known password and
+  trust them to "remember to change it later." Compliance frameworks
+  (SOC 2, ISO 27001) require: temporary password → forced rotation on
+  first login → no other action allowed until rotated.
 
-  TASK:
-  1. .NET side: Employee model gains `MustChangePassword: bool`. Login
-     response includes it: `{ accessToken, user: { ..., mustChangePassword } }`.
-  2. Add POST /api/auth/change-password — body `{ oldPassword,
-     newPassword }`. On success: clears `MustChangePassword`.
-  3. Client: store `user.mustChangePassword` in AuthContext.
-  4. Add /auth/force-change-password route — a stripped-down page
-     with only the change-password form.
-  5. App-level redirect: if user.mustChangePassword AND current path
-     ≠ /auth/force-change-password, redirect there. Block all other
-     navigation.
+  You already added `MustChangePassword = true` to Employee.cs
+  (defaults to true so every new row is locked). This round wires
+  that flag through the API response, into AuthContext, and out to a
+  client-side redirect guard that blocks every other route until the
+  user complies.
 
-  RULES:
-  - The forced page must NOT have logout-as-cancel — user can't
-    bypass it.
-  - Old password is required even on forced change (defense against
-    session hijack).
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet (READ BEFORE TASK)
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Forced workflows. The pattern: a server flag + a client redirect
-  guard + a single-purpose page. Reused in many enterprise flows
-  (TOS acceptance, profile completion, etc.).
+  1) DTO vs Domain Model (.NET)
+     - `Employee` (domain model) has PasswordHash, internal fields.
+     - `ChangePasswordRequest` (DTO) is the request body shape — only
+       what the client is allowed to send.
+     - Never expose PasswordHash or other secrets via the domain model.
+       DTOs are the firewall between "wire format" and "internal model."
+     - Same as a .NET API where you NEVER return the EF entity directly.
+
+  2) The redirect-guard pattern in React
+     - A redirect guard is a component that wraps protected children
+       and returns `<Navigate to=... />` when a condition is met.
+     - Lives in the routing layer — every child route inherits the
+       check without knowing it exists.
+     - You already have `ProtectedRoute` (checks for a token). The new
+       guard checks `mustChangePassword` and is layered INSIDE it.
+
+  3) "Stripped-down page" — no shared layout
+     - The forced page must NOT show the navbar, sidebar, or any link
+       to anywhere else. We achieve this by NOT putting it inside
+       AuthLayout — it sits next to it as a sibling route under
+       ProtectedRoute.
+     - Tree:
+         ProtectedRoute
+           ├── AuthLayout (navbar + outlet)   ← normal pages
+           │     ├── /employees
+           │     └── /employees/new
+           └── /force-change-password         ← bare page, no nav
+
+  4) Why "old password required" even when forced
+     - Forcing someone to type the OLD password defends against
+       session hijack: if an attacker steals an authenticated session,
+       they still don't know the temp password the admin set, so they
+       can't pivot to a permanent one.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+  Backend (.NET):
+    EmployeeManager.Domain/Models/LoginResponse.cs       ← add field
+    EmployeeManager.Domain/Models/ChangePasswordRequest.cs ← NEW file
+    EmployeeManager.Application/Services/IAuthService.cs ← add method sig
+    EmployeeManager.Application/Services/AuthService.cs  ← add LoginAsync field + ChangePasswordAsync
+    EmployeeManager.API/Controllers/AuthController.cs    ← add endpoint
+
+  Frontend (React):
+    src/Types/Models.ts                  ← add mustChangePassword
+    src/services/api.ts                  ← add changePassword()
+    src/Context/AuthContext.tsx          ← expose flag + clearMustChange()
+    src/components/ForceChangePassword.tsx ← NEW page
+    src/App.tsx                          ← add route
+    src/components/ProtectedRoute.tsx    ← add the redirect check
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Expose the flag on LoginResponse (.NET)
+  Open EmployeeManager.Domain/Models/LoginResponse.cs and add the
+  field. Then make LoginAsync populate it.
+
+  // LoginResponse.cs — add this property
+  public bool MustChangePassword { get; set; }
+
+  // AuthService.cs LoginAsync — change the final return:
+  return new LoginResponse
+  {
+      AccessToken = token,
+      FullName = $"{user.FirstName} {user.LastName}",
+      Role = user.Role,
+      ExpiresIn = 900,
+      MustChangePassword = user.MustChangePassword   // ← new line
+  };
+
+  STEP 2 — Create the DTO for the change-password request
+  NEW FILE: EmployeeManager.Domain/Models/ChangePasswordRequest.cs
+
+  namespace EmployeeManager.Domain.Models;
+
+  public class ChangePasswordRequest
+  {
+      public string OldPassword { get; set; } = string.Empty;
+      public string NewPassword { get; set; } = string.Empty;
+  }
+
+  STEP 3 — Add the service method (interface + impl)
+  In IAuthService.cs:
+
+      Task<bool> ChangePasswordAsync(string username, ChangePasswordRequest request);
+
+  In AuthService.cs (add the method — paste alongside LoginAsync):
+
+  public async Task<bool> ChangePasswordAsync(string username, ChangePasswordRequest request)
+  {
+      var user = await _employeeRepository.GetByUsernameAsync(username);
+      if (user is null) return false;
+
+      // verify old password using the SAME HashPassword you already have
+      var oldHash = HashPassword(request.OldPassword);
+      if (user.PasswordHash != oldHash)
+      {
+          _logger.LogWarning("Change-password failed — wrong old password for {Username}", username);
+          return false;
+      }
+
+      // basic strength check (full strength rules land in Round 24)
+      if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 8)
+          return false;
+
+      user.PasswordHash = HashPassword(request.NewPassword);
+      user.MustChangePassword = false;     // <-- clears the flag
+      await _employeeRepository.UpdateAsync(user);
+      return true;
+  }
+
+  STEP 4 — Controller action
+  In AuthController.cs, add this action. The `[Authorize]` attribute
+  forces the caller to be logged in (their JWT identifies WHO is
+  changing the password — we never trust a client-sent username).
+
+  [Authorize]
+  [HttpPost("change-password")]
+  public async Task<IActionResult> ChangePassword(
+      [FromBody] ChangePasswordRequest request)
+  {
+      // User.Identity.Name comes from the JWT's `sub` claim.
+      // This is the .NET equivalent of "the currently logged-in user."
+      var username = User.Identity?.Name;
+      if (string.IsNullOrEmpty(username))
+          return Unauthorized();
+
+      var ok = await _authService.ChangePasswordAsync(username, request);
+      if (!ok)
+          return BadRequest(new { message = "Invalid old password or weak new password." });
+
+      return Ok(new { message = "Password changed." });
+  }
+
+  TEST IT NOW (before touching React):
+  - Run the backend.
+  - Login as admin in any HTTP client. Copy the accessToken.
+  - POST /api/auth/change-password with header
+      Authorization: Bearer <token>
+    and body `{ "oldPassword": "admin123", "newPassword": "admin1234" }`.
+  - You should get 200. Check employees.json — admin's
+    PasswordHash changed AND MustChangePassword flipped to false.
+  - Change it BACK to admin123 the same way so admin login still works.
+
+  STEP 5 — TS type updates (client)
+  Open src/Types/Models.ts and add `mustChangePassword: boolean` to
+  LoginResponse:
+
+  export interface LoginResponse {
+      accessToken: string;
+      expiresIn: number;
+      fullName: string;
+      role: User['role'];
+      mustChangePassword: boolean;     // ← new line
+  }
+
+  STEP 6 — API client method
+  Open src/services/api.ts. Below the existing `login(...)` function,
+  add:
+
+  export const changePassword = (oldPassword: string, newPassword: string) =>
+      api.post('/auth/change-password', { oldPassword, newPassword });
+
+  (The interceptor you wrote in Round 20.2 already attaches the
+   Authorization header — you don't need to add it manually here.)
+
+  STEP 7 — Expose the flag + clear-flag action on AuthContext
+  Open src/Context/AuthContext.tsx. You already store the full
+  LoginResponse in `user`, so the flag is technically readable as
+  `user?.mustChangePassword`. But mutations to it need to go through
+  the context so localStorage stays in sync. Add a clearer method:
+
+  interface AuthContextType {
+      user: LoginResponse | null;
+      login: (userData: LoginResponse, token: string) => void;
+      logout: () => void;
+      clearMustChangePassword: () => void;   // ← new
+  }
+
+  // inside AuthProvider, alongside login/logout:
+  const clearMustChangePassword = () => {
+      setUser(prev => {
+          if (!prev) return prev;
+          const updated = { ...prev, mustChangePassword: false };
+          localStorage.setItem('user', JSON.stringify(updated));
+          return updated;
+      });
+  };
+
+  // expose it in the Provider value:
+  <AuthContext.Provider value={{ user, login, logout, clearMustChangePassword }}>
+
+  NEW HERE (React idiom): `setUser(prev => ...)`
+  - "Functional updater" form of useState.
+  - Use it any time the next state depends on the previous state.
+  - Avoids a stale-closure bug if multiple updates queue together.
+
+  STEP 8 — The forced-change page
+  NEW FILE: src/components/ForceChangePassword.tsx
+
+  // ============================================================
+  // ForceChangePassword.tsx — the locked-down rotation page.
+  //
+  // Reached only via the redirect guard in ProtectedRoute.
+  // No navbar, no "cancel" — the only way out is success.
+  // ============================================================
+  import { useState } from 'react';
+  import { useNavigate } from 'react-router-dom';
+  import { toast } from 'react-toastify';
+  import { isAxiosError } from 'axios';
+  import { changePassword } from '../services/api';
+  import { useAuth } from '../Context/AuthContext';
+  import { routes } from '../routes';
+
+  const ForceChangePassword = () => {
+      const [oldPassword, setOldPassword] = useState('');
+      const [newPassword, setNewPassword] = useState('');
+      const [confirm, setConfirm] = useState('');
+      const [submitting, setSubmitting] = useState(false);
+      const { clearMustChangePassword } = useAuth();
+      const navigate = useNavigate();
+
+      const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+          e.preventDefault();
+          if (newPassword !== confirm) {
+              toast.error('Passwords do not match.');
+              return;
+          }
+          if (newPassword.length < 8) {
+              toast.error('Password must be at least 8 characters.');
+              return;
+          }
+          setSubmitting(true);
+          try {
+              await changePassword(oldPassword, newPassword);
+              clearMustChangePassword();   // flips the flag in AuthContext
+              toast.success('Password changed. Welcome!');
+              navigate(routes.employees(), { replace: true });
+          } catch (err) {
+              const msg = isAxiosError<{ message?: string }>(err)
+                  ? err.response?.data?.message ?? 'Failed to change password.'
+                  : 'Failed to change password.';
+              toast.error(msg);
+          } finally {
+              setSubmitting(false);
+          }
+      };
+
+      return (
+          <div style={{ maxWidth: 400, margin: '80px auto', padding: 24,
+                        background: 'white', borderRadius: 8,
+                        boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
+              <h2>Set a new password</h2>
+              <p style={{ color: '#666' }}>
+                  You're using a temporary password. Choose a permanent
+                  one before continuing.
+              </p>
+              <form onSubmit={handleSubmit}>
+                  <input
+                      type="password"
+                      placeholder="Current password"
+                      value={oldPassword}
+                      onChange={e => setOldPassword(e.target.value)}
+                      required
+                      style={{ width: '100%', padding: 10, marginBottom: 12 }}
+                  />
+                  <input
+                      type="password"
+                      placeholder="New password (min 8 chars)"
+                      value={newPassword}
+                      onChange={e => setNewPassword(e.target.value)}
+                      required
+                      style={{ width: '100%', padding: 10, marginBottom: 12 }}
+                  />
+                  <input
+                      type="password"
+                      placeholder="Confirm new password"
+                      value={confirm}
+                      onChange={e => setConfirm(e.target.value)}
+                      required
+                      style={{ width: '100%', padding: 10, marginBottom: 12 }}
+                  />
+                  <button type="submit" disabled={submitting}
+                      style={{ width: '100%', padding: 12, background: '#e74c3c',
+                               color: 'white', border: 'none', borderRadius: 4 }}>
+                      {submitting ? 'Saving...' : 'Change password'}
+                  </button>
+              </form>
+          </div>
+      );
+  };
+
+  export default ForceChangePassword;
+
+  STEP 9 — Add a route helper
+  Open src/routes.ts and add:
+
+      forceChangePassword: () => '/force-change-password' as const,
+
+  STEP 10 — Register the route
+  Open src/App.tsx. Add the route INSIDE ProtectedRoute but OUTSIDE
+  AuthLayout (so it has no navbar):
+
+  {
+      element: <ProtectedRoute />,
+      children: [
+          {
+              path: routes.forceChangePassword(),
+              element: <ForceChangePassword />,
+          },
+          {
+              element: <AuthLayout />,
+              children: [
+                  { path: routes.employees(), element: <EmployeeList /> },
+                  { path: routes.newEmployee(), element: <EmployeeForm /> },
+                  { path: '/employees/:id/edit', element: <EmployeeForm /> },
+              ],
+          },
+      ],
+  },
+
+  STEP 11 — Add the redirect guard
+  This is the heart of the round. Inside ProtectedRoute.tsx, after
+  the token check passes but before returning <Outlet />, add the
+  must-change check.
+
+  import { Navigate, Outlet, useLocation } from 'react-router-dom';
+  import { useAuth } from '../Context/AuthContext';
+  import { routes } from '../routes';
+
+  const ProtectedRoute = () => {
+      const token = localStorage.getItem('token');
+      const { user } = useAuth();
+      const location = useLocation();
+
+      if (!token) return <Navigate to={routes.login()} replace />;
+
+      // If the user must rotate their password, force them onto
+      // the rotation page. The `location.pathname !==` check is
+      // critical — without it the redirect loops on the rotation
+      // page itself.
+      if (user?.mustChangePassword &&
+          location.pathname !== routes.forceChangePassword()) {
+          return <Navigate to={routes.forceChangePassword()} replace />;
+      }
+
+      return <Outlet />;
+  };
+
+  NEW HERE: useLocation()
+  - React Router hook. Returns the current URL info.
+  - `location.pathname` is the path part (e.g. "/employees").
+  - You use it any time a component needs to KNOW which URL it's on
+    without parsing window.location yourself.
+
+  ─────────────────────────────────────────────────────────────────────
+  END-TO-END TEST CHECKLIST
+  ─────────────────────────────────────────────────────────────────────
+  1. Manually edit employees.json: set admin's MustChangePassword to
+     true. Save. Refresh React.
+  2. Log in as admin / admin123. You should land on
+     /force-change-password, NOT /employees.
+  3. Try typing /employees directly in the address bar. The guard
+     bounces you back to /force-change-password.
+  4. Submit the form with the wrong old password → toast error,
+     stays on page.
+  5. Submit with correct old + matching new (≥ 8 chars) → toast
+     success, navigates to /employees.
+  6. employees.json: admin's MustChangePassword is now false.
+  7. Log out, log back in → no redirect this time.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - The rotation page must NOT have a "cancel" or "skip" button.
+    Compliance pattern: forced means forced.
+  - Don't put the rotation page inside AuthLayout. The user must not
+    see navbar links that go anywhere else.
+  - `replace: true` on Navigate prevents back-button loops.
+  - Always set the username from the JWT on the server. NEVER accept
+    a username field from the client for a password change.
+  - When you call clearMustChangePassword() THEN navigate, do it in
+    that order. If you navigate first, ProtectedRoute re-runs with
+    the old (still-true) flag and bounces you right back.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - The "forced workflow" pattern: server flag + redirect guard +
+    single-purpose page. Same shape as TOS acceptance, profile
+    completion, MFA enrolment.
+  - DTOs as the API surface — the request type is its own class, not
+    a domain model.
+  - Route-tree composition: sibling routes under a shared guard, one
+    inside a layout and one outside.
+  - useLocation() for path-aware logic in components.
+  - The functional-updater form of setState for derived updates.
 
 
-CHALLENGE 20.5 — Role-based route guards                    Target: 25 min
+CHALLENGE 20.5 — Role-based route guards                    Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Extend ProtectedRoute to accept `roles?: ('Admin' | 'Manager' |
-     'Employee')[]`.
-  2. Inside: if useAuth().user?.role not in allowed list → redirect
-     /forbidden.
-  3. Add /forbidden page.
-  4. UI hiding: `{user?.role === 'Admin' && <button>Delete</button>}`.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  ProtectedRoute today is binary: logged in or not. Real apps have
+  TIERS — an Employee can see their own profile but not the audit log;
+  a Manager can approve leave but not create users; only Admin can
+  delete records. This round teaches you the standard React pattern:
+  the same ProtectedRoute, parametrised with a `roles` prop.
 
-  RULES:
-  - Server-side authorization is the SOURCE OF TRUTH. Client hiding is
-    UX, not security.
-  - Pull roles from useAuth() everywhere — never hard-code role
-    strings inline.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Two layers: route guard + UI hide. Reused in every feature that has
-  manager/admin views.
+  1) Two-layer authorisation
+     - LAYER 1 (server, the gate): [Authorize(Roles="Admin")] on the
+       .NET controller. This is what actually keeps data safe. You
+       already have this with the basic [Authorize] attribute.
+     - LAYER 2 (client, the UX): hide menu items, redirect away from
+       forbidden routes. This stops users from CLICKING into pages
+       they can't access. It's about polish, not security.
+     - Mantra: "Client hiding is UX. Server is the gate."
+
+  2) TS string literal unions for roles
+     - `type Role = 'Admin' | 'Manager' | 'Employee';`
+     - The union restricts which strings the compiler accepts.
+     - `'Admin' | 'Manager' | 'Employee'[]` = array of those strings.
+     - `.includes(x)` on a typed array narrows correctly only if `x`
+       is the same union type.
+
+  3) Component props in React
+     - Components are functions that take a single argument: `props`.
+     - Destructure props in the signature for readability.
+     - Optional prop = `?` after the name, AND default value handled
+       in the body or via parameter default.
+     - Example:
+         interface MyProps {
+             title: string;
+             count?: number;       // optional
+         }
+         const MyComp = ({ title, count = 0 }: MyProps) => { ... };
+
+  4) Passing props through React Router's element prop
+     - `element={<ProtectedRoute roles={['Admin']} />}` — you pass
+       props directly in JSX, same as any component. React Router
+       just renders whatever JSX you give it.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/Types/Models.ts             ← align User['role'] with .NET
+    src/components/ProtectedRoute.tsx  ← add roles prop
+    src/components/Forbidden.tsx    ← NEW page
+    src/routes.ts                   ← forbidden route helper
+    src/App.tsx                     ← wire up new routes + admin-only example
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Align the role union with .NET
+  Your .NET seed sets Role = "Admin" or "Employee" today, with
+  Manager planned. Open src/Types/Models.ts and update:
+
+  export type Role = 'Admin' | 'Manager' | 'Employee';
+
+  export interface User {
+      id: UserId;
+      username: string;
+      fullName: string;
+      role: Role;        // ← was 'Admin' | 'User'
+  }
+
+  // and LoginResponse:
+  export interface LoginResponse {
+      accessToken: string;
+      expiresIn: number;
+      fullName: string;
+      role: Role;        // ← use the named alias
+      mustChangePassword: boolean;
+  }
+
+  Note: this will flag any consumer that compared role to 'User'.
+  Fix those at the call sites to match the new union.
+
+  STEP 2 — The Forbidden page
+  NEW FILE: src/components/Forbidden.tsx
+
+  import { Link } from 'react-router-dom';
+  import { routes } from '../routes';
+
+  const Forbidden = () => (
+      <div style={{ maxWidth: 480, margin: '80px auto', textAlign: 'center' }}>
+          <h1 style={{ fontSize: 48, marginBottom: 8 }}>403</h1>
+          <p style={{ color: '#666', marginBottom: 24 }}>
+              You don't have permission to view this page.
+          </p>
+          <Link to={routes.employees()}>← Back to employees</Link>
+      </div>
+  );
+
+  export default Forbidden;
+
+  NEW HERE: <Link> vs <a>
+  - <a href="/employees"> triggers a full page reload — losing all
+    React state, re-downloading the JS bundle. Bad.
+  - <Link to="/employees"> calls history.pushState() under the hood
+    — no reload, React Router just swaps the matching component.
+  - Always <Link> for in-app navigation. Reserve <a> for external URLs.
+
+  STEP 3 — Add the route helper
+  Open src/routes.ts:
+
+      forbidden: () => '/forbidden' as const,
+
+  STEP 4 — Extend ProtectedRoute with a roles prop
+  Open src/components/ProtectedRoute.tsx. Add the prop and the role
+  check.
+
+  import { Navigate, Outlet, useLocation } from 'react-router-dom';
+  import { useAuth } from '../Context/AuthContext';
+  import { routes } from '../routes';
+  import { Role } from '../Types/Models';
+
+  interface ProtectedRouteProps {
+      roles?: Role[];   // optional — when present, restricts access
+  }
+
+  const ProtectedRoute = ({ roles }: ProtectedRouteProps) => {
+      const token = localStorage.getItem('token');
+      const { user } = useAuth();
+      const location = useLocation();
+
+      if (!token) return <Navigate to={routes.login()} replace />;
+
+      if (user?.mustChangePassword &&
+          location.pathname !== routes.forceChangePassword()) {
+          return <Navigate to={routes.forceChangePassword()} replace />;
+      }
+
+      // role check — only runs if a roles array was passed
+      if (roles && user && !roles.includes(user.role)) {
+          return <Navigate to={routes.forbidden()} replace />;
+      }
+
+      return <Outlet />;
+  };
+
+  export default ProtectedRoute;
+
+  STEP 5 — Use the new prop in App.tsx
+  Add the forbidden route and a sample admin-only branch. The tree
+  now looks like:
+
+  const router = createBrowserRouter([
+      { path: routes.login(), element: <Login /> },
+      { path: routes.forbidden(), element: <Forbidden /> },
+      {
+          element: <ProtectedRoute />,   // any logged-in user
+          children: [
+              { path: routes.forceChangePassword(),
+                element: <ForceChangePassword /> },
+              {
+                  element: <AuthLayout />,
+                  children: [
+                      { path: routes.employees(), element: <EmployeeList /> },
+                      { path: '/employees/:id/edit', element: <EmployeeForm /> },
+                  ],
+              },
+          ],
+      },
+      {
+          // Admin-only branch — same guard, restricted with `roles`.
+          element: <ProtectedRoute roles={['Admin']} />,
+          children: [
+              {
+                  element: <AuthLayout />,
+                  children: [
+                      { path: routes.newEmployee(), element: <EmployeeForm /> },
+                  ],
+              },
+          ],
+      },
+      { path: '*', element: <Navigate to={routes.employees()} replace /> },
+  ]);
+
+  Note: /employees/new is now admin-only. Only Admins can create new
+  employees. Edit and view remain available to everyone logged in.
+
+  STEP 6 — Hide UI buttons that lead to forbidden routes
+  In EmployeeList.tsx (or wherever the "Add Employee" button lives),
+  wrap it in a role check so non-admins don't see it:
+
+  const { user } = useAuth();
+  // ...
+  {user?.role === 'Admin' && (
+      <button onClick={() => navigate(routes.newEmployee())}>
+          Add Employee
+      </button>
+  )}
+
+  NEW HERE: `{condition && <JSX />}`
+  - "Short-circuit rendering." If `condition` is truthy, React renders
+    the JSX after &&. If falsy, React renders nothing.
+  - Gotcha: don't use `{items.length && <Foo />}` — when length is 0,
+    React renders the literal `0`. Use `items.length > 0 && ...` or
+    `!!items.length && ...`.
+
+  ─────────────────────────────────────────────────────────────────────
+  END-TO-END TEST CHECKLIST
+  ─────────────────────────────────────────────────────────────────────
+  1. Manually flip admin's role in employees.json to "Employee".
+     Restart, log in. The "Add Employee" button is hidden.
+  2. Type /employees/new directly. You bounce to /forbidden.
+  3. Restore admin's role to "Admin". Reload — button reappears,
+     /employees/new works.
+  4. Create a manager test row in employees.json (Role="Manager",
+     MustChangePassword=false, set a known hash) and verify the
+     guard treats Manager and Employee the same here.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Server-side authorization is the source of truth. The guard
+    here is UX, not security.
+  - Always pull the role from useAuth(). Never hard-code role names
+    in component logic — typos like 'admin' vs 'Admin' won't fail
+    compilation. (Round 22 will fix this with a constant.)
+  - One ProtectedRoute, many configurations. Don't create
+    AdminRoute, ManagerRoute, EmployeeRoute — that's three
+    components that drift apart.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Parametrised guard components (the roles prop).
+  - String-literal unions as a domain vocabulary.
+  - Short-circuit conditional rendering with `&&`.
+  - <Link> vs <a> — React Router's first rule.
+  - Two-layer authorisation: client UX + server gate.
 
 
-CHALLENGE 20.6 — useAuth narrowing + capstone               Target: 25 min
+CHALLENGE 20.6 — useAuth narrowing + Round 20 capstone      Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - The narrowing guard: `if (!ctx) throw new Error(...)` — after this
-    line, TS removes null from the type. Every consumer of useAuth()
-    gets a non-null AuthContextValue, no more `auth?.user`.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Every component that consumes useAuth() today writes `user?.role`,
+  `user?.fullName`, `user?.mustChangePassword` — optional chaining
+  EVERYWHERE because TypeScript thinks `user` might be null. That's
+  technically correct (a non-logged-in screen could mount the hook)
+  but in PRACTICE every component that calls useAuth() lives inside
+  ProtectedRoute, which guarantees a logged-in user.
 
-  TASK:
-  1. Refactor AuthContext: `createContext<AuthContextValue | null>(null)`.
-  2. useAuth throws if outside a Provider.
-  3. Walk every consumer and remove optional-chaining on auth.
+  This challenge tightens the type. After this round, components
+  inside ProtectedRoute write `user.role` (no `?`) and TypeScript
+  is happy.
 
-  RULES:
-  - Default value of null (not {}) — forces the runtime guard.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Context with TS forces a discipline JS lets slide. Same as DI in
-  .NET that fails fast on missing registration.
+  1) Type narrowing
+     - TS reads code top-to-bottom. After `if (x === null) return;`,
+       TS knows `x` is non-null below that line. Same for `throw`,
+       `if (!x) throw ...`, and type guards.
+     - This is called "control-flow narrowing" — the type changes
+       based on what the code already ruled out.
+
+  2) The "null sentinel + runtime guard" Context pattern
+     - Convention: createContext<T | null>(null). The default value
+       is null on purpose.
+     - The hook wrapping useContext THROWS if it sees null. That
+       throw narrows the return type for every consumer.
+     - .NET analogue: a service registered as Scoped that throws if
+       resolved outside an HTTP request scope. Fail fast at the
+       boundary, every caller assumes "I have one."
+
+  3) "Outside a Provider" failure mode
+     - Without the throw, useContext returns the DEFAULT value
+       (null here). Components would silently render with broken
+       state. The throw turns a silent bug into a loud one with a
+       readable message.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/Context/AuthContext.tsx       ← change default + sharpen hook
+    every component that calls useAuth()  ← remove `?.` after `user`
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Confirm the narrowing already works
+  Open AuthContext.tsx. Today's code is:
+
+      const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+      export function useAuth() {
+          const context = useContext(AuthContext);
+          if (context === undefined) {
+              throw new Error("useAuth must be used within an AuthProvider");
+          }
+          return context;
+      }
+
+  This is ALMOST right — the throw narrows away undefined. The
+  cosmetic change is the canonical pattern uses `null` as the
+  sentinel (small thing, but it's the convention you'll see in
+  every codebase):
+
+      const AuthContext = createContext<AuthContextType | null>(null);
+
+      export function useAuth() {
+          const ctx = useContext(AuthContext);
+          if (!ctx) throw new Error("useAuth must be used within an AuthProvider");
+          return ctx;
+      }
+
+  Why null over undefined? Both work. Null is the convention in
+  React docs and most public libraries. Undefined is fine if you
+  prefer — pick one and stay consistent.
+
+  STEP 2 — Walk every consumer and drop the `?.`
+  Use VS Code to find every useAuth() call. The optional chains on
+  `user` SHOULD stay (the user inside the context CAN be null —
+  before login), but redundant chains on `auth` or `ctx` come out.
+
+  Concretely, search for patterns like:
+      const auth = useAuth();
+      auth?.user                ← was needed before the throw
+      auth?.login(...)
+
+  Replace with:
+      const auth = useAuth();
+      auth.user
+      auth.login(...)
+
+  Or, more idiomatically, destructure:
+      const { user, login, logout } = useAuth();
+
+  STEP 3 — Round 20 verification
+  Manually run through every flow you've added in Round 20:
+   - Login (20.1, 20.2): tokens flow, refresh works, expired-token
+     redirects to /login.
+   - Forced rotation (20.4): admin marked MustChangePassword=true
+     in employees.json → bounced to /force-change-password →
+     can't navigate away → completing the form unblocks.
+   - Roles (20.5): set admin's role to "Employee" → "Add Employee"
+     hidden, /employees/new redirects to /forbidden.
+   - Narrowing (20.6): no `tsc` errors anywhere. `npm run build`
+     succeeds with zero warnings.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Don't default the Context to `{}` or a stub object. That defeats
+    the runtime guard.
+  - The Provider must wrap App at the top level. If you forget,
+    every component that calls useAuth() throws on render — which
+    is actually fine, you'll see it instantly.
+  - `user` inside the context can still be null (logged-out state).
+    Only the context object itself is non-null after the guard.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Control-flow narrowing in TS.
+  - The Context + throwing-hook pattern.
+  - Why null vs undefined is just convention — pick one, hold it.
+  - Round 20 capstone: a complete auth surface — login, refresh,
+    forced rotation, role guards, narrowed Context. The rest of
+    the app builds on this for the next ~40 rounds.
 
 
 ================================================================================
@@ -4893,121 +5617,818 @@ BEFORE features start — every new feature uses Tailwind from day one.
 Tailwind muscle memory builds through this round + every future feature.
 
 
-CHALLENGE 21.1 — Install + config                           Target: 20 min
+CHALLENGE 21.1 — Install + config                           Target: 30 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Tailwind: a UTILITY-first CSS framework. Instead of `.btn { ... }`,
-    you write `<button className="px-2 py-1 bg-blue-500">`.
-  - Generates a small final CSS containing only the utility classes
-    you actually used (PURGE step). Empty class? Doesn't ship.
-  - `tailwind.config.js` `content:` array MUST include every file
-    with Tailwind classes.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Your app today uses inline `style={{...}}` objects everywhere. That
+  works but doesn't scale — there's no shared design language, no
+  hover states (inline styles can't express :hover), no media
+  queries, and every file invents its own colour values.
 
-  TASK:
-  1. Follow Tailwind's CRA/Vite install: 3 steps (npm install,
-     postcss config, @tailwind directives in index.css).
-  2. Restart dev server.
-  3. Test class on a heading.
+  Tailwind is the industry-default CSS solution for React projects in
+  2024-2026. You write utility classes in JSX; the build process
+  generates a tiny CSS file containing only the classes you actually
+  used. Every other round from here on uses Tailwind.
 
-  RULES:
-  - content paths matter — wrong glob = purged classes don't ship.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Utility CSS lives next to JSX. The mental shift takes 1-2 components.
+  1) "Utility-first" CSS
+     - Traditional CSS: define semantic classes — `.card`, `.btn`,
+       `.primary-button` — in stylesheets. Components reference them.
+     - Tailwind CSS: pre-built atomic classes — `p-4`, `bg-blue-500`,
+       `rounded`, `flex`, `items-center`. Components compose them.
+     - Result: no naming the unnameable. No "where does this class
+       live?" hunting. Just read the JSX.
+
+  2) The JIT (just-in-time) compiler + purge
+     - Tailwind scans your source files (.tsx, .html), finds every
+       class name it recognises, and emits CSS for ONLY those.
+     - If you use `bg-red-500` once and `bg-red-600` never, the final
+       CSS contains the first and skips the second.
+     - This is why `content:` in the config MUST list every file
+       with Tailwind classes. A missed glob = silent missing styles.
+
+  3) PostCSS
+     - The build tool that runs Tailwind. CRA already has a PostCSS
+       integration baked in — you just point it at Tailwind.
+
+  4) `className` vs `class`
+     - JSX uses `className` because `class` is a reserved word in JS.
+       The DOM still gets a `class` attribute — React translates.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Client/package.json     (dependencies — installed)
+    EmployeeManager.Client/tailwind.config.js   (NEW)
+    EmployeeManager.Client/postcss.config.js    (NEW)
+    EmployeeManager.Client/src/index.css        (replace contents)
+    EmployeeManager.Client/src/App.tsx          (smoke test class)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Install
+  In your terminal, from EmployeeManager.Client/:
+
+      npm install -D tailwindcss@3 postcss autoprefixer
+      npx tailwindcss init -p
+
+  Note: we pin tailwindcss@3 because Tailwind 4 changed the config
+  format. CRA + Tailwind 3 is the well-trodden path.
+
+  The `-p` flag also creates postcss.config.js for you. You should
+  now see two new files: tailwind.config.js and postcss.config.js.
+
+  STEP 2 — Tell Tailwind where your code lives
+  Open tailwind.config.js. Replace its contents with:
+
+      /** @type {import('tailwindcss').Config} */
+      module.exports = {
+          content: [
+              './src/**/*.{js,jsx,ts,tsx}',
+          ],
+          theme: {
+              extend: {},
+          },
+          plugins: [],
+      };
+
+  The glob `./src/**/*.{js,jsx,ts,tsx}` matches every source file
+  recursively. Miss this and you'll see styles work in dev but
+  disappear in production.
+
+  STEP 3 — Wire the Tailwind directives into your global CSS
+  Open EmployeeManager.Client/src/index.css. Add THESE THREE LINES
+  at the top (keep your existing rules underneath):
+
+      @tailwind base;
+      @tailwind components;
+      @tailwind utilities;
+
+  NEW HERE: what these directives do
+  - `@tailwind base` — injects a CSS reset and sane defaults (margin
+    on body, default font size, etc.). Replaces normalize.css.
+  - `@tailwind components` — slot for your @apply-extracted classes
+    (you'll use this in 21.5).
+  - `@tailwind utilities` — injects every utility class you used.
+
+  STEP 4 — Smoke test
+  Stop the dev server (Ctrl+C). Re-run `npm start`. Open any
+  component and add this to a heading or div:
+
+      <h1 className="text-3xl font-bold text-red-600">Tailwind works!</h1>
+
+  If it's big, bold, and red — Tailwind is live. If it's still
+  small/black, your content glob is wrong or you forgot to restart.
+
+  STEP 5 — Class anatomy (5-minute cheatsheet)
+  Memorise these prefixes — they cover ~90% of what you'll write.
+
+    Spacing:  p-4   padding 1rem        m-2     margin 0.5rem
+              px-4  padding-x           my-2    margin-y
+              gap-2 flex/grid gap
+
+    Sizing:   w-full  width 100%        w-64    width 16rem
+              h-screen 100vh            min-w-0 min-width: 0
+
+    Layout:   flex            display:flex
+              items-center    align-items:center (cross axis)
+              justify-between justify-content (main axis)
+              grid grid-cols-3
+              space-y-4       margin-bottom between siblings
+
+    Colours:  bg-blue-600 text-white  border-gray-300
+              hover:bg-blue-700        (state variants)
+              dark:bg-gray-900         (dark-mode variant)
+
+    Type:     text-xs / sm / base / lg / xl / 2xl / 3xl
+              font-medium / semibold / bold
+              text-center
+
+    Borders:  border  border-2  rounded  rounded-md  rounded-full
+              shadow  shadow-md  shadow-lg
+
+    Scale:    -1=0.25rem  -2=0.5  -3=0.75  -4=1  -6=1.5  -8=2
+
+  These compose: a button is roughly
+      `px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700`.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Restart `npm start` after the install. CRA doesn't always pick
+    up the new PostCSS config hot.
+  - The `content` glob must match every file with Tailwind classes.
+    If you ever add a new folder under src/, the glob already covers
+    it. If you put files OUTSIDE src/, update the glob.
+  - Don't fight the framework: when you find yourself reaching for
+    a raw CSS file, ask "does Tailwind have a utility for this?"
+    99% of the time, yes.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  Utility-first CSS lives next to JSX. The build pipeline scans your
+  source and emits a tiny CSS bundle. The mental model takes 1-2
+  components — by 21.3 you'll be reaching for `px-4 py-2` faster
+  than typing the equivalent inline-style object.
 
 
-CHALLENGE 21.2 — Refactor StatusBadge + EmployeeRow         Target: 30 min
+CHALLENGE 21.2 — Refactor StatusBadge + EmployeeRow         Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - `clsx`: tiny utility for composing conditional class strings.
-    `clsx('px-2', isActive && 'bg-green-500', isDisabled && 'opacity-50')`
-    builds a clean className.
-  - Use clsx the moment you have 2+ conditional class fragments.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Tailwind only shows its value once you start using it. We start
+  with the two smallest components — StatusBadge and EmployeeRow —
+  so the diff is bite-sized and the patterns reveal themselves.
 
-  TASK:
-  1. npm install clsx
-  2. Replace StatusBadge's inline `style` with Tailwind utilities.
-  3. Replace EmployeeRow's inline `style` (selected highlight, cursor)
-     with Tailwind classes.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Don't extract to a CSS class yet. The co-location is the point.
+  1) `clsx` — composing conditional class strings
+     The naïve way:
+         const cls = `px-2 py-1 ${active ? 'bg-green-500' : 'bg-gray-300'}`;
+     Once you have 3+ conditions, this becomes unreadable. `clsx`
+     handles falsy values cleanly:
 
-  WHAT YOU JUST LEARNED:
-  Inline-style refactor pattern. Repeat in every component.
+         import clsx from 'clsx';
+         const cls = clsx(
+             'px-2 py-1',
+             active && 'bg-green-500',
+             !active && 'bg-gray-300',
+             disabled && 'opacity-50 cursor-not-allowed',
+         );
+
+     - Falsy values (false, null, undefined, '') are dropped.
+     - Strings are joined with spaces.
+     - Returns a single space-separated class string.
+
+  2) Map-of-classes pattern for finite enum-style props
+     When a prop has a small finite set of values (status: 'active'
+     | 'inactive' | 'pending'), define a lookup table once and pick
+     the entry by key:
+
+         const variants = {
+             active:   'bg-green-100 text-green-800',
+             inactive: 'bg-gray-100 text-gray-700',
+             pending:  'bg-yellow-100 text-yellow-800',
+         } as const;
+
+         const cls = clsx('px-2 py-1 rounded text-xs', variants[status]);
+
+     - `as const` makes the object's values readonly string literals
+       (TS narrows them properly).
+     - This pattern beats a chain of && checks the moment you have
+       3+ cases. You'll reuse it for leave status, document type,
+       and so on.
+
+  3) Hover and focus state variants
+     - `hover:bg-blue-700` only applies on mouse hover.
+     - `focus:ring-2 focus:ring-blue-500` for keyboard focus rings.
+     - `disabled:opacity-50 disabled:cursor-not-allowed` for the
+       disabled state. Tailwind reads the underlying HTML attr.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/StatusBadge.tsx
+    src/components/EmployeeRow.tsx
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Install clsx
+
+      npm install clsx
+
+  STEP 2 — Refactor StatusBadge
+  Open src/components/StatusBadge.tsx. Whatever your current inline
+  styles look like, replace the styled span with this pattern:
+
+      import clsx from 'clsx';
+
+      interface StatusBadgeProps {
+          isActive: boolean;
+      }
+
+      const StatusBadge = ({ isActive }: StatusBadgeProps) => (
+          <span
+              className={clsx(
+                  'inline-block px-2 py-0.5 rounded text-xs font-semibold',
+                  isActive
+                      ? 'bg-green-100 text-green-800'
+                      : 'bg-gray-200 text-gray-700',
+              )}
+          >
+              {isActive ? 'Active' : 'Inactive'}
+          </span>
+      );
+
+      export default StatusBadge;
+
+  Class-by-class translation of common inline rules:
+      padding: '2px 8px'          → px-2 py-0.5
+      borderRadius: 4              → rounded
+      fontSize: 12                 → text-xs
+      fontWeight: 600              → font-semibold
+      backgroundColor: '#d4f4dd'   → bg-green-100
+      color: '#1b5e20'             → text-green-800
+      display: 'inline-block'      → inline-block
+
+  STEP 3 — Refactor EmployeeRow
+  Read your current EmployeeRow.tsx. It probably has inline style
+  for: a row container, hover background, "selected" highlight,
+  cursor:pointer. Translate:
+
+      // BEFORE
+      <tr
+          onClick={() => onSelect(id)}
+          style={{
+              backgroundColor: isSelected ? '#e3f2fd' : 'white',
+              cursor: 'pointer',
+          }}
+      >
+
+      // AFTER
+      <tr
+          onClick={() => onSelect(id)}
+          className={clsx(
+              'cursor-pointer',
+              isSelected ? 'bg-blue-50' : 'hover:bg-gray-50',
+          )}
+      >
+
+  Note: in the AFTER version we also added a hover state — Tailwind
+  makes that one extra word. With inline styles it took :hover via
+  a stylesheet (which you didn't have).
+
+  STEP 4 — Verify in the browser
+  Click rows; the selected row should be light blue, others should
+  go light gray on hover. The badge should be green-on-light-green
+  for active rows and gray-on-light-gray for inactive.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Don't extract to a CSS class yet. Co-locating utilities IS the
+    point. 21.5 covers when extraction is justified (rarely).
+  - Repetition is OK. If you write the same button class string in
+    3 places, that's not yet a problem — the abstraction cost
+    exceeds the duplication cost until ~5 repeats.
+  - Always pair hover: with a non-hover base. `hover:bg-blue-700`
+    alone shows nothing on rest state.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - clsx for conditional classes.
+  - The map-of-classes pattern for finite-set props.
+  - Hover and focus pseudo-classes via Tailwind variants.
+  - Inline-style refactor pattern — repeat in every component.
 
 
-CHALLENGE 21.3 — Refactor EmployeeList + EmployeeForm       Target: 35 min
+CHALLENGE 21.3 — Refactor EmployeeList + EmployeeForm       Target: 60 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Replace every inline style and ad-hoc className in EmployeeList
-     and EmployeeForm with Tailwind utilities.
-  2. Tables get `min-w-full divide-y` patterns; forms get `space-y-4
-     max-w-md mx-auto` patterns.
-  3. Buttons get a consistent shape — `px-4 py-2 rounded bg-blue-600
-     text-white hover:bg-blue-700`.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  StatusBadge and EmployeeRow were the snacks. EmployeeList and
+  EmployeeForm are the meal — tables, forms, buttons, error states,
+  layout. By the end of this challenge you'll have an internal
+  vocabulary for "what's the Tailwind for that?" and won't reach
+  for Gemini.
 
-  RULES:
-  - Repetition is FINE. We extract via @apply only after 5+ repeats
-    (see 21.5).
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — pattern dictionary
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  More repetition. Tailwind muscle memory builds here.
+  These are the four most common layouts you'll write. Memorise the
+  patterns, then write each from memory once today.
+
+  1) Page container (centred, capped width)
+       <div className="max-w-6xl mx-auto p-6">
+       - max-w-6xl: max width 72rem (~1152px)
+       - mx-auto: horizontal margin auto → centred
+       - p-6: 1.5rem padding all sides
+
+  2) Card
+       <div className="bg-white rounded-lg shadow p-6">
+       - White background, rounded corners, soft shadow, generous
+         padding. Standard "content block" treatment.
+
+  3) Full-width data table
+       <table className="min-w-full divide-y divide-gray-200">
+           <thead className="bg-gray-50">
+               <tr>
+                   <th className="px-6 py-3 text-left text-xs
+                                  font-medium text-gray-500
+                                  uppercase tracking-wider">
+                       Name
+                   </th>
+                   ...
+               </tr>
+           </thead>
+           <tbody className="bg-white divide-y divide-gray-200">
+               <tr>
+                   <td className="px-6 py-4 whitespace-nowrap text-sm
+                                  text-gray-900">
+                       Alice
+                   </td>
+                   ...
+               </tr>
+           </tbody>
+       </table>
+
+       - min-w-full: stretch to container width
+       - divide-y divide-gray-200: light gray horizontal lines
+         between rows
+       - whitespace-nowrap on td: prevents wrapping in narrow cells
+       - The thead's uppercase + tracking-wider is the "data table"
+         look you see in every SaaS app
+
+  4) Form field stack
+       <form className="space-y-4 max-w-md mx-auto">
+           <div>
+               <label className="block text-sm font-medium text-gray-700 mb-1">
+                   First name
+               </label>
+               <input
+                   type="text"
+                   className="w-full rounded border-gray-300 shadow-sm
+                              focus:border-blue-500 focus:ring-blue-500"
+               />
+               <p className="mt-1 text-sm text-red-600">
+                   {errors.firstName?.message}
+               </p>
+           </div>
+           ...
+       </form>
+
+       - space-y-4: vertical gap between direct children
+       - The error <p> gets red-600. Empty-string message just
+         renders nothing.
+
+  Standard button shapes, copy these verbatim:
+
+       Primary:   px-4 py-2 rounded bg-blue-600 text-white
+                  hover:bg-blue-700 disabled:opacity-50
+                  disabled:cursor-not-allowed font-medium
+
+       Secondary: px-4 py-2 rounded border border-gray-300
+                  bg-white text-gray-700 hover:bg-gray-50
+
+       Danger:    px-4 py-2 rounded bg-red-600 text-white
+                  hover:bg-red-700
+
+       Ghost:     px-3 py-1 text-sm text-blue-600 hover:text-blue-800
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/EmployeeList.tsx
+    src/components/EmployeeForm.tsx
+    src/components/FilterBar.tsx
+    src/components/StatsBar.tsx
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — EmployeeList shell
+  Replace the outer container + table wrapper with the patterns
+  above. Drop EVERY `style={{...}}` you see; switch each one to
+  className with Tailwind utilities.
+
+  STEP 2 — EmployeeForm field by field
+  Refactor one field at a time. Don't try to do all of them
+  simultaneously — you'll lose your place. Pattern per field:
+
+      <div>
+          <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-1">
+              First name
+          </label>
+          <input
+              id="firstName"
+              {...register('firstName')}
+              className={clsx(
+                  'w-full rounded shadow-sm',
+                  errors.firstName
+                      ? 'border-red-500 focus:border-red-500 focus:ring-red-500'
+                      : 'border-gray-300 focus:border-blue-500 focus:ring-blue-500',
+              )}
+          />
+          {errors.firstName && (
+              <p className="mt-1 text-sm text-red-600">{errors.firstName.message}</p>
+          )}
+      </div>
+
+  STEP 3 — Buttons
+  Find every <button> across the app and apply the appropriate
+  variant string from the dictionary above. Save = Primary. Cancel
+  = Secondary. Delete = Danger.
+
+  STEP 4 — FilterBar + StatsBar
+  Quick passes. FilterBar: horizontal flex layout
+  (`flex gap-2 items-center mb-4`). StatsBar: grid of cards
+  (`grid grid-cols-1 md:grid-cols-3 gap-4`).
+
+  NEW HERE: responsive prefixes
+  - `md:grid-cols-3` means "on medium screens (≥768px) use 3
+    columns." Below medium, falls back to the base `grid-cols-1`.
+  - Breakpoints: sm 640, md 768, lg 1024, xl 1280, 2xl 1536 px.
+  - Mobile-first: write the base for mobile, then add larger
+    breakpoint variants for wider screens.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Refactor one component end-to-end before moving to the next.
+    Half-converted components are hard to read.
+  - Use the dictionary above. Don't invent new colour codes — stick
+    with Tailwind's named palette (gray, blue, red, green, yellow).
+  - Keep the inline { register('firstName') } and other RHF props
+    intact. Tailwind doesn't change behaviour, only appearance.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - The four-pattern dictionary (container, card, table, form).
+  - Responsive prefixes for mobile-first design.
+  - Error-state styling via conditional class merging.
+  - Tailwind muscle memory — you wrote 4 forms by now.
 
 
-CHALLENGE 21.4 — Design tokens + dark mode                  Target: 30 min
+CHALLENGE 21.4 — Design tokens + dark mode                  Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Design tokens: named values (colors, spacing, radii) in
-    `theme.extend`. `colors.brand.500 = '#1976d2'` becomes utility
-    classes `bg-brand-500`, `text-brand-500`, etc.
-  - `darkMode: 'class'`: add `.dark` on `<html>` → `dark:bg-gray-900`
-    utilities apply. Toggle via state or system preference.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Sprinkling `bg-blue-600` throughout an app is fine until the brand
+  changes. Real teams centralise their palette into named tokens
+  (`brand`, `accent`, `surface`) so a colour swap touches one config
+  file, not 200 components. Dark mode hooks into the same system —
+  every utility class gets a `dark:` companion you can opt in to.
 
-  TASK:
-  1. tailwind.config.js: add `theme.extend.colors.brand`,
-     `darkMode: 'class'`.
-  2. Use `bg-brand-*` for buttons / accents throughout.
-  3. Add a dark mode toggle (simple state for now; refactor to
-     Zustand in Round 22).
-  4. Add `dark:` variants on the main palette.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Dark palette must also pass contrast — test in Lighthouse.
+  1) theme.extend.colors — defining custom palette
+     - Tailwind ships its own palette. You can ADD to it via
+       `theme.extend.colors`. The shape is `{ name: { 50: '#hex',
+       100: '#hex', ..., 900: '#hex' } }`. Each numeric key becomes
+       a utility suffix (`bg-brand-500`).
+     - Generators like uicolors.app turn a single hex into the full
+       50→950 scale. Paste the result.
 
-  WHAT YOU JUST LEARNED:
-  Design system as config. Same idea as a tokens JSON, but built into
-  the build pipeline.
+  2) darkMode: 'class' strategy
+     - Tailwind has 3 dark-mode strategies. The `'class'` one is the
+       only sane choice: dark mode is on when `<html>` has class
+       `dark`. You toggle that class via state. The user keeps
+       control.
+     - The alternative `'media'` ties to the OS preference, which
+       you don't want — users expect a button to toggle.
+
+  3) localStorage for persistence
+     - Save the user's preference so reloads keep dark mode.
+     - Pattern: read it on mount, write on every change.
+     - Round 22.4 will replace this with Zustand's persist
+       middleware. For now, raw localStorage is fine.
+
+  4) The "FOUC" (flash of unstyled content) problem
+     - If you read localStorage in a useEffect, the first paint
+       happens in LIGHT mode, then flips to dark. Briefly ugly.
+     - Fix: apply the class in index.html BEFORE React mounts. A
+       tiny inline script in public/index.html that reads
+       localStorage and toggles the dark class.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    tailwind.config.js
+    EmployeeManager.Client/public/index.html (one inline script)
+    src/components/DarkModeToggle.tsx (NEW)
+    src/Context/AuthLayout.tsx (mount the toggle in the navbar)
+    A handful of components (add dark: variants on the surfaces)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Define your palette + enable class-based dark mode
+  Update tailwind.config.js:
+
+      /** @type {import('tailwindcss').Config} */
+      module.exports = {
+          darkMode: 'class',
+          content: ['./src/**/*.{js,jsx,ts,tsx}'],
+          theme: {
+              extend: {
+                  colors: {
+                      brand: {
+                          50:  '#eff6ff',
+                          100: '#dbeafe',
+                          500: '#3b82f6',
+                          600: '#2563eb',
+                          700: '#1d4ed8',
+                          900: '#1e3a8a',
+                      },
+                  },
+              },
+          },
+          plugins: [],
+      };
+
+  Restart `npm start`. Verify `bg-brand-600 text-white` renders blue.
+
+  STEP 2 — Find-and-replace the obvious brand usages
+  Anywhere your primary buttons / links / accents used `blue-600`,
+  swap to `brand-600`. A handful of places — Login button,
+  EmployeeForm submit, etc.
+
+  STEP 3 — The dark-mode toggle component
+  NEW FILE: src/components/DarkModeToggle.tsx
+
+      import { useEffect, useState } from 'react';
+
+      const DarkModeToggle = () => {
+          // Read the persisted preference on mount.
+          const [dark, setDark] = useState<boolean>(() =>
+              localStorage.getItem('theme') === 'dark'
+          );
+
+          // Apply/remove the class on <html> whenever `dark` changes.
+          useEffect(() => {
+              const root = document.documentElement;
+              if (dark) {
+                  root.classList.add('dark');
+                  localStorage.setItem('theme', 'dark');
+              } else {
+                  root.classList.remove('dark');
+                  localStorage.setItem('theme', 'light');
+              }
+          }, [dark]);
+
+          return (
+              <button
+                  type="button"
+                  onClick={() => setDark(d => !d)}
+                  className="px-3 py-1 rounded border border-gray-300
+                             dark:border-gray-600 text-sm
+                             text-gray-700 dark:text-gray-200
+                             hover:bg-gray-100 dark:hover:bg-gray-800"
+                  aria-label="Toggle dark mode"
+              >
+                  {dark ? '☀️ Light' : '🌙 Dark'}
+              </button>
+          );
+      };
+
+      export default DarkModeToggle;
+
+  NEW HERE: useEffect with a dependency array
+  - `useEffect(fn, [dark])` — runs `fn` after every render where
+    `dark` changed (or on first mount). This is how you sync React
+    state TO the outside world (DOM, localStorage, network).
+  - For the rules: avoid effects that don't sync external state.
+    You already met this in Round 9.
+
+  STEP 4 — Mount the toggle
+  Open src/Context/AuthLayout.tsx (where the navbar lives) and add
+  <DarkModeToggle /> to the navbar area.
+
+  STEP 5 — Fix the FOUC
+  Open public/index.html. Inside <head>, BEFORE any <script>
+  Webpack injects, add:
+
+      <script>
+          (function () {
+              try {
+                  if (localStorage.getItem('theme') === 'dark') {
+                      document.documentElement.classList.add('dark');
+                  }
+              } catch (e) {}
+          })();
+      </script>
+
+  This runs synchronously on page load — before React mounts —
+  setting the class so first paint is already dark.
+
+  STEP 6 — Add dark: variants to the major surfaces
+  For each of these elements you styled in 21.3, add a `dark:`
+  counterpart:
+
+      bg-white          → bg-white dark:bg-gray-900
+      text-gray-900     → text-gray-900 dark:text-gray-100
+      text-gray-700     → text-gray-700 dark:text-gray-300
+      text-gray-500     → text-gray-500 dark:text-gray-400
+      bg-gray-50        → bg-gray-50 dark:bg-gray-800
+      border-gray-200   → border-gray-200 dark:border-gray-700
+      bg-gray-100       → bg-gray-100 dark:bg-gray-800
+
+  Toggle in the browser; rerun every page; fix any element that
+  still looks broken.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Test contrast in dark mode. White-on-light-gray is invisible.
+    Lighthouse → Accessibility flags low contrast for you.
+  - Never use raw hex codes in JSX. Always go through Tailwind
+    utilities. If a colour you need doesn't exist, add it to the
+    palette config first.
+  - The aria-label on the toggle is non-negotiable. Icon-only
+    buttons must have an accessible name.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - theme.extend for custom palettes — the "design system as
+    config" pattern.
+  - The class-based dark-mode strategy + the FOUC fix.
+  - localStorage + useEffect for preference persistence (soon to be
+    replaced with Zustand persist in Round 22.4).
+  - The dark-mode swap dictionary you can apply mechanically.
 
 
-CHALLENGE 21.5 — @apply for repeated patterns               Target: 20 min
+CHALLENGE 21.5 — @apply for repeated patterns               Target: 30 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - `@apply`: extract a utility bundle into a CSS class. Use sparingly.
-  - Right time: when a pattern appears 5+ places AND it's a real
-    design-system component (button, card, input).
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  By now you've probably written `px-4 py-2 rounded bg-brand-600
+  text-white hover:bg-brand-700 disabled:opacity-50` for the primary
+  button in 5+ places. That's the threshold where `@apply` starts
+  paying off — you extract the utility bundle into a named class.
 
-  TASK:
-  1. Identify your most-repeated utility bundle (probably button).
-  2. @layer components { .btn-primary { @apply px-4 py-2 ...; } }
-  3. Replace inline usages with `<button className="btn-primary">`.
+  The trap is doing this TOO EARLY. The whole point of Tailwind is
+  utilities in JSX. The moment you @apply everything, you've
+  reinvented Bootstrap.
 
-  RULES:
-  - Default to inline utilities. @apply is an escape hatch, not a
-    starting point.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Right level of abstraction — repeated 5+ times AND named component.
+  1) @apply
+     - Tailwind directive. Inside a CSS rule, `@apply` paste-includes
+       the utility classes' rules.
+     - Lives in your global CSS file, inside an `@layer components`
+       block (that's the slot Tailwind reserves for component-level
+       extracted styles).
+
+  2) When to extract
+     - Pattern appears in 5+ places AND
+     - The combination has a clear design-system name (button-primary,
+       card, input).
+     - "Used twice" is NOT a reason. "Used 5 times" IS.
+
+  3) Why @layer components matters
+     - Without it, your custom class lives outside Tailwind's
+       cascade and gets overridden by utilities in unexpected ways.
+     - Inside `@layer components`, your class plays nice — a utility
+       like `bg-red-600` applied directly on the element still wins,
+       just like normal CSS specificity.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/index.css        (add the @layer components block)
+    Components that used the long button string (replace with `btn-primary`)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Audit
+  Search your codebase for `px-4 py-2 rounded bg-brand-600`. If you
+  find 5+ matches, the button qualifies. If you find 2-3, leave it
+  alone for now — come back when count crosses 5.
+
+  STEP 2 — Define the component classes
+  Open src/index.css. Below the @tailwind directives, add:
+
+      @layer components {
+          .btn-primary {
+              @apply inline-flex items-center justify-center
+                     px-4 py-2 rounded
+                     bg-brand-600 text-white font-medium
+                     hover:bg-brand-700
+                     disabled:opacity-50 disabled:cursor-not-allowed;
+          }
+
+          .btn-secondary {
+              @apply inline-flex items-center justify-center
+                     px-4 py-2 rounded
+                     border border-gray-300 dark:border-gray-600
+                     bg-white dark:bg-gray-800
+                     text-gray-700 dark:text-gray-200
+                     hover:bg-gray-50 dark:hover:bg-gray-700;
+          }
+
+          .btn-danger {
+              @apply inline-flex items-center justify-center
+                     px-4 py-2 rounded
+                     bg-red-600 text-white font-medium
+                     hover:bg-red-700;
+          }
+
+          .card {
+              @apply bg-white dark:bg-gray-800
+                     rounded-lg shadow p-6;
+          }
+      }
+
+  STEP 3 — Replace the long strings
+  In every place you used the full primary-button utility string,
+  swap to `className="btn-primary"`. Same for the others.
+
+  An EmployeeForm submit button now reads:
+      <button type="submit" disabled={isSubmitting} className="btn-primary">
+          Save
+      </button>
+
+  Way easier on the eyes than a 90-character class string.
+
+  STEP 4 — Verify
+  Behaviour identical. Visual identical. Dark mode still works.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - @apply lives ONLY inside @layer components. Putting it anywhere
+    else works in dev but breaks the cascade in production.
+  - Don't extract a card-with-padding-AND-margin-AND-headline. The
+    abstraction should be one cohesive thing (button shape, card
+    chrome) — not a layout snippet that won't reuse.
+  - Inline utilities still beat @apply for one-offs. The trade-off
+    is: more verbose JSX but no CSS file to hunt through.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Right level of abstraction: 5+ uses + named component = extract.
+  - The @layer components block.
+  - Round 21 capstone: your app now looks like a real product, has
+    dark mode, and has a small set of design-system primitives.
 
 
 ================================================================================
@@ -5020,110 +6441,720 @@ subscriptions, no provider, ~1KB. You'll use it for theme, recent
 activity, notifications, draft form state, etc.
 
 
-CHALLENGE 22.1 — Install + first store                      Target: 20 min
+CHALLENGE 22.1 — Install + first store                      Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Zustand (German for "state"): a state-management library.
-    A "store" is a hook (`useThemeStore`) that components call to read
-    and update state. No Provider needed.
-  - `create<T>()((set, get) => ({ ... }))`: builds the store.
-  - Selective subscriptions: components pass a SELECTOR
-    (`s => s.mode`) and only re-render when that slice changes.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  You've used React Context twice — AuthContext (Round 13.2) and
+  RecentActivityContext. Context works but has two real problems:
 
-  TASK:
-  1. npm install zustand
-  2. Create src/stores/themeStore.ts with mode + toggle.
-  3. Use it in your theme toggle button.
+  1. EVERY consumer re-renders whenever ANY piece of the context
+     value changes. If your context exposes `user`, `recentActivity`,
+     and `theme`, a theme toggle re-renders the navbar that only
+     cares about `user`.
+  2. Every context needs a Provider wrapping the tree, ordering them
+     correctly, and rendering boilerplate.
 
-  RULES:
-  - Always pass a selector. Without one, the component re-renders on
-    every store change.
+  Zustand fixes both. It's ~1KB, no Provider needed, and components
+  SUBSCRIBE to slices — only re-rendering when the slice they care
+  about changes.
 
-  WHAT YOU JUST LEARNED:
-  Global state without Providers, with fine-grained subscriptions.
+  Mental model: a Zustand store is "Context done right" by way of
+  Redux without the boilerplate. Coming from .NET, it's like a
+  registered singleton service that emits change notifications and
+  lets observers subscribe to specific properties.
+
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) "Store" = a hook
+     - You call `create<T>()(setup)` to build a store. The return
+       value is a HOOK that you import into any component.
+     - The hook accepts a SELECTOR: `useThemeStore(s => s.mode)`.
+       The component re-renders only when `s.mode` changes (by `===`
+       equality).
+
+  2) The setup function — `set` and `get`
+     - `create((set, get) => ({ ...initialState, ...actions }))`.
+     - `set` updates the store. Two flavours:
+         set({ mode: 'dark' })            // shallow merge
+         set(s => ({ count: s.count+1 })) // functional updater
+     - `get()` reads the current state without subscribing. Use
+       inside actions; never inside a component (use the hook).
+
+  3) Why no Provider
+     - Zustand stores live in MODULE SCOPE. Importing the hook is
+       the only wiring you need. The store is a singleton at runtime.
+
+  4) Selector + equality
+     - Default equality is `===`. Primitive selectors (`s => s.mode`)
+       are fine.
+     - Object selectors (`s => ({ a, b })`) create a new object every
+       call — that's an unstable reference, defeats memoisation. We
+       fix this in 22.3 with `shallow`.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    package.json                            (dependency)
+    src/stores/themeStore.ts                (NEW)
+    src/components/DarkModeToggle.tsx       (rewrite using the store)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Install
+
+      npm install zustand
+
+  STEP 2 — Create the store
+  NEW FILE: src/stores/themeStore.ts
+
+      // ============================================================
+      // themeStore — global dark-mode state via Zustand.
+      //
+      // Replaces the local useState in DarkModeToggle. Any component
+      // can now read the mode, and the side-effect (toggling the html
+      // class) lives in ONE place — the toggle action.
+      // ============================================================
+      import { create } from 'zustand';
+
+      type ThemeMode = 'light' | 'dark';
+
+      interface ThemeState {
+          mode: ThemeMode;
+          toggle: () => void;
+          set: (mode: ThemeMode) => void;
+      }
+
+      // Read initial mode synchronously — same trick as DarkModeToggle.
+      const initialMode: ThemeMode =
+          typeof window !== 'undefined' && localStorage.getItem('theme') === 'dark'
+              ? 'dark'
+              : 'light';
+
+      // Apply the class side-effect when the store changes. Defined
+      // outside the store so we can call it from `toggle` and `set`.
+      const applyDom = (mode: ThemeMode) => {
+          const root = document.documentElement;
+          if (mode === 'dark') root.classList.add('dark');
+          else root.classList.remove('dark');
+          localStorage.setItem('theme', mode);
+      };
+
+      export const useThemeStore = create<ThemeState>((set) => ({
+          mode: initialMode,
+          toggle: () => set((s) => {
+              const next: ThemeMode = s.mode === 'dark' ? 'light' : 'dark';
+              applyDom(next);
+              return { mode: next };
+          }),
+          set: (mode) => {
+              applyDom(mode);
+              set({ mode });
+          },
+      }));
+
+  Anatomy:
+   - `create<ThemeState>` — generic param locks down the store shape.
+   - The setup function takes `set` (and optionally `get`) and
+     returns the initial state + actions in one object.
+   - Actions mutate state by calling `set(...)`. Side effects (DOM,
+     localStorage) live alongside the set call inside the action.
+
+  STEP 3 — Rewrite DarkModeToggle on top of the store
+  Replace the contents of src/components/DarkModeToggle.tsx:
+
+      import { useThemeStore } from '../stores/themeStore';
+
+      const DarkModeToggle = () => {
+          // Selector — only this slice triggers re-renders.
+          const mode = useThemeStore(s => s.mode);
+          const toggle = useThemeStore(s => s.toggle);
+
+          return (
+              <button
+                  type="button"
+                  onClick={toggle}
+                  className="btn-secondary"
+                  aria-label="Toggle dark mode"
+              >
+                  {mode === 'dark' ? '☀️ Light' : '🌙 Dark'}
+              </button>
+          );
+      };
+
+      export default DarkModeToggle;
+
+  Notice what disappeared: useState, useEffect, the localStorage
+  read, the localStorage write. The store owns all of that.
+
+  STEP 4 — Verify
+  Toggle the button → light/dark flips on every page. Reload → the
+  inline script in index.html (from 21.4) still handles the FOUC.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - ALWAYS pass a selector. `useThemeStore()` with no arg returns
+    the whole store; the component re-renders on every change.
+  - Don't put a side-effect inside the setup function's returned
+    object literal (that runs once on module load). Put it inside
+    an action that runs on demand.
+  - The store is a module-level singleton. Don't try to "create
+    multiple stores of the same shape" — make multiple distinct
+    stores or use the slice pattern in 22.5.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Stores are hooks. Selectors are subscriptions.
+  - `set` for updates, `get` for one-shot reads.
+  - Side-effects live inside actions, not in components.
+  - No Provider boilerplate.
 
 
-CHALLENGE 22.2 — Migrate RecentActivityContext → Zustand    Target: 30 min
+CHALLENGE 22.2 — Migrate RecentActivityContext → Zustand    Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Create useRecentActivityStore with the same shape (entries, log,
-     clear, cap-at-5).
-  2. Drop the Provider wrapper.
-  3. Update consumers: useContext → useRecentActivityStore(selector).
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  RecentActivityContext is the perfect migration target — small
+  surface (entries + log + clear), cap-at-5 behaviour, multiple
+  consumers. Doing this once builds muscle memory for the dozens of
+  Context-to-Zustand migrations real codebases routinely run.
 
-  RULES:
-  - Test that the entries list still updates after delete/undo.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Migration pattern: Context → Zustand. Same component surface, less
-  boilerplate.
+  1) Immutable updates with array spread
+     - Inside `set(s => ({ entries: [newEntry, ...s.entries].slice(0,5) }))`:
+       - `[newEntry, ...s.entries]` makes a NEW array (don't mutate).
+       - `.slice(0, 5)` caps it to the first 5.
+     - Why? Zustand uses `===` to detect changes. If you `.push()`,
+       it's the same array reference; no re-render fires.
+
+  2) Selecting actions vs state
+     - State changes → component re-renders.
+     - Actions are stable function references — selecting them with
+       `s => s.log` is safe because the function never changes
+       across renders. Many tutorials show one selector per piece.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/stores/recentActivityStore.ts (NEW)
+    src/Context/RecentActivityContext.tsx (delete after migration)
+    src/components/RecentActivityModal.tsx (point to the new store)
+    src/components/EmployeeList.tsx (where you `log()` after actions)
+    src/App.tsx or wherever the Provider lived (delete it)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Read your current Context
+  Open src/Context/RecentActivityContext.tsx. Note its shape:
+  probably something like
+      interface RecentActivityContextType {
+          entries: ActivityEntry[];
+          log: (msg: string) => void;
+          clear: () => void;
+      }
+  Whatever exactly you have, the store mirrors it.
+
+  STEP 2 — Create the store
+  NEW FILE: src/stores/recentActivityStore.ts
+
+      import { create } from 'zustand';
+
+      export interface ActivityEntry {
+          id: string;        // crypto.randomUUID() for keys
+          message: string;
+          timestamp: number; // Date.now()
+      }
+
+      interface RecentActivityState {
+          entries: ActivityEntry[];
+          log: (message: string) => void;
+          clear: () => void;
+      }
+
+      const MAX_ENTRIES = 5;
+
+      export const useRecentActivityStore = create<RecentActivityState>((set) => ({
+          entries: [],
+          log: (message) => set((s) => {
+              const next: ActivityEntry = {
+                  id: crypto.randomUUID(),
+                  message,
+                  timestamp: Date.now(),
+              };
+              return { entries: [next, ...s.entries].slice(0, MAX_ENTRIES) };
+          }),
+          clear: () => set({ entries: [] }),
+      }));
+
+  STEP 3 — Migrate consumers
+  Find every file that calls `useContext(RecentActivityContext)` or
+  `useRecentActivity()`. Replace:
+
+      // BEFORE
+      const { entries, log, clear } = useRecentActivity();
+
+      // AFTER
+      const entries = useRecentActivityStore(s => s.entries);
+      const log     = useRecentActivityStore(s => s.log);
+      const clear   = useRecentActivityStore(s => s.clear);
+
+  Why one-selector-per-field rather than `s => ({entries, log,
+  clear})`? Without `shallow` (next round), the object selector
+  re-renders every store change. One selector per primitive (or
+  function ref) keeps things tight.
+
+  STEP 4 — Tear down the Provider
+  Open App.tsx (or wherever <RecentActivityProvider> wraps things).
+  Remove the wrapper element. Delete the import.
+
+  Delete src/Context/RecentActivityContext.tsx entirely.
+
+  STEP 5 — Test
+   - Delete an employee → entry appears in the modal.
+   - Undo a delete → entry appears.
+   - Do 6 actions → only the most recent 5 are kept.
+   - Clear → list empties.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - `crypto.randomUUID()` is built-in in modern browsers — perfect
+    for React keys. Don't reach for the `uuid` npm package for this.
+  - Array `.push()` mutates. ALWAYS spread `[new, ...old]` and let
+    Zustand see a fresh reference.
+  - When in doubt, one selector per slice. Combining comes in 22.3
+    with `shallow`.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Migration recipe: identify shape → create store → swap call
+    sites → delete Provider.
+  - Immutable update idioms (spread, slice).
+  - Stable-function selectors for actions.
 
 
-CHALLENGE 22.3 — Shallow equality for combined selectors    Target: 25 min
+CHALLENGE 22.3 — Shallow equality for combined selectors    Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Combining slices `s => ({ a: s.a, b: s.b })` returns a NEW object
-    every render — defeats memoization.
-  - `shallow` from zustand/shallow compares object keys/values one
-    level deep.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  In 22.2 you wrote 3 separate `useRecentActivityStore(s => s.x)`
+  calls per consumer. That's verbose. The natural impulse is:
 
-  TASK:
-  1. Find multi-slice selectors in your codebase.
-  2. Add `shallow` as the second argument:
-       const { a, b } = useStore(s => ({ a: s.a, b: s.b }), shallow);
+      const { entries, log, clear } = useRecentActivityStore(s => ({
+          entries: s.entries,
+          log: s.log,
+          clear: s.clear,
+      }));
 
-  RULES:
-  - Single-slice selectors with primitives don't need shallow.
+  But this returns a NEW OBJECT on every store update — Zustand
+  sees `{} !== {}` and re-renders the component every time, even
+  when none of the fields changed. `shallow` is the fix.
 
-  WHAT YOU JUST LEARNED:
-  Default equality is `===`. Shallow is the fix for object selectors.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Reference equality vs structural equality
+     - JavaScript's `===` on objects compares REFERENCES.
+       `{a:1} === {a:1}` is false.
+     - "Shallow" equality compares OWN ENUMERABLE KEYS one level
+       deep. `shallowEqual({a:1}, {a:1})` is true. Nested objects
+       are still reference-compared.
+
+  2) The shallow utility from zustand
+     - `import { shallow } from 'zustand/shallow';`
+     - Pass it as the second argument to the store hook:
+         const { a, b } = useStore(s => ({ a: s.a, b: s.b }), shallow);
+
+  3) When you need it
+     - Only when the selector returns a NEW OBJECT each call.
+     - Primitive selectors (`s => s.count`) don't need it.
+     - Function-only selectors don't need it (function ref is stable).
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/RecentActivityModal.tsx
+    Any component currently doing 3+ separate selector calls
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Identify combined-selector candidates
+  Grep for files calling `useRecentActivityStore` three times in
+  a row. Those are the candidates. The 22.1 themeStore is too
+  small (2 fields) — combined-selector overhead isn't worth it.
+
+  STEP 2 — Refactor to a single object selector + shallow
+
+      // BEFORE
+      const entries = useRecentActivityStore(s => s.entries);
+      const log     = useRecentActivityStore(s => s.log);
+      const clear   = useRecentActivityStore(s => s.clear);
+
+      // AFTER
+      import { shallow } from 'zustand/shallow';
+
+      const { entries, log, clear } = useRecentActivityStore(
+          s => ({ entries: s.entries, log: s.log, clear: s.clear }),
+          shallow,
+      );
+
+  STEP 3 — Verify the perf claim
+  Add a console.log in RecentActivityModal's render. Toggle dark
+  mode (themeStore changes). The modal does NOT re-render because
+  none of its selected fields changed. Without `shallow`, it would.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Don't add `shallow` to single-slice selectors. Wasted overhead.
+  - The selector function should be stable (defined inline is fine
+    — it's re-created each render but the SHALLOW compare on the
+    returned object is what gates re-renders).
+  - Don't compare deeply-nested objects with `shallow`. If you have
+    nested state, structure your selectors to pull the leaves.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - The reference-equality trap on object selectors.
+  - `shallow` as the targeted fix.
+  - When you DON'T need it (primitives, single function refs).
 
 
-CHALLENGE 22.4 — Persist middleware (theme + recent)         Target: 25 min
+CHALLENGE 22.4 — Persist middleware (theme + recent)        Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Zustand middleware: `persist(stateCreator, { name })` saves the
-    store to localStorage and rehydrates on load.
-  - `partialize` to persist only some fields.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Right now themeStore manually reads/writes localStorage in its
+  actions. recentActivityStore loses every entry on reload — log a
+  few activities, refresh, gone. Zustand's `persist` middleware
+  handles both for free.
 
-  TASK:
-  1. Wrap themeStore + recentActivityStore in persist with unique
-     names.
-  2. Verify reload: theme + last 5 activities survive.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Don't persist sensitive data (tokens, PII) in localStorage.
+  1) Zustand middleware
+     - Middleware wraps the setup function. Each middleware adds a
+       behaviour (persistence, devtools, immer). They're composable
+       — you nest them.
+     - Syntax: `create(persist(setup, options))`.
 
-  WHAT YOU JUST LEARNED:
-  Free persistence with zero code in components.
+  2) The persist middleware
+     - Writes the whole store to localStorage (default) on every
+       change. Rehydrates on app start.
+     - The `name` option becomes the localStorage key. Pick
+       something specific — `'theme'` is too generic.
+     - `partialize` lets you persist only specific fields (e.g.
+       exclude actions, exclude transient state).
+
+  3) Rehydration timing
+     - persist reads localStorage synchronously on store creation,
+       so by the time React renders, the store is already populated.
+     - You can listen to a `onRehydrateStorage` callback if you need
+       to act when hydration finishes. Rarely needed.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/stores/themeStore.ts
+    src/stores/recentActivityStore.ts
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Migrate themeStore to persist
+  Open src/stores/themeStore.ts. Rewrite as:
+
+      import { create } from 'zustand';
+      import { persist } from 'zustand/middleware';
+
+      type ThemeMode = 'light' | 'dark';
+
+      interface ThemeState {
+          mode: ThemeMode;
+          toggle: () => void;
+      }
+
+      const applyDom = (mode: ThemeMode) => {
+          const root = document.documentElement;
+          if (mode === 'dark') root.classList.add('dark');
+          else root.classList.remove('dark');
+      };
+
+      export const useThemeStore = create<ThemeState>()(
+          persist(
+              (set, get) => ({
+                  mode: 'light',
+                  toggle: () => {
+                      const next: ThemeMode = get().mode === 'dark' ? 'light' : 'dark';
+                      applyDom(next);
+                      set({ mode: next });
+                  },
+              }),
+              {
+                  name: 'employee-manager:theme',
+                  partialize: (s) => ({ mode: s.mode }), // don't persist actions
+                  onRehydrateStorage: () => (state) => {
+                      // Apply the DOM class right after rehydration.
+                      if (state) applyDom(state.mode);
+                  },
+              },
+          ),
+      );
+
+  Notice:
+   - The double-call: `create<ThemeState>()(persist(setup, opts))`.
+     The extra parens are a TypeScript ergonomic — they let the
+     generic param flow through middleware properly.
+   - We dropped the manual `localStorage.setItem` calls. persist
+     handles them.
+   - `partialize` returns only the slice we want stored.
+   - `onRehydrateStorage` applies the DOM class once persist has
+     populated `mode`. Keeps the FOUC fix working without the
+     manual read at module load.
+
+  STEP 2 — Migrate recentActivityStore to persist
+
+      import { create } from 'zustand';
+      import { persist } from 'zustand/middleware';
+
+      // ... ActivityEntry interface, MAX_ENTRIES const, same as before
+
+      export const useRecentActivityStore = create<RecentActivityState>()(
+          persist(
+              (set) => ({
+                  entries: [],
+                  log: (message) => set((s) => {
+                      const next: ActivityEntry = {
+                          id: crypto.randomUUID(),
+                          message,
+                          timestamp: Date.now(),
+                      };
+                      return { entries: [next, ...s.entries].slice(0, MAX_ENTRIES) };
+                  }),
+                  clear: () => set({ entries: [] }),
+              }),
+              {
+                  name: 'employee-manager:recent-activity',
+                  partialize: (s) => ({ entries: s.entries }),
+              },
+          ),
+      );
+
+  STEP 3 — Verify
+   - Toggle dark mode, refresh — mode survives.
+   - Open localStorage in DevTools → you see two entries with the
+     prefixed names.
+   - Log 2 activities, refresh — both survive.
+   - Open in a second tab — both stores have the same state.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - NEVER persist sensitive data. Tokens, password hashes, PII —
+    not in localStorage. Persist is for user preferences and
+    transient UI state.
+  - Always namespace `name` with your app's identifier — multiple
+    apps on the same domain would collide otherwise.
+  - `partialize` is mandatory in practice. Without it you persist
+    your action functions too — that fails silently (functions
+    can't serialise).
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Middleware composition with `create()(persist(...))`.
+  - `partialize` to pick the storable slice.
+  - `onRehydrateStorage` for post-hydration side-effects.
+  - Why some stores shouldn't be persisted at all.
 
 
-CHALLENGE 22.5 — Devtools + slice pattern                   Target: 20 min
+CHALLENGE 22.5 — Devtools + slice pattern + capstone        Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - `devtools` middleware: wires to Redux DevTools (browser ext) —
-    time-travel debugging, action log.
-  - Slice pattern: split a big store into slices and combine.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Two finishing touches for production-grade Zustand: the devtools
+  middleware (time-travel debugging in the Redux DevTools browser
+  extension) and the slice pattern (decompose a big store into
+  smaller composable pieces).
 
-  TASK:
-  1. Wrap with `devtools(persist(...))`.
-  2. If any store has 5+ unrelated fields, split into slices.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - devtools is a no-op in production.
+  1) The devtools middleware
+     - Wires your store into the Redux DevTools browser extension.
+     - You see every action, every state diff, can time-travel.
+     - Becomes a no-op in production builds — zero overhead in
+       prod.
 
-  WHAT YOU JUST LEARNED:
-  Production-grade Zustand: persistent, debuggable, composable.
+  2) Middleware order
+     - `devtools(persist(setup))` — outer middleware wraps inner.
+     - devtools-outermost is the convention; persist works through it.
+
+  3) The slice pattern
+     - When a single store grows past ~5 unrelated fields, split
+       it into "slices" — small setup functions for each concern.
+     - Combine slices: `(...a) => ({ ...sliceA(...a), ...sliceB(...a) })`.
+     - Each slice still accesses the FULL `set` and `get` if it
+       needs cross-slice reads.
+     - Use it preventively — but only if a store grows that big.
+       Don't over-engineer day one.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/stores/themeStore.ts                (wrap with devtools)
+    src/stores/recentActivityStore.ts       (wrap with devtools)
+    Optional: src/stores/uiStore.ts (slice-pattern example)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Install Redux DevTools browser extension
+  Chrome/Edge: Redux DevTools (extension store).
+  Firefox: Redux DevTools (addons.mozilla.org).
+  This is a browser extension you install ONCE — independent of
+  the app.
+
+  STEP 2 — Wrap stores with devtools
+  Open src/stores/themeStore.ts and add devtools as the outer wrap:
+
+      import { create } from 'zustand';
+      import { persist, devtools } from 'zustand/middleware';
+
+      export const useThemeStore = create<ThemeState>()(
+          devtools(
+              persist(
+                  (set, get) => ({
+                      mode: 'light',
+                      toggle: () => { /* ... unchanged ... */ },
+                  }),
+                  { name: 'employee-manager:theme', partialize: s => ({ mode: s.mode }) },
+              ),
+              { name: 'ThemeStore' },   // shown in the DevTools panel
+          ),
+      );
+
+  Same shape for recentActivityStore — wrap with devtools, label
+  it 'RecentActivityStore'.
+
+  STEP 3 — Open DevTools and verify
+   - DevTools → Redux tab.
+   - Toggle dark mode → see an action fire with the diff.
+   - Log an activity → see it append.
+   - Click "Jump" on a past state → store time-travels (the UI
+     reflects the past state immediately).
+
+  STEP 4 — (Optional) Slice-pattern demonstration
+  Create src/stores/uiStore.ts to show the pattern in case you grow
+  a store later:
+
+      import { create } from 'zustand';
+      import { devtools } from 'zustand/middleware';
+      import type { StateCreator } from 'zustand';
+
+      // ── Slice 1: modals ─────────────────────────────────────────
+      interface ModalSlice {
+          modalOpen: boolean;
+          openModal: () => void;
+          closeModal: () => void;
+      }
+
+      const createModalSlice: StateCreator<UIState, [], [], ModalSlice> =
+          (set) => ({
+              modalOpen: false,
+              openModal: () => set({ modalOpen: true }),
+              closeModal: () => set({ modalOpen: false }),
+          });
+
+      // ── Slice 2: sidebar ────────────────────────────────────────
+      interface SidebarSlice {
+          sidebarCollapsed: boolean;
+          toggleSidebar: () => void;
+      }
+
+      const createSidebarSlice: StateCreator<UIState, [], [], SidebarSlice> =
+          (set) => ({
+              sidebarCollapsed: false,
+              toggleSidebar: () => set(s => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+          });
+
+      // ── Combine ─────────────────────────────────────────────────
+      type UIState = ModalSlice & SidebarSlice;
+
+      export const useUIStore = create<UIState>()(
+          devtools(
+              (...a) => ({
+                  ...createModalSlice(...a),
+                  ...createSidebarSlice(...a),
+              }),
+              { name: 'UIStore' },
+          ),
+      );
+
+  NEW HERE: StateCreator
+  - The TypeScript type for a Zustand setup function.
+  - `StateCreator<StoreType, MutatorsIn, MutatorsOut, SliceType>`
+  - The four generic parameters look intimidating; in practice you
+    only customise the FIRST (the full state) and the LAST (this
+    slice's shape). Middle two are usually `[]`.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - devtools-outside-persist. Reverse order swallows persistence
+    events.
+  - Don't pre-split into slices if your store is small. The slice
+    pattern is an answer to "this store has 8 unrelated concerns,"
+    not "I might add fields someday."
+  - Time-travel only mutates store state — it doesn't replay
+    side-effects (network calls, DOM changes). Treat it as a
+    diagnostic tool, not a true replay.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - devtools middleware + Redux DevTools extension.
+  - Middleware composition order.
+  - The slice pattern for decomposing large stores.
+  - Round 22 capstone: theme + recent activity now run on a
+    production-grade Zustand setup — persistent, debuggable, with
+    a path to grow. Every later round's UI state (filters, modal
+    open/close, selection, draft forms) goes through a store.
 
 
 ================================================================================
@@ -5138,120 +7169,994 @@ form → validation → role check → tests. You won't write new patterns;
 you'll re-write Round 17/18/19/20 in new domains. That's the point.
 
 
-CHALLENGE 23.1 — Profile types + .NET endpoint              Target: 30 min
+CHALLENGE 23.1 — Profile types + .NET endpoint              Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Profile is just "the current user's own Employee record." We add
-    a GET /api/profile that resolves the current user from the JWT
-    and returns their Employee data.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Round 20.3 merged User into Employee — every employee row IS the
+  identity. "Profile" is just "the Employee row for the user whose
+  JWT is on this request." This challenge introduces the pattern
+  every feature will reuse: the server resolves WHO the caller is
+  from the JWT and acts on their own row — the client never tells
+  the server "I am user X."
 
-  TASK:
-  1. ProfileController.GetMe(): reads sub claim from JWT, returns
-     EmployeeService.GetByUserId(...).
-  2. (If User doesn't link to Employee yet, add a UserId field on
-     Employee and populate.)
-  3. src/Types/Profile.ts: `export type Profile = Employee` (alias
-     for now; we may diverge later).
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Don't add /api/profile/:id. Profile is always "me."
-  - The server resolves the user — never trust a client-sent id.
+  1) "The JWT IS the identity"
+     - Every request that hits an [Authorize] endpoint has already
+       been validated by the JWT middleware.
+     - The middleware populates `User` (the controller's
+       ClaimsPrincipal property) with the claims from the token.
+     - `User.Identity?.Name` → the `sub` claim → the username.
+     - This is how the server knows WHO is calling without trusting
+       any client-sent id.
 
-  WHAT YOU JUST LEARNED:
-  Auth context propagating to the API. The JWT IS the identity.
+  2) Why no /api/profile/{id}
+     - If the endpoint accepts an id, a malicious user can pass
+       someone else's id and read their record.
+     - "Me" endpoints (/api/profile, /api/leaves/mine,
+       /api/documents/mine) take ZERO id parameters. The server
+       always derives the target from the JWT.
+
+  3) TypeScript type aliases vs interfaces
+     - `type Profile = Employee` — alias, points to the same shape.
+     - `interface Profile extends Employee {}` — interface with no
+       extras, technically also fine.
+     - For "same shape, different name," prefer `type` — it's the
+       canonical idiom. Interfaces are for cases where you'll add
+       fields LATER.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.API/Controllers/ProfileController.cs  (NEW)
+    EmployeeManager.Application/Services/IEmployeeService.cs (read confirms)
+    src/Types/Profile.ts                  (NEW — alias)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — The controller
+  NEW FILE: EmployeeManager.API/Controllers/ProfileController.cs
+
+      using EmployeeManager.Domain.Models;
+      using EmployeeManager.Domain.Repositories;
+      using Microsoft.AspNetCore.Authorization;
+      using Microsoft.AspNetCore.Mvc;
+
+      namespace EmployeeManager.API.Controllers;
+
+      [ApiController]
+      [Route("api/[controller]")]
+      [Authorize]   // every action requires a valid JWT
+      public class ProfileController : ControllerBase
+      {
+          private readonly IEmployeeRepository _employees;
+
+          public ProfileController(IEmployeeRepository employees)
+          {
+              _employees = employees;
+          }
+
+          [HttpGet]   // GET /api/profile
+          public async Task<ActionResult<Employee>> GetMe()
+          {
+              // `User.Identity?.Name` reads the JWT's `sub` claim
+              // (set by AuthService.GenerateJwtToken with
+              // JwtRegisteredClaimNames.Sub = user.Username).
+              var username = User.Identity?.Name;
+              if (string.IsNullOrEmpty(username))
+                  return Unauthorized();
+
+              var me = await _employees.GetByUsernameAsync(username);
+              if (me is null)
+                  return NotFound();
+
+              // Strip PasswordHash before returning — even though the
+              // current JSON serializer would include it. Defense in
+              // depth: never send hashes over the wire.
+              me.PasswordHash = null;
+              return Ok(me);
+          }
+      }
+
+  Test it now:
+   - Run the backend. Log in as admin in any HTTP client.
+   - GET /api/profile with the Authorization header. You should
+     get a 200 with admin's Employee row (PasswordHash null).
+   - GET /api/profile WITHOUT the header → 401.
+
+  STEP 2 — TS type alias
+  NEW FILE: src/Types/Profile.ts
+
+      // Profile is the current user's own Employee row. Aliased for
+      // semantic clarity at call sites — useProfile() reads cleaner
+      // than "the Employee for the current user."
+      import type { Employee } from './Models';
+
+      export type Profile = Employee;
+
+  Note: `import type` is a TypeScript-only import — it's erased at
+  compile time and pulls only the type info, not runtime values.
+  Use it for type-only imports to keep bundles small.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Don't add /api/profile/{id}. Profile is ALWAYS "me."
+  - The server resolves the username from the JWT. Never accept a
+    username/id field from the client for "me" operations.
+  - Strip secrets (PasswordHash, security questions) before
+    returning. Even if the client is "trusted," logs and proxies
+    can capture response bodies.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - The "me" endpoint pattern — JWT-derived identity, no client id.
+  - TypeScript type aliases vs interfaces.
+  - `import type` for type-only imports.
 
 
-CHALLENGE 23.2 — useProfile query hook                      Target: 25 min
+CHALLENGE 23.2 — useProfile query hook                      Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. src/queries/profileKeys.ts: `export const profileKeys = { me:
-     ['profile', 'me'] as const };`
-  2. src/queries/useProfile.ts: useQuery wrapping
-     api.get<Profile>('/profile').
-  3. Default `?? null`.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  TanStack Query gives every "feature" the same three shapes: a
+  query keys object (cache addressing), a useX hook (the read), and
+  a useUpdateX hook (the write). You've built this once for
+  Employees in Round 17. Now you build it for Profile. By Round 30
+  you'll be writing these blind.
 
-  RULES:
-  - Same query-key hierarchy convention as employees (Round 17.5).
-  - Repetition. Same pattern.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Reapplying Round 17. By Round 30 you'll be writing useX hooks blindly.
+  1) Query-key hierarchy
+     - Round 17.5 established the convention:
+         employeeKeys = {
+             all:   ['employees'] as const,
+             list:  () => [...employeeKeys.all, 'list'] as const,
+             detail: (id: EmployeeId) => [...employeeKeys.all, 'detail', id] as const,
+         };
+     - Same shape for every domain. The `all` root is the parent
+       you invalidate to wipe a whole feature's cache.
+     - Profile is simpler — there's only ONE row ("mine"):
+         profileKeys = {
+             all: ['profile'] as const,
+             me:  () => [...profileKeys.all, 'me'] as const,
+         };
+
+  2) `as const` on tuples
+     - Without it, `['profile', 'me']` is typed as `string[]`.
+       Mutable, lossy.
+     - With it, it's typed as `readonly ['profile', 'me']` — a
+       tuple with literal types. This is what TanStack Query
+       needs to give you precise type inference.
+
+  3) The generic API method
+     - `api.get<Profile>('/profile')` — the generic param tells
+       axios what shape `response.data` will have.
+     - Lives in src/services/api.ts. If your axios instance is
+       called `api`, this works out of the box.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/Queries/profileKeys.ts          (NEW)
+    src/Queries/useProfile.ts           (NEW)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — The query keys
+  NEW FILE: src/Queries/profileKeys.ts
+
+      export const profileKeys = {
+          all: ['profile'] as const,
+          me:  () => [...profileKeys.all, 'me'] as const,
+      };
+
+  STEP 2 — The hook
+  NEW FILE: src/Queries/useProfile.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { api } from '../services/api';
+      import { profileKeys } from './profileKeys';
+      import type { Profile } from '../Types/Profile';
+
+      export const useProfile = () =>
+          useQuery({
+              queryKey: profileKeys.me(),
+              queryFn: async () => {
+                  const response = await api.get<Profile>('/profile');
+                  return response.data;
+              },
+              // Profile rarely changes; keep it fresh-enough for 5 min.
+              staleTime: 5 * 60 * 1000,
+          });
+
+  Anatomy:
+   - `queryKey` — the cache address. Same call from any component
+     returns the same cached data.
+   - `queryFn` — the async function that produces the data.
+   - `staleTime` — how long data is considered fresh. Within this
+     window, refetches are skipped.
+
+  STEP 3 — Smoke test
+  Drop a temporary `<pre>{JSON.stringify(useProfile().data, null, 2)}</pre>`
+  in any rendered component (e.g. EmployeeList). Log in and see
+  your own row render. Remove the test code.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always call query-key methods (`profileKeys.me()`), never the
+    raw `profileKeys.me` reference — they're functions for
+    consistency with parameterised keys like `detail(id)`.
+  - Don't reach for queryClient.invalidateQueries directly from a
+    component. That belongs in mutations (next challenge).
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Reapplied the Round 17 pattern in a new domain. Same shape,
+    different data.
+  - `as const` on key tuples for precise type inference.
+  - The `import type` idiom for type-only imports.
 
 
-CHALLENGE 23.3 — Profile page route + display               Target: 30 min
+CHALLENGE 23.3 — Profile page route + display               Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. routes.ts: `profile: () => '/profile' as const`.
-  2. Router config: add /profile inside AuthLayout.
-  3. ProfilePage.tsx: render useProfile().data in a card. Fields:
-     name, email, dept, position, date of joining.
-  4. Header gets a "My Profile" link to /profile.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Your first "feature page" — read-only data from a query hook,
+  rendered as Tailwind cards. The simplest shape you'll ever build.
+  Establishes the loading/error/empty state pattern you'll reuse on
+  every subsequent page.
 
-  RULES:
-  - Tailwind throughout (Round 21 muscle memory).
-  - Loading state, error state — same shape as EmployeeList.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Read-only page from a useQuery hook. The simplest possible feature
-  page.
+  1) The three render states (loading / error / data)
+     useQuery returns `{ data, isLoading, isError, error }`. Real
+     pages branch on all three:
+
+         if (isLoading) return <Loading />;
+         if (isError) return <ErrorState message={...} />;
+         if (!data) return null;
+         return <ActualPage data={data} />;
+
+     Skipping any branch produces real bugs — flicker on load, white
+     screen on 500, type errors because `data` could be undefined.
+
+  2) Conditional layout via Tailwind utility blocks
+     Repeated layouts (key-value rows) get their own micro-pattern.
+     Two columns: a label and a value, with consistent typography.
+
+  3) date-fns for date formatting
+     - `format(new Date(iso), 'MMM d, yyyy')` → "Jan 15, 2024"
+     - Tiny, tree-shakable, every team uses it.
+     - Avoid raw `toLocaleDateString()` — locale defaults differ
+       across user machines.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    package.json                            (add date-fns)
+    src/routes.ts                           (add profile())
+    src/App.tsx                             (route registration)
+    src/components/ProfilePage.tsx          (NEW)
+    src/Context/AuthLayout.tsx              (nav link to /profile)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Install date-fns
+
+      npm install date-fns
+
+  STEP 2 — Route helper
+  Open src/routes.ts and add:
+
+      profile: () => '/profile' as const,
+
+  STEP 3 — The page component
+  NEW FILE: src/components/ProfilePage.tsx
+
+      import { Link } from 'react-router-dom';
+      import { format } from 'date-fns';
+      import { useProfile } from '../Queries/useProfile';
+
+      const Field = ({ label, value }: { label: string; value: string }) => (
+          <div className="flex flex-col py-2 border-b border-gray-200
+                          dark:border-gray-700 last:border-b-0">
+              <span className="text-xs uppercase tracking-wider text-gray-500
+                               dark:text-gray-400">
+                  {label}
+              </span>
+              <span className="text-sm text-gray-900 dark:text-gray-100">
+                  {value || '—'}
+              </span>
+          </div>
+      );
+
+      const ProfilePage = () => {
+          const { data: profile, isLoading, isError } = useProfile();
+
+          if (isLoading) {
+              return (
+                  <div className="max-w-2xl mx-auto p-6">
+                      <p className="text-gray-500">Loading profile…</p>
+                  </div>
+              );
+          }
+
+          if (isError || !profile) {
+              return (
+                  <div className="max-w-2xl mx-auto p-6">
+                      <p className="text-red-600">Could not load profile.</p>
+                  </div>
+              );
+          }
+
+          return (
+              <div className="max-w-2xl mx-auto p-6">
+                  <div className="flex justify-between items-center mb-4">
+                      <h1 className="text-2xl font-semibold">My Profile</h1>
+                      <Link to="/profile/edit" className="btn-primary">
+                          Edit
+                      </Link>
+                  </div>
+
+                  <div className="card">
+                      <Field label="Name"
+                             value={`${profile.firstName} ${profile.lastName}`} />
+                      <Field label="Email" value={profile.email} />
+                      <Field label="Phone" value={profile.phoneNumber} />
+                      <Field label="Department" value={profile.department} />
+                      <Field label="Position" value={profile.position} />
+                      <Field label="Date of Joining"
+                             value={profile.dateOfJoining
+                                 ? format(new Date(profile.dateOfJoining), 'MMM d, yyyy')
+                                 : '—'} />
+                      <Field label="Role" value={profile.role} />
+                  </div>
+              </div>
+          );
+      };
+
+      export default ProfilePage;
+
+  Anatomy:
+   - The `Field` component is a local helper (no need to extract
+     into its own file — it's only used here).
+   - `value || '—'` shows an em-dash when a field is empty. Better
+     UX than an empty line.
+   - `last:border-b-0` removes the bottom border on the last
+     field — `last:` is a Tailwind variant for `:last-child`.
+
+  STEP 4 — Wire the route
+  Open src/App.tsx. Inside the AuthLayout children array, add:
+
+      { path: routes.profile(), element: <ProfilePage /> },
+
+  Import the component at the top.
+
+  STEP 5 — Navigation link
+  Open src/Context/AuthLayout.tsx (your navbar lives here). Add a
+  "My Profile" link:
+
+      import { NavLink } from 'react-router-dom';
+      // ...
+      <NavLink
+          to={routes.profile()}
+          className={({ isActive }) =>
+              `px-3 py-2 text-sm ${isActive ? 'font-semibold' : ''}`
+          }
+      >
+          My Profile
+      </NavLink>
+
+  NEW HERE: NavLink vs Link
+  - <NavLink> is <Link> with active-state awareness.
+  - The className prop accepts a FUNCTION that receives
+    `{ isActive }` and returns a class string. Use it for nav
+    items that need a "you are here" indicator.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always branch on all three states (loading, error, data).
+    The TS narrowing on `data` requires the explicit `!data` check
+    even after isLoading is false.
+  - Use NavLink for in-app nav, Link for content links.
+  - Never call `new Date(iso).toLocaleDateString()` — locale
+    differences will burn you. date-fns format() is deterministic.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - First feature page: data hook → conditional render → display.
+  - The loading/error/data triad as a non-negotiable.
+  - NavLink for active-state navigation.
+  - date-fns for deterministic date formatting.
 
 
-CHALLENGE 23.4 — Edit profile (RHF + Zod + mutation)        Target: 40 min
+CHALLENGE 23.4 — Edit profile (RHF + Zod + mutation)        Target: 60 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. schemas/profileSchema.ts: Zod schema with editable fields
-     (phoneNumber, address — NOT email or department; those are admin-
-     owned).
-  2. queries/useUpdateProfile.ts: useMutation calling PUT /api/profile.
-     On success: queryClient.setQueryData(profileKeys.me, data) +
-     toast.
-  3. ProfileEditPage.tsx: RHF + zodResolver + reset(profile) on load
-     + onSubmit calls updateMutation.mutate(data).
-  4. Submit button disabled until isValid + isDirty + !isPending.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  The edit-form pattern is the most reused shape in the whole app.
+  By the end of this round you should be able to write it from
+  memory: useQuery → reset(data) → useForm + zodResolver → submit
+  via useMutation → setQueryData on success. Five composable parts.
 
-  RULES:
-  - `isDirty` (RHF formState) prevents wasted submits when nothing
-    changed.
-  - Optimistic update on profile is fine — single record.
+  Critically, this round teaches you the "field-allow-list" pattern
+  — some fields are admin-owned (email, department, salary) and
+  must NOT be editable from the self-service profile page. The
+  client allow-lists; the SERVER also enforces it (defense in depth).
 
-  WHAT YOU JUST LEARNED:
-  Edit form = useQuery + reset + useMutation + RHF + zodResolver.
-  Same five lines you'll reuse in every feature edit form.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) RHF `reset(values)` — populate a form with server data
+     - When the form mounts, server data hasn't arrived yet.
+       defaultValues are empty strings.
+     - Once useProfile().data resolves, you call `reset(data)` in
+       a useEffect to fill in the actual values.
+     - Calling reset also clears `isDirty` — perfect: the form is
+       "clean" until the user actually changes something.
+
+  2) RHF `formState.isDirty` and `isValid`
+     - `isDirty`: true if any field's value differs from
+       defaultValues / last reset.
+     - `isValid`: true if Zod validation passes.
+     - Submit button: disabled until BOTH are true. Prevents
+       useless API calls when nothing changed and saves the user
+       from a 400 error round-trip.
+
+  3) Optimistic updates with TanStack Query
+     - `setQueryData(key, newValue)` writes directly into the
+       cache. Useful for single-record edits where you already
+       know the next state.
+     - `invalidateQueries(key)` is the heavier alternative —
+       refetches from the server. Use it when you can't predict
+       the server's final shape.
+     - For profile (1 row, you know what changed): setQueryData.
+
+  4) PATCH vs PUT
+     - PUT replaces the entire resource.
+     - PATCH applies a partial update.
+     - Profile edits should use PUT here because the editable
+       subset is well-defined; we send back the FULL allowed
+       fields, even unchanged ones.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/UpdateProfileRequest.cs (NEW)
+    EmployeeManager.API/Controllers/ProfileController.cs (add PUT)
+    src/schemas/profileSchema.ts                  (NEW)
+    src/services/api.ts                           (add updateProfile)
+    src/Queries/useUpdateProfile.ts               (NEW)
+    src/components/ProfileEditPage.tsx            (NEW)
+    src/routes.ts                                 (profileEdit())
+    src/App.tsx                                   (route registration)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — DTO for the request body
+  NEW FILE: EmployeeManager.Domain/Models/UpdateProfileRequest.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public class UpdateProfileRequest
+      {
+          public string PhoneNumber { get; set; } = string.Empty;
+          // Add other employee-editable fields as you go. Email,
+          // department, position, salary are intentionally absent —
+          // those are admin-only.
+      }
+
+  STEP 2 — Add the controller action
+  Append to ProfileController.cs:
+
+      [HttpPut]   // PUT /api/profile
+      public async Task<ActionResult<Employee>> UpdateMe(
+          [FromBody] UpdateProfileRequest request)
+      {
+          var username = User.Identity?.Name;
+          if (string.IsNullOrEmpty(username))
+              return Unauthorized();
+
+          var me = await _employees.GetByUsernameAsync(username);
+          if (me is null)
+              return NotFound();
+
+          // Whitelist: copy ONLY the fields the user is allowed to
+          // edit. Even if the client sneaks `Email` into the body,
+          // it's ignored here.
+          me.PhoneNumber = request.PhoneNumber;
+
+          await _employees.UpdateAsync(me);
+
+          me.PasswordHash = null;
+          return Ok(me);
+      }
+
+  STEP 3 — Zod schema
+  NEW FILE: src/schemas/profileSchema.ts
+
+      import { z } from 'zod';
+
+      export const profileSchema = z.object({
+          phoneNumber: z
+              .string()
+              .trim()
+              .min(7, 'Phone number is too short')
+              .max(20, 'Phone number is too long'),
+      });
+
+      export type ProfileFormValues = z.infer<typeof profileSchema>;
+
+  NEW HERE: z.infer
+  - `z.infer<typeof schema>` extracts the TypeScript type from a
+    Zod schema. You write the schema once; both runtime validation
+    AND compile-time types come from it.
+
+  STEP 4 — API method
+  Open src/services/api.ts and add:
+
+      import type { Profile } from '../Types/Profile';
+      import type { ProfileFormValues } from '../schemas/profileSchema';
+
+      export const updateProfile = (values: ProfileFormValues) =>
+          api.put<Profile>('/profile', values);
+
+  STEP 5 — useUpdateProfile hook
+  NEW FILE: src/Queries/useUpdateProfile.ts
+
+      import { useMutation, useQueryClient } from '@tanstack/react-query';
+      import { toast } from 'react-toastify';
+      import { isAxiosError } from 'axios';
+      import { updateProfile } from '../services/api';
+      import { profileKeys } from './profileKeys';
+      import type { Profile } from '../Types/Profile';
+      import type { ProfileFormValues } from '../schemas/profileSchema';
+
+      export const useUpdateProfile = () => {
+          const queryClient = useQueryClient();
+
+          return useMutation({
+              mutationFn: (values: ProfileFormValues) => updateProfile(values),
+              onSuccess: (response) => {
+                  // Write the server's response directly into cache.
+                  // Anywhere using useProfile() now sees the updated row
+                  // without an additional fetch.
+                  queryClient.setQueryData<Profile>(profileKeys.me(), response.data);
+                  toast.success('Profile updated.');
+              },
+              onError: (err) => {
+                  const msg = isAxiosError<{ message?: string }>(err)
+                      ? err.response?.data?.message ?? 'Failed to update profile.'
+                      : 'Failed to update profile.';
+                  toast.error(msg);
+              },
+          });
+      };
+
+  STEP 6 — Route helper
+  Add to src/routes.ts:
+
+      profileEdit: () => '/profile/edit' as const,
+
+  STEP 7 — The edit page
+  NEW FILE: src/components/ProfileEditPage.tsx
+
+      import { useEffect } from 'react';
+      import { useForm } from 'react-hook-form';
+      import { zodResolver } from '@hookform/resolvers/zod';
+      import { useNavigate } from 'react-router-dom';
+      import clsx from 'clsx';
+      import { useProfile } from '../Queries/useProfile';
+      import { useUpdateProfile } from '../Queries/useUpdateProfile';
+      import { profileSchema, ProfileFormValues } from '../schemas/profileSchema';
+      import { routes } from '../routes';
+
+      const ProfileEditPage = () => {
+          const navigate = useNavigate();
+          const { data: profile, isLoading } = useProfile();
+          const updateMutation = useUpdateProfile();
+
+          const {
+              register,
+              handleSubmit,
+              reset,
+              formState: { errors, isDirty, isValid, isSubmitting },
+          } = useForm<ProfileFormValues>({
+              resolver: zodResolver(profileSchema),
+              mode: 'onChange',     // re-validate on every keystroke
+              defaultValues: { phoneNumber: '' },
+          });
+
+          // Populate the form once the profile data arrives.
+          useEffect(() => {
+              if (profile) {
+                  reset({ phoneNumber: profile.phoneNumber ?? '' });
+              }
+          }, [profile, reset]);
+
+          const onSubmit = (values: ProfileFormValues) => {
+              updateMutation.mutate(values, {
+                  onSuccess: () => navigate(routes.profile()),
+              });
+          };
+
+          if (isLoading) return <p className="p-6 text-gray-500">Loading…</p>;
+
+          const submitDisabled =
+              !isDirty || !isValid || isSubmitting || updateMutation.isPending;
+
+          return (
+              <div className="max-w-md mx-auto p-6">
+                  <h1 className="text-2xl font-semibold mb-4">Edit Profile</h1>
+                  <form onSubmit={handleSubmit(onSubmit)}
+                        className="space-y-4 card">
+                      <div>
+                          <label htmlFor="phoneNumber"
+                                 className="block text-sm font-medium
+                                            text-gray-700 dark:text-gray-200 mb-1">
+                              Phone number
+                          </label>
+                          <input
+                              id="phoneNumber"
+                              {...register('phoneNumber')}
+                              className={clsx(
+                                  'w-full rounded shadow-sm',
+                                  errors.phoneNumber
+                                      ? 'border-red-500 focus:border-red-500 focus:ring-red-500'
+                                      : 'border-gray-300 focus:border-brand-500 focus:ring-brand-500',
+                              )}
+                          />
+                          {errors.phoneNumber && (
+                              <p className="mt-1 text-sm text-red-600">
+                                  {errors.phoneNumber.message}
+                              </p>
+                          )}
+                      </div>
+
+                      <div className="flex gap-2 justify-end">
+                          <button type="button"
+                                  className="btn-secondary"
+                                  onClick={() => navigate(routes.profile())}>
+                              Cancel
+                          </button>
+                          <button type="submit"
+                                  disabled={submitDisabled}
+                                  className="btn-primary">
+                              {updateMutation.isPending ? 'Saving…' : 'Save'}
+                          </button>
+                      </div>
+                  </form>
+              </div>
+          );
+      };
+
+      export default ProfileEditPage;
+
+  STEP 8 — Register the route
+  In src/App.tsx, add to the AuthLayout children:
+
+      { path: routes.profileEdit(), element: <ProfileEditPage /> },
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - The submit button must require BOTH isDirty AND isValid. Either
+    alone is insufficient.
+  - Always do field allow-listing on the SERVER too. Don't rely on
+    the client schema as your only gate.
+  - useEffect with `[profile, reset]` as deps — reset is a stable
+    function from RHF so it doesn't cause loops, but include it
+    for ESLint's exhaustive-deps rule.
+  - mode: 'onChange' makes isValid update as the user types.
+    Without it, isValid only flips after a submit attempt.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - The five-piece edit form: useQuery → reset → useForm +
+    zodResolver → useMutation → setQueryData.
+  - Field allow-listing on both client and server.
+  - `z.infer<typeof schema>` for type derivation.
+  - setQueryData vs invalidateQueries — when each fits.
 
 
-CHALLENGE 23.5 — Avatar upload (small file)                 Target: 30 min
+CHALLENGE 23.5 — Avatar upload (small file)                 Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - `FormData`: browser type for multipart bodies.
-    `fd.append('file', file)`.
-  - Axios + FormData: pass the FormData as the body; axios sets
-    Content-Type automatically.
-  - Image preview: `URL.createObjectURL(file)` returns a temporary
-    URL for the selected file before it uploads.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Your first multipart-form upload. The shape (FormData + axios +
+  IFormFile) repeats in Document upload (Round 25), CSV import
+  (Round 40), and anywhere else a file enters the system. Master it
+  here on a small surface (one image, max 2MB) before scaling up.
 
-  TASK:
-  1. .NET: POST /api/profile/avatar accepting IFormFile, saves under
-     wwwroot/avatars/{userId}.{ext}, updates Employee.avatarUrl.
-  2. Client: file input with preview + submit-on-change.
-  3. Validate size < 2MB and type starts with image/.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Show preview BEFORE upload starts.
-  - Show progress (Round 28 spec — preview-only here is OK; full
-    progress comes back in 28.2).
+  1) FormData — browser type for multipart bodies
+     - HTTP can carry binary in `multipart/form-data` bodies.
+     - JavaScript constructs them via `new FormData()`:
+         const fd = new FormData();
+         fd.append('file', fileObject);
+         fd.append('caption', 'My avatar');
+     - Pass FormData as the axios body. Axios detects the type and
+       sets `Content-Type: multipart/form-data; boundary=...`
+       automatically. Do NOT set Content-Type manually — you'll
+       break the boundary header.
 
-  WHAT YOU JUST LEARNED:
-  First file upload. Preview + multipart + axios = ~30 lines.
+  2) Image preview before upload
+     - The browser can show a selected file as an image WITHOUT
+       uploading it first.
+     - `URL.createObjectURL(file)` returns a temporary `blob:` URL.
+     - Always pair with `URL.revokeObjectURL(url)` in cleanup —
+       otherwise the browser holds a reference to the file forever.
+
+  3) .NET `IFormFile`
+     - The .NET request-binding type for multipart uploads.
+     - Properties: `FileName`, `ContentType`, `Length`, and
+       `OpenReadStream()` for the bytes.
+     - Stream the contents to disk; don't buffer the whole file in
+       memory.
+
+  4) `wwwroot/` and static-file serving
+     - ASP.NET serves files under wwwroot/ as static assets by
+       default (when `app.UseStaticFiles()` is registered, which
+       this project already does).
+     - An avatar saved at wwwroot/avatars/admin.jpg is reachable
+       at `http://localhost:5000/avatars/admin.jpg`.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/Employee.cs           (AvatarUrl)
+    EmployeeManager.API/Controllers/ProfileController.cs (upload action)
+    src/Types/Models.ts                  (avatarUrl)
+    src/services/api.ts                  (uploadAvatar)
+    src/components/AvatarUpload.tsx      (NEW)
+    src/components/ProfilePage.tsx       (mount AvatarUpload)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Add the AvatarUrl field
+  Employee.cs:
+
+      public string? AvatarUrl { get; set; }
+
+  And the matching TS field on src/Types/Models.ts:
+
+      avatarUrl?: string;
+
+  STEP 2 — Upload endpoint
+  Append to ProfileController.cs:
+
+      [HttpPost("avatar")]   // POST /api/profile/avatar
+      public async Task<ActionResult<Employee>> UploadAvatar(
+          IFormFile file,
+          [FromServices] IWebHostEnvironment env)
+      {
+          var username = User.Identity?.Name;
+          if (string.IsNullOrEmpty(username)) return Unauthorized();
+
+          if (file is null || file.Length == 0)
+              return BadRequest(new { message = "No file uploaded." });
+
+          if (file.Length > 2_000_000)   // 2 MB
+              return BadRequest(new { message = "File too large (max 2MB)." });
+
+          if (!file.ContentType.StartsWith("image/"))
+              return BadRequest(new { message = "Only image files allowed." });
+
+          var me = await _employees.GetByUsernameAsync(username);
+          if (me is null) return NotFound();
+
+          var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+          var avatarsDir = Path.Combine(env.WebRootPath ?? "wwwroot", "avatars");
+          Directory.CreateDirectory(avatarsDir);
+
+          // Filename is the user's id — anti-collision + predictable URL.
+          var fileName = $"{me.Id}{ext}";
+          var fullPath = Path.Combine(avatarsDir, fileName);
+
+          // Stream the upload to disk. CopyToAsync handles chunking.
+          await using (var stream = System.IO.File.Create(fullPath))
+          {
+              await file.CopyToAsync(stream);
+          }
+
+          me.AvatarUrl = $"/avatars/{fileName}";
+          await _employees.UpdateAsync(me);
+
+          me.PasswordHash = null;
+          return Ok(me);
+      }
+
+  Anatomy:
+   - `[FromServices]` injects IWebHostEnvironment per-call —
+     gives us `WebRootPath` (the wwwroot/ absolute path).
+   - The size and content-type checks happen at the BOUNDARY —
+     before any disk write.
+   - We name the file after the user's id so a re-upload
+     overwrites the previous version. No orphan files.
+
+  STEP 3 — axios upload method
+  Open src/services/api.ts. Add:
+
+      export const uploadAvatar = (file: File) => {
+          const formData = new FormData();
+          formData.append('file', file);
+          // Do NOT pass headers. Axios detects FormData and sets
+          // the multipart Content-Type WITH the right boundary.
+          return api.post<Profile>('/profile/avatar', formData);
+      };
+
+  STEP 4 — The avatar component
+  NEW FILE: src/components/AvatarUpload.tsx
+
+      import { useEffect, useRef, useState } from 'react';
+      import { useQueryClient } from '@tanstack/react-query';
+      import { toast } from 'react-toastify';
+      import { isAxiosError } from 'axios';
+      import { uploadAvatar } from '../services/api';
+      import { profileKeys } from '../Queries/profileKeys';
+      import type { Profile } from '../Types/Profile';
+
+      const MAX_BYTES = 2_000_000;
+
+      const AvatarUpload = ({ currentUrl }: { currentUrl?: string }) => {
+          const [preview, setPreview] = useState<string | null>(null);
+          const [submitting, setSubmitting] = useState(false);
+          const inputRef = useRef<HTMLInputElement>(null);
+          const queryClient = useQueryClient();
+
+          // Revoke the object URL when component unmounts or preview changes.
+          useEffect(() => {
+              return () => {
+                  if (preview) URL.revokeObjectURL(preview);
+              };
+          }, [preview]);
+
+          const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+
+              if (!file.type.startsWith('image/')) {
+                  toast.error('Pick an image.');
+                  return;
+              }
+              if (file.size > MAX_BYTES) {
+                  toast.error('Image too large (max 2MB).');
+                  return;
+              }
+
+              // Show preview immediately.
+              setPreview(URL.createObjectURL(file));
+
+              // Upload.
+              setSubmitting(true);
+              try {
+                  const response = await uploadAvatar(file);
+                  queryClient.setQueryData<Profile>(profileKeys.me(), response.data);
+                  toast.success('Avatar updated.');
+              } catch (err) {
+                  const msg = isAxiosError<{ message?: string }>(err)
+                      ? err.response?.data?.message ?? 'Upload failed.'
+                      : 'Upload failed.';
+                  toast.error(msg);
+                  setPreview(null);
+              } finally {
+                  setSubmitting(false);
+                  if (inputRef.current) inputRef.current.value = '';
+              }
+          };
+
+          const displayed = preview ?? currentUrl;
+
+          return (
+              <div className="flex items-center gap-4">
+                  <div className="w-20 h-20 rounded-full bg-gray-200
+                                  dark:bg-gray-700 overflow-hidden
+                                  flex items-center justify-center">
+                      {displayed
+                          ? <img src={displayed} alt="Avatar"
+                                 className="w-full h-full object-cover" />
+                          : <span className="text-gray-400">No image</span>}
+                  </div>
+                  <div>
+                      <input
+                          ref={inputRef}
+                          type="file"
+                          accept="image/*"
+                          onChange={handleChange}
+                          className="hidden"
+                          id="avatar-input"
+                      />
+                      <label htmlFor="avatar-input" className="btn-secondary cursor-pointer">
+                          {submitting ? 'Uploading…' : 'Change avatar'}
+                      </label>
+                  </div>
+              </div>
+          );
+      };
+
+      export default AvatarUpload;
+
+  NEW HERE:
+  - `useRef<HTMLInputElement>(null)` — a way to hold a reference
+    to a DOM element across renders without triggering re-renders.
+    Same as `ref` on a class component.
+  - The pattern `<input className="hidden" id="x" /><label for="x">…`
+    — hides the ugly default file-input UI and uses a styled label
+    that triggers the input on click. Standard accessibility-safe
+    file-upload pattern.
+
+  STEP 5 — Mount it on ProfilePage
+  Open ProfilePage.tsx and add above the card:
+
+      <div className="mb-6">
+          <AvatarUpload currentUrl={profile.avatarUrl} />
+      </div>
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Show the preview the moment a file is selected. Don't wait for
+    the upload to finish — that feels broken.
+  - Always revoke object URLs on cleanup. Otherwise the browser
+    holds the file in memory forever.
+  - Reset the input value after upload (`inputRef.current.value = ''`).
+    Without this, re-selecting the SAME file does nothing —
+    onChange doesn't fire when the value didn't change.
+  - Don't manually set Content-Type for FormData. Axios needs to
+    set the boundary.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - FormData + axios = multipart upload in 5 lines.
+  - URL.createObjectURL for instant preview, with revoke in cleanup.
+  - IFormFile + streaming to disk on the .NET side.
+  - The hidden-input + styled-label file-upload pattern.
+  - Round 23 capstone: a complete read-edit-upload profile feature,
+    rebuilt entirely with the round 17-22 toolkit.
 
 
 ================================================================================
@@ -5263,123 +8168,1005 @@ flow). This round covers the NORMAL change-password path (already
 logged in, voluntary change).
 
 
-CHALLENGE 24.1 — Change-password endpoint                   Target: 25 min
+CHALLENGE 24.1 — Strengthen the change-password endpoint    Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. POST /api/auth/change-password from Round 20.4 is already there.
-     Verify it works when MustChangePassword is false (normal path).
-  2. Validate password strength server-side: min 8 chars, contains
-     digit + letter + special.
-  3. Return 400 with the specific rule that failed.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Round 20.4 wired up the change-password endpoint with the bare
+  minimum: old-password verification and a length-≥-8 check. Real
+  password policies require character-class rules (uppercase,
+  digit, special) and structured error reporting so the UI can
+  highlight EXACTLY which rule failed. This challenge upgrades the
+  server with that policy.
 
-  RULES:
-  - Server validation is the gate. Client validation is UX.
-  - Don't return the new password back in any response.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  One endpoint, two callers: forced flow (Round 20.4) and voluntary
-  flow (this round). Same endpoint, different UX wrappers.
+  1) Structured error responses
+     - Returning `{ "message": "weak password" }` tells the user
+       nothing actionable.
+     - Returning `{ "errors": ["Must contain a digit", "Must contain
+       an uppercase letter"] }` lets the client render an exact
+       failure list.
+     - Standard shape: a flat array of strings, or a field-keyed
+       object. Either works; pick one and hold it.
+
+  2) Regex character classes in C#
+     - `Regex.IsMatch(s, @"\d")` — at least one digit.
+     - `Regex.IsMatch(s, @"[A-Z]")` — at least one uppercase.
+     - `Regex.IsMatch(s, @"[^a-zA-Z0-9]")` — at least one special.
+     - `@"..."` is a verbatim string literal — no escape processing.
+       Means `\d` stays as `\d` and isn't misread as an escape.
+
+  3) Why server-side validation is non-negotiable
+     - Client validation can be bypassed (Postman, curl, anyone).
+     - The SERVER is the source of truth. The client schema in 24.2
+       exists ONLY for UX (instant feedback), not for security.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Application/Services/AuthService.cs   (rewrite ChangePasswordAsync)
+    EmployeeManager.Application/Services/IAuthService.cs  (signature change)
+    EmployeeManager.API/Controllers/AuthController.cs     (handle the new return type)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Define a result type
+  Most teams reach for a tiny "ChangePasswordResult" record. Add it
+  to AuthService.cs (or a new file, your call):
+
+      public record ChangePasswordResult(bool Success, IReadOnlyList<string> Errors);
+
+  `record` types in C# auto-generate constructor, properties,
+  equality, and ToString. Perfect for immutable result DTOs.
+
+  STEP 2 — Update IAuthService.cs
+
+      Task<ChangePasswordResult> ChangePasswordAsync(string username,
+                                                    ChangePasswordRequest request);
+
+  STEP 3 — Rewrite the implementation
+  Replace the existing ChangePasswordAsync in AuthService.cs:
+
+      public async Task<ChangePasswordResult> ChangePasswordAsync(
+          string username, ChangePasswordRequest request)
+      {
+          var user = await _employeeRepository.GetByUsernameAsync(username);
+          if (user is null)
+              return new ChangePasswordResult(false, new[] { "User not found." });
+
+          // 1. Verify the old password.
+          if (user.PasswordHash != HashPassword(request.OldPassword))
+              return new ChangePasswordResult(false, new[] { "Current password is incorrect." });
+
+          // 2. Strength rules — collect EVERY failure, don't short-circuit.
+          var errors = new List<string>();
+          var newPw = request.NewPassword ?? string.Empty;
+
+          if (newPw.Length < 8)
+              errors.Add("Must be at least 8 characters.");
+          if (!Regex.IsMatch(newPw, @"[a-z]"))
+              errors.Add("Must contain a lowercase letter.");
+          if (!Regex.IsMatch(newPw, @"[A-Z]"))
+              errors.Add("Must contain an uppercase letter.");
+          if (!Regex.IsMatch(newPw, @"\d"))
+              errors.Add("Must contain a digit.");
+          if (!Regex.IsMatch(newPw, @"[^a-zA-Z0-9]"))
+              errors.Add("Must contain a special character.");
+
+          // 3. Bonus rule — don't allow re-using the same password.
+          if (errors.Count == 0 && user.PasswordHash == HashPassword(newPw))
+              errors.Add("New password must differ from current password.");
+
+          if (errors.Count > 0)
+              return new ChangePasswordResult(false, errors);
+
+          user.PasswordHash = HashPassword(newPw);
+          user.MustChangePassword = false;
+          await _employeeRepository.UpdateAsync(user);
+
+          return new ChangePasswordResult(true, Array.Empty<string>());
+      }
+
+  Add the using at the top:
+      using System.Text.RegularExpressions;
+
+  Note we COLLECT every failure rather than short-circuiting on
+  the first. The user shouldn't fix one rule, retry, and discover
+  another rule failed — they should see all of them at once.
+
+  STEP 4 — Update AuthController.ChangePassword
+  Open AuthController.cs and change the action body to use the
+  new return type:
+
+      [Authorize]
+      [HttpPost("change-password")]
+      public async Task<IActionResult> ChangePassword(
+          [FromBody] ChangePasswordRequest request)
+      {
+          var username = User.Identity?.Name;
+          if (string.IsNullOrEmpty(username))
+              return Unauthorized();
+
+          var result = await _authService.ChangePasswordAsync(username, request);
+          if (!result.Success)
+              return BadRequest(new { errors = result.Errors });
+
+          return Ok(new { message = "Password changed." });
+      }
+
+  Test with curl / your HTTP client:
+   - Send a weak new password → 400 with the exact error list.
+   - Send a 12-char Aa1@ password → 200.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Collect ALL errors, don't short-circuit. UX win.
+  - Never log the password itself. Log the username + failure
+    REASONS, never the value.
+  - Don't return the new password in any response.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - C# records for immutable result types.
+  - Regex character classes + verbatim strings.
+  - Structured error responses (errors array vs message string).
+  - Why server validation is the gate, not the client.
 
 
-CHALLENGE 24.2 — Password strength schema (Zod)             Target: 25 min
+CHALLENGE 24.2 — Password-strength schema (Zod refinements) Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Zod refinements: `.refine(predicate, { message })` for cross-
-    field rules.
-  - Match-fields rule example:
-       z.object({ newPassword: z.string().min(8), confirm: z.string() })
-        .refine(d => d.newPassword === d.confirm, { path: ['confirm'],
-           message: 'Passwords do not match' })
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  The server enforces the password policy; the client mirrors it
+  for live feedback. Zod's `.refine()` API lets you add rules that
+  cross multiple fields ("new and confirm must match") or check
+  single-field conditions the built-in chain doesn't cover.
 
-  TASK:
-  1. schemas/changePasswordSchema.ts:
-     - oldPassword: string min 1
-     - newPassword: string min 8, regex for letter + digit + special
-     - confirm: string min 1
-     - refine: newPassword === confirm, error on `confirm` path
-  2. Export the inferred type.
+  This challenge also introduces the match-passwords pattern — one
+  of the top three form-validation cases you'll ever write.
 
-  RULES:
-  - Put the error on the `confirm` field so it shows next to that input.
-  - One rule per refinement — chain them for readability.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Cross-field validation in Zod. The match-passwords case is one of
-  the top 3 form patterns you'll write.
+  1) Zod's `.refine()`
+     - Adds a custom validation rule on top of an existing schema.
+     - Signature:
+         schema.refine(predicate, { path: [...], message })
+     - The predicate returns true for VALID, false for invalid.
+     - `path` tells Zod which field the error belongs to — critical
+       for showing the message next to the right input.
+
+  2) Regex in Zod
+     - `z.string().regex(/[A-Z]/, 'Must have an uppercase letter')`
+     - Chains naturally on top of `min`, `max`, `email`, etc.
+     - Each rule fires independently — they don't short-circuit.
+
+  3) Chaining refinements
+     - Multiple `.refine()` calls stack. Each gets evaluated.
+     - For "newPassword must contain lowercase, uppercase, digit,
+       special," you can either chain four regex calls OR write
+       a single refinement that runs all four checks and emits
+       one message per failure. The chained-regex form is cleaner
+       and Zod handles the iteration for you.
+
+  4) `superRefine` — when one refine isn't enough
+     - `superRefine((data, ctx) => { ctx.addIssue({...}); })` lets
+       you emit MULTIPLE errors from a single check. Useful for
+       cross-field rules that produce more than one issue.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/schemas/changePasswordSchema.ts  (NEW)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  NEW FILE: src/schemas/changePasswordSchema.ts
+
+      import { z } from 'zod';
+
+      export const changePasswordSchema = z
+          .object({
+              oldPassword: z
+                  .string()
+                  .min(1, 'Current password is required'),
+              newPassword: z
+                  .string()
+                  .min(8, 'Must be at least 8 characters')
+                  .regex(/[a-z]/, 'Must contain a lowercase letter')
+                  .regex(/[A-Z]/, 'Must contain an uppercase letter')
+                  .regex(/\d/,    'Must contain a digit')
+                  .regex(/[^a-zA-Z0-9]/, 'Must contain a special character'),
+              confirm: z
+                  .string()
+                  .min(1, 'Please re-enter your new password'),
+          })
+          .refine((data) => data.newPassword === data.confirm, {
+              path: ['confirm'],
+              message: 'Passwords do not match',
+          })
+          .refine((data) => data.newPassword !== data.oldPassword, {
+              path: ['newPassword'],
+              message: 'New password must differ from current',
+          });
+
+      export type ChangePasswordFormValues = z.infer<typeof changePasswordSchema>;
+
+  Anatomy:
+   - The base `z.object({...})` defines field-level rules.
+   - The two `.refine()` calls add cross-field rules.
+   - `path: ['confirm']` puts the mismatch error on the confirm
+     field, not at the form root. The UI renders it next to the
+     confirm input.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always set `path` on cross-field refinements. Without it, Zod
+    drops the error on the form root and your inline field
+    messages can't render it.
+  - Don't write a single mega-regex like `/^(?=.*[a-z])(?=.*[A-Z])...$/`.
+    It works but produces ONE blanket "doesn't match" error. The
+    chained `.regex()` form gives you one error per failing rule.
+  - The client schema should match the SERVER policy from 24.1.
+    Drift between the two confuses users.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - `.refine()` for custom validation rules.
+  - The `path` option for placing errors on a specific field.
+  - The match-passwords pattern (you'll write this on every
+    password-touching form).
+  - Why chained regex beats a mega-regex for UX.
 
 
-CHALLENGE 24.3 — Change-password form + mutation             Target: 35 min
+CHALLENGE 24.3 — Change-password page + mutation            Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. queries/useChangePassword.ts: useMutation calling the endpoint.
-     On success: logout + redirect /login + toast "Password changed,
-     please log in again."
-  2. ProfilePage gets a "Change Password" button → opens modal or
-     navigates to /profile/change-password.
-  3. RHF + zodResolver(changePasswordSchema). Three masked inputs.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Wire the schema (24.2) and the endpoint (24.1) into a voluntary
+  change-password flow. Two new patterns: rendering a SERVER-side
+  error list in the form (errors.root), and the "force re-login
+  after a sensitive mutation" side-effect.
 
-  RULES:
-  - Force re-login on password change — invalidates other sessions.
-  - On error, show server message on errors.root.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Sensitive mutation + side effect (logout + redirect). Pattern:
-  mutate → success callback handles auth state.
+  1) RHF's `setError('root', ...)` — server errors in the form
+     - Field errors live at `errors.fieldName`.
+     - "Form-level" errors (the server rejected the whole submit)
+       live at `errors.root` (or `errors.root.serverError`, you
+       choose the key).
+     - Pattern:
+         setError('root', { type: 'server', message: '...' });
+     - Render with `{errors.root?.message && <p>...</p>}`.
+
+  2) Why force re-login after change
+     - Old JWTs issued before the change still work until their 15-
+       minute expiration. That's a security hole — a stolen token
+       remains valid even after the user "changed" the password.
+     - The right fix is to ROTATE secrets / track a "tokens issued
+       before X are invalid" timestamp. We'll add that in a later
+       round; for now, the soft fix is: logout + redirect /login.
+
+  3) `.mutate(values, { onSuccess, onError })`
+     - useMutation returns a `.mutate()` function that can take
+       PER-CALL options. Useful when the hook itself has generic
+       handlers (toast) but THIS specific caller needs extra side
+       effects (logout, redirect, setError).
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/services/api.ts                (changePassword already exists from 20.4)
+    src/Queries/useChangePassword.ts   (NEW)
+    src/components/ChangePasswordPage.tsx (NEW)
+    src/components/ProfilePage.tsx     (link to /profile/change-password)
+    src/routes.ts                      (changePassword())
+    src/App.tsx                        (route)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Hook
+  NEW FILE: src/Queries/useChangePassword.ts
+
+      import { useMutation } from '@tanstack/react-query';
+      import { changePassword } from '../services/api';
+      import type { ChangePasswordFormValues } from '../schemas/changePasswordSchema';
+
+      export const useChangePassword = () =>
+          useMutation({
+              mutationFn: (values: ChangePasswordFormValues) =>
+                  changePassword(values.oldPassword, values.newPassword),
+          });
+
+  Notice this hook does NOT add toast / setQueryData / navigation —
+  the page component handles those because the side-effects (logout,
+  setError on the form) require access to component state.
+
+  STEP 2 — Route
+  src/routes.ts:
+
+      changePassword: () => '/profile/change-password' as const,
+
+  STEP 3 — The page
+  NEW FILE: src/components/ChangePasswordPage.tsx
+
+      import { useForm } from 'react-hook-form';
+      import { zodResolver } from '@hookform/resolvers/zod';
+      import { useNavigate } from 'react-router-dom';
+      import { toast } from 'react-toastify';
+      import { isAxiosError } from 'axios';
+      import clsx from 'clsx';
+      import { useAuth } from '../Context/AuthContext';
+      import { useChangePassword } from '../Queries/useChangePassword';
+      import {
+          changePasswordSchema,
+          ChangePasswordFormValues,
+      } from '../schemas/changePasswordSchema';
+      import { routes } from '../routes';
+
+      const ChangePasswordPage = () => {
+          const navigate = useNavigate();
+          const { logout } = useAuth();
+          const mutation = useChangePassword();
+
+          const {
+              register,
+              handleSubmit,
+              setError,
+              formState: { errors, isValid, isSubmitting },
+          } = useForm<ChangePasswordFormValues>({
+              resolver: zodResolver(changePasswordSchema),
+              mode: 'onChange',
+              defaultValues: { oldPassword: '', newPassword: '', confirm: '' },
+          });
+
+          const onSubmit = (values: ChangePasswordFormValues) => {
+              mutation.mutate(values, {
+                  onSuccess: () => {
+                      toast.success('Password changed. Please log in again.');
+                      logout();
+                      navigate(routes.login(), { replace: true });
+                  },
+                  onError: (err) => {
+                      if (isAxiosError<{ errors?: string[]; message?: string }>(err)) {
+                          const errors = err.response?.data?.errors;
+                          if (errors && errors.length > 0) {
+                              setError('root', {
+                                  type: 'server',
+                                  message: errors.join(' '),
+                              });
+                              return;
+                          }
+                          setError('root', {
+                              type: 'server',
+                              message: err.response?.data?.message ?? 'Failed to change password.',
+                          });
+                          return;
+                      }
+                      setError('root', { type: 'server', message: 'Failed to change password.' });
+                  },
+              });
+          };
+
+          const inputClass = (hasError: boolean) =>
+              clsx(
+                  'w-full rounded shadow-sm',
+                  hasError
+                      ? 'border-red-500 focus:border-red-500 focus:ring-red-500'
+                      : 'border-gray-300 focus:border-brand-500 focus:ring-brand-500',
+              );
+
+          return (
+              <div className="max-w-md mx-auto p-6">
+                  <h1 className="text-2xl font-semibold mb-4">Change Password</h1>
+                  <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 card">
+
+                      {errors.root && (
+                          <div className="p-3 rounded bg-red-50 border border-red-200
+                                          text-red-700 text-sm">
+                              {errors.root.message}
+                          </div>
+                      )}
+
+                      <div>
+                          <label className="block text-sm font-medium mb-1">
+                              Current password
+                          </label>
+                          <input type="password"
+                                 {...register('oldPassword')}
+                                 className={inputClass(!!errors.oldPassword)} />
+                          {errors.oldPassword && (
+                              <p className="mt-1 text-sm text-red-600">
+                                  {errors.oldPassword.message}
+                              </p>
+                          )}
+                      </div>
+
+                      <div>
+                          <label className="block text-sm font-medium mb-1">
+                              New password
+                          </label>
+                          <input type="password"
+                                 {...register('newPassword')}
+                                 className={inputClass(!!errors.newPassword)} />
+                          {errors.newPassword && (
+                              <p className="mt-1 text-sm text-red-600">
+                                  {errors.newPassword.message}
+                              </p>
+                          )}
+                      </div>
+
+                      <div>
+                          <label className="block text-sm font-medium mb-1">
+                              Confirm new password
+                          </label>
+                          <input type="password"
+                                 {...register('confirm')}
+                                 className={inputClass(!!errors.confirm)} />
+                          {errors.confirm && (
+                              <p className="mt-1 text-sm text-red-600">
+                                  {errors.confirm.message}
+                              </p>
+                          )}
+                      </div>
+
+                      <div className="flex gap-2 justify-end">
+                          <button type="button"
+                                  className="btn-secondary"
+                                  onClick={() => navigate(routes.profile())}>
+                              Cancel
+                          </button>
+                          <button type="submit"
+                                  disabled={!isValid || isSubmitting || mutation.isPending}
+                                  className="btn-primary">
+                              {mutation.isPending ? 'Saving…' : 'Change password'}
+                          </button>
+                      </div>
+                  </form>
+              </div>
+          );
+      };
+
+      export default ChangePasswordPage;
+
+  STEP 4 — Link from ProfilePage
+  In ProfilePage.tsx, add a button next to "Edit":
+
+      <Link to={routes.changePassword()} className="btn-secondary">
+          Change password
+      </Link>
+
+  STEP 5 — Register the route in App.tsx
+
+      { path: routes.changePassword(), element: <ChangePasswordPage /> },
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Force logout + redirect on success. Don't try to "just keep
+    using the old token" — that token outlives the password change.
+  - Don't add the `confirm` field to the API request body. It's
+    client-only validation.
+  - errors.root is for form-LEVEL errors (server rejected the
+    whole thing). Field-level errors stay at errors.fieldName.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - `setError('root', ...)` for server-side error rendering.
+  - `.mutate(values, { onSuccess, onError })` for per-call
+    side-effects.
+  - Sensitive-mutation side-effect pattern: logout + redirect.
 
 
-CHALLENGE 24.4 — Forced flow re-test                        Target: 20 min
+CHALLENGE 24.4 — End-to-end test of both flows               Target: 25 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Have an admin create a new user with default password "user123".
-  2. Log in as that user; verify forced-change page intercepts.
-  3. Change password; verify navigation unblocks.
-  4. Log out, log in again — no forced flow second time.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  The change-password endpoint has TWO callers now — the forced
+  flow from Round 20.4 and the voluntary flow from 24.3. Both use
+  the SAME server policy from 24.1. Walking through both flows
+  manually catches regressions you'd otherwise discover in
+  production.
 
-  RULES:
-  - The flow tests TWO server states (mustChange = true, false) and
-    TWO client interceptions (active, inactive).
+  This isn't a "write code" round. It's a "run the app" round.
+  Treat it as a deliberate practice — building the habit of
+  test-both-branches is more valuable than any code you'd write.
 
-  WHAT YOU JUST LEARNED:
-  End-to-end verification of a multi-step flow. Build the habit of
-  testing both branches.
+  ─────────────────────────────────────────────────────────────────────
+  TEST MATRIX
+  ─────────────────────────────────────────────────────────────────────
+
+  Set up:
+   - Create a fresh employee row in employees.json. Easy way: in
+     the React UI, log in as admin, hit "Add Employee", give them
+     a Username (e.g. "testuser") and a temp PasswordHash (use a
+     known plaintext like "Temp1@34" — hash with your existing
+     HashPassword logic; easiest is to set the password via
+     /api/auth/change-password called by the admin, then flip
+     MustChangePassword back to true manually).
+   - Confirm employees.json shows: Username="testuser",
+     MustChangePassword=true.
+
+  ┌──────┬────────────────────────────────────┬─────────────────────┐
+  │ Test │ Action                             │ Expected outcome    │
+  ├──────┼────────────────────────────────────┼─────────────────────┤
+  │ 1    │ Log in as testuser / Temp1@34      │ Lands on            │
+  │      │                                    │ /force-change-pwd   │
+  ├──────┼────────────────────────────────────┼─────────────────────┤
+  │ 2    │ Try /employees in the address bar  │ Bounces back to     │
+  │      │                                    │ /force-change-pwd   │
+  ├──────┼────────────────────────────────────┼─────────────────────┤
+  │ 3    │ Submit with weak new pw "abc123"   │ Toast/form error,   │
+  │      │                                    │ stays on page       │
+  ├──────┼────────────────────────────────────┼─────────────────────┤
+  │ 4    │ Submit with mismatched confirm     │ Inline error on     │
+  │      │                                    │ confirm field       │
+  ├──────┼────────────────────────────────────┼─────────────────────┤
+  │ 5    │ Submit with strong new "Perm1@34"  │ Success, navigates  │
+  │      │                                    │ to /employees       │
+  ├──────┼────────────────────────────────────┼─────────────────────┤
+  │ 6    │ employees.json now shows           │ MustChangePassword  │
+  │      │                                    │ = false             │
+  ├──────┼────────────────────────────────────┼─────────────────────┤
+  │ 7    │ Log out, log back in               │ Goes straight to    │
+  │      │                                    │ /employees          │
+  ├──────┼────────────────────────────────────┼─────────────────────┤
+  │ 8    │ /profile → "Change password" link  │ Page renders        │
+  ├──────┼────────────────────────────────────┼─────────────────────┤
+  │ 9    │ Submit current=wrong, strong new   │ root error from     │
+  │      │                                    │ server               │
+  ├──────┼────────────────────────────────────┼─────────────────────┤
+  │ 10   │ Submit current=correct, strong new │ Logout + redirect   │
+  │      │                                    │ to /login           │
+  ├──────┼────────────────────────────────────┼─────────────────────┤
+  │ 11   │ Try old password on /login         │ Fails (correctly)   │
+  ├──────┼────────────────────────────────────┼─────────────────────┤
+  │ 12   │ Use new password on /login         │ Succeeds            │
+  └──────┴────────────────────────────────────┴─────────────────────┘
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Manual test matrices catch BOTH branches of an if statement.
+    "I changed it and it still works" tests only one branch.
+  - The forced and voluntary flows share an endpoint but have
+    DIFFERENT UX wrappers — both must be tested independently.
 
 
-CHALLENGE 24.5 — Capstone: forgot-password (stubbed)        Target: 30 min
+CHALLENGE 24.5 — Capstone: forgot-password (stubbed)         Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Production forgot-password = email a reset link with a token.
-    We won't send email (no SMTP in the learning repo) — stub it:
-    the API returns the reset URL in the response (DEV mode only),
-    the client navigates there.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Real apps send a reset link by email. We can't send email in this
+  learning project (no SMTP), so we stub: the API returns the reset
+  URL in the response (DEV-only behaviour) and the client displays
+  it. Otherwise the flow is identical to production: one-shot
+  token, 15-minute expiry, token-in-URL on the reset page.
 
-  TASK:
-  1. POST /api/auth/forgot-password { email } — generates a one-time
-     reset token, stores it (in-memory dict), returns the reset URL
-     (dev only).
-  2. POST /api/auth/reset-password { token, newPassword } — validates
-     token, sets new password, deletes token.
-  3. Client: /forgot-password page → email input → submit → display
-     the reset link (in real life it'd be emailed).
-  4. /reset-password/:token page → new password form → submit →
-     redirect /login.
+  This pattern (tokenise → expire → one-shot) recurs anywhere a
+  server needs to grant temporary out-of-band access: email
+  confirmations, magic links, second-factor enrollment, invitation
+  flows.
 
-  RULES:
-  - Tokens are one-shot. Used → deleted.
-  - Tokens expire after 15 min. Store the issued-at and check.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Reset flow pattern: tokenize, expire, one-shot. Same shape as the
-  real flow you'd build behind SMTP.
+  1) One-shot tokens
+     - Random opaque string (32+ bytes, base64-encoded).
+     - Stored server-side with the user it grants access to and
+       an "issuedAt" timestamp.
+     - On use: validate (exists, not expired, not previously used),
+       perform the action, DELETE the token. Re-use must fail.
+
+  2) Token storage
+     - In-memory dictionary works for learning (lost on restart).
+     - Production: Redis or a database table with TTL.
+
+  3) URL params via React Router
+     - `path: '/reset-password/:token'` declares a dynamic segment.
+     - `useParams<{ token: string }>()` reads it in the component.
+     - The token rides in the URL because the email link is a GET,
+       not a form post.
+
+  4) Dev-only response fields
+     - Returning the reset URL in the response is a DEV affordance.
+     - In production, you'd send the URL by email and return only
+       `{ message: "Check your inbox." }`.
+     - Mark the dev branch behind `if (env.IsDevelopment())` so
+       prod NEVER accidentally leaks the URL.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Application/Services/IPasswordResetStore.cs (NEW)
+    EmployeeManager.Application/Services/PasswordResetStore.cs (NEW)
+    EmployeeManager.API/Controllers/AuthController.cs (2 new actions)
+    EmployeeManager.API/Program.cs (DI registration)
+    src/Types/Models.ts (request/response shapes)
+    src/services/api.ts (forgotPassword, resetPassword)
+    src/components/ForgotPasswordPage.tsx (NEW)
+    src/components/ResetPasswordPage.tsx (NEW)
+    src/routes.ts, src/App.tsx
+    src/components/Login.tsx (add "Forgot password?" link)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Token store
+  NEW FILE: EmployeeManager.Application/Services/IPasswordResetStore.cs
+
+      namespace EmployeeManager.Application.Services;
+
+      public interface IPasswordResetStore
+      {
+          string Issue(string username);          // returns the token
+          string? Consume(string token);          // returns username or null (expired/used)
+      }
+
+  NEW FILE: EmployeeManager.Application/Services/PasswordResetStore.cs
+
+      using System.Collections.Concurrent;
+      using System.Security.Cryptography;
+
+      namespace EmployeeManager.Application.Services;
+
+      public class PasswordResetStore : IPasswordResetStore
+      {
+          private record Entry(string Username, DateTime IssuedAt);
+
+          private readonly ConcurrentDictionary<string, Entry> _entries = new();
+          private static readonly TimeSpan TokenLifetime = TimeSpan.FromMinutes(15);
+
+          public string Issue(string username)
+          {
+              // 32 cryptographically random bytes → base64-url string.
+              var bytes = RandomNumberGenerator.GetBytes(32);
+              var token = Convert.ToBase64String(bytes)
+                  .Replace('+', '-').Replace('/', '_').TrimEnd('=');
+
+              _entries[token] = new Entry(username, DateTime.UtcNow);
+              return token;
+          }
+
+          public string? Consume(string token)
+          {
+              if (!_entries.TryRemove(token, out var entry))
+                  return null;                                  // not found OR already used
+
+              if (DateTime.UtcNow - entry.IssuedAt > TokenLifetime)
+                  return null;                                  // expired
+
+              return entry.Username;
+          }
+      }
+
+  Notice:
+   - `ConcurrentDictionary` for thread-safe access. The store is
+     a singleton; concurrent requests must not corrupt it.
+   - `TryRemove` is atomic — fetch-and-delete in one operation.
+     This prevents two simultaneous requests from both succeeding
+     with the same token.
+   - Base64-URL encoding (`+→-`, `/→_`) so the token can be
+     embedded in a URL without percent-encoding.
+
+  STEP 2 — Register the store as a singleton
+  Open EmployeeManager.API/Program.cs and add (next to the other
+  AddSingleton lines):
+
+      builder.Services.AddSingleton<IPasswordResetStore, PasswordResetStore>();
+
+  STEP 3 — Two new auth actions
+  Append to AuthController.cs. Inject IPasswordResetStore and
+  IWebHostEnvironment alongside the existing dependencies.
+
+      [HttpPost("forgot-password")]
+      [AllowAnonymous]
+      public async Task<IActionResult> ForgotPassword(
+          [FromBody] ForgotPasswordRequest request,
+          [FromServices] IPasswordResetStore resets,
+          [FromServices] IWebHostEnvironment env,
+          [FromServices] IEmployeeRepository employees)
+      {
+          // Resolve the user. ALWAYS return 200 — never reveal
+          // whether the email exists.
+          var emp = (await employees.GetAllAsync())
+              .FirstOrDefault(e => string.Equals(e.Email, request.Email,
+                                                 StringComparison.OrdinalIgnoreCase)
+                                   && !string.IsNullOrEmpty(e.Username));
+
+          string? resetUrl = null;
+          if (emp is not null)
+          {
+              var token = resets.Issue(emp.Username!);
+              resetUrl = $"/reset-password/{token}";
+          }
+
+          // DEV ONLY — return the URL so the user can navigate it
+          // without an email server. In production, you'd email it
+          // and return only the success message.
+          if (env.IsDevelopment() && resetUrl is not null)
+              return Ok(new { message = "Check your inbox.", devResetUrl = resetUrl });
+
+          return Ok(new { message = "Check your inbox." });
+      }
+
+      [HttpPost("reset-password")]
+      [AllowAnonymous]
+      public async Task<IActionResult> ResetPassword(
+          [FromBody] ResetPasswordRequest request,
+          [FromServices] IPasswordResetStore resets)
+      {
+          var username = resets.Consume(request.Token);
+          if (username is null)
+              return BadRequest(new { message = "Reset link is invalid or has expired." });
+
+          // Reuse the strength check from ChangePasswordAsync —
+          // but here we don't have OldPassword. Add a sibling method
+          // ResetPasswordAsync on AuthService that skips the
+          // old-password check and otherwise applies the same policy.
+          var result = await _authService.ResetPasswordAsync(username, request.NewPassword);
+          if (!result.Success)
+              return BadRequest(new { errors = result.Errors });
+
+          return Ok(new { message = "Password reset." });
+      }
+
+  Add the DTOs to Domain/Models/:
+
+      public class ForgotPasswordRequest { public string Email { get; set; } = ""; }
+      public class ResetPasswordRequest  {
+          public string Token { get; set; } = "";
+          public string NewPassword { get; set; } = "";
+      }
+
+  And add ResetPasswordAsync to AuthService.cs — same shape as
+  ChangePasswordAsync but with no old-password check. Extract the
+  shared strength logic into a private method to keep both in sync.
+
+  STEP 4 — Client routes + API
+  src/routes.ts:
+
+      forgotPassword: () => '/forgot-password' as const,
+      resetPassword: (token: string) => `/reset-password/${token}` as const,
+
+  src/services/api.ts:
+
+      export const forgotPassword = (email: string) =>
+          api.post<{ message: string; devResetUrl?: string }>(
+              '/auth/forgot-password', { email });
+
+      export const resetPassword = (token: string, newPassword: string) =>
+          api.post('/auth/reset-password', { token, newPassword });
+
+  STEP 5 — Forgot-password page
+  NEW FILE: src/components/ForgotPasswordPage.tsx
+
+      import { useState } from 'react';
+      import { Link } from 'react-router-dom';
+      import { forgotPassword } from '../services/api';
+      import { routes } from '../routes';
+
+      const ForgotPasswordPage = () => {
+          const [email, setEmail] = useState('');
+          const [submitting, setSubmitting] = useState(false);
+          const [devUrl, setDevUrl] = useState<string | null>(null);
+
+          const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+              e.preventDefault();
+              setSubmitting(true);
+              try {
+                  const response = await forgotPassword(email);
+                  setDevUrl(response.data.devResetUrl ?? null);
+              } catch {
+                  // The server returns 200 even on unknown emails to
+                  // avoid leaking account existence. Errors here are
+                  // genuine failures (network, 500). Tell the user
+                  // generically.
+                  setDevUrl(null);
+              } finally {
+                  setSubmitting(false);
+              }
+          };
+
+          return (
+              <div className="max-w-md mx-auto p-6">
+                  <h1 className="text-2xl font-semibold mb-4">Forgot password</h1>
+                  <form onSubmit={handleSubmit} className="space-y-4 card">
+                      <p className="text-sm text-gray-600 dark:text-gray-300">
+                          Enter the email on your account. We'll send a reset link
+                          (in this learning project, the link is shown below).
+                      </p>
+                      <input
+                          type="email"
+                          value={email}
+                          onChange={e => setEmail(e.target.value)}
+                          required
+                          placeholder="you@example.com"
+                          className="w-full rounded border-gray-300"
+                      />
+                      <button type="submit" disabled={submitting} className="btn-primary w-full">
+                          {submitting ? 'Sending…' : 'Send reset link'}
+                      </button>
+                      {devUrl && (
+                          <div className="p-3 rounded bg-yellow-50 border border-yellow-300">
+                              <p className="text-sm font-medium mb-1">
+                                  Dev mode: reset link
+                              </p>
+                              <Link to={devUrl} className="text-sm text-brand-600 underline">
+                                  {devUrl}
+                              </Link>
+                          </div>
+                      )}
+                  </form>
+                  <div className="mt-4 text-center">
+                      <Link to={routes.login()} className="text-sm text-brand-600">
+                          ← Back to login
+                      </Link>
+                  </div>
+              </div>
+          );
+      };
+
+      export default ForgotPasswordPage;
+
+  STEP 6 — Reset-password page
+  NEW FILE: src/components/ResetPasswordPage.tsx
+
+      import { useState } from 'react';
+      import { useNavigate, useParams } from 'react-router-dom';
+      import { toast } from 'react-toastify';
+      import { isAxiosError } from 'axios';
+      import { resetPassword } from '../services/api';
+      import { routes } from '../routes';
+
+      const ResetPasswordPage = () => {
+          const { token = '' } = useParams<{ token: string }>();
+          const navigate = useNavigate();
+          const [newPassword, setNewPassword] = useState('');
+          const [confirm, setConfirm] = useState('');
+          const [submitting, setSubmitting] = useState(false);
+
+          const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+              e.preventDefault();
+              if (newPassword !== confirm) {
+                  toast.error('Passwords do not match.');
+                  return;
+              }
+              setSubmitting(true);
+              try {
+                  await resetPassword(token, newPassword);
+                  toast.success('Password reset. Please log in.');
+                  navigate(routes.login(), { replace: true });
+              } catch (err) {
+                  const msg = isAxiosError<{ errors?: string[]; message?: string }>(err)
+                      ? err.response?.data?.errors?.join(' ')
+                        ?? err.response?.data?.message
+                        ?? 'Reset failed.'
+                      : 'Reset failed.';
+                  toast.error(msg);
+              } finally {
+                  setSubmitting(false);
+              }
+          };
+
+          return (
+              <div className="max-w-md mx-auto p-6">
+                  <h1 className="text-2xl font-semibold mb-4">Reset password</h1>
+                  <form onSubmit={handleSubmit} className="space-y-4 card">
+                      <input
+                          type="password"
+                          value={newPassword}
+                          onChange={e => setNewPassword(e.target.value)}
+                          placeholder="New password"
+                          required
+                          className="w-full rounded border-gray-300"
+                      />
+                      <input
+                          type="password"
+                          value={confirm}
+                          onChange={e => setConfirm(e.target.value)}
+                          placeholder="Confirm new password"
+                          required
+                          className="w-full rounded border-gray-300"
+                      />
+                      <button type="submit" disabled={submitting} className="btn-primary w-full">
+                          {submitting ? 'Resetting…' : 'Reset password'}
+                      </button>
+                  </form>
+              </div>
+          );
+      };
+
+      export default ResetPasswordPage;
+
+  NEW HERE: `const { token = '' } = useParams<{ token: string }>();`
+  - useParams returns `{ token: string | undefined }` even though
+    you typed it. The destructuring default `= ''` ensures `token`
+    is always a string, no TS narrowing dance.
+
+  STEP 7 — Register the routes
+  Both routes are PUBLIC — register them at the top of router
+  config, NOT inside ProtectedRoute:
+
+      { path: routes.forgotPassword(), element: <ForgotPasswordPage /> },
+      { path: '/reset-password/:token', element: <ResetPasswordPage /> },
+
+  STEP 8 — Link from Login
+  Below the password input in Login.tsx:
+
+      <p style={{ textAlign: 'center', marginTop: 12 }}>
+          <Link to={routes.forgotPassword()}>Forgot password?</Link>
+      </p>
+
+  ─────────────────────────────────────────────────────────────────────
+  END-TO-END TEST
+  ─────────────────────────────────────────────────────────────────────
+  1. /forgot-password → enter admin's email → submit → dev URL
+     appears in the yellow box.
+  2. Click it → /reset-password/:token page.
+  3. Enter a new strong password → submit → toast + redirect to
+     /login.
+  4. Log in with the new password → success.
+  5. Try the same dev URL AGAIN → "invalid or expired" (one-shot
+     enforcement).
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always return 200 on /forgot-password regardless of whether
+    the email exists. Otherwise attackers can enumerate accounts.
+  - One-shot enforcement uses `TryRemove` — atomic test-and-delete.
+    A naive `ContainsKey` then `Remove` is racy.
+  - Never log the token. It's a credential.
+  - In production, send the URL by email and DROP the devResetUrl
+    field. The IsDevelopment() guard is your last line of defense.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - The tokenise → expire → one-shot pattern (reused for email
+    confirmation, magic links, invitations).
+  - ConcurrentDictionary + TryRemove for thread-safe one-shot
+    state.
+  - useParams with destructuring defaults.
+  - Dev-only response fields gated behind IsDevelopment().
+  - Round 24 capstone: a complete password lifecycle — forced
+    rotation, voluntary change, reset by email — sharing one
+    server policy.
 
 
 ================================================================================
@@ -5392,117 +9179,1078 @@ views. We split it across 3 rounds (25/26/27) because the upload UX
 itself is rich.
 
 
-CHALLENGE 25.1 — Document model + .NET CRUD                 Target: 40 min
+CHALLENGE 25.1 — Document domain + .NET CRUD                Target: 60 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Document model: id, ownerUserId, fileName, contentType, sizeBytes,
-    uploadedAt, storagePath (server-relative).
-  - Storage: wwwroot/documents/{ownerUserId}/{guid}.{ext}. Filename on
-    disk is a GUID (anti-collision + anti-traversal); display name
-    comes from the model.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Documents is the first feature that touches FILE STORAGE plus a
+  proper database row plus role-based authorisation. The full
+  clean-arch slice in miniature — domain model, repository,
+  service, controller. Plus path-traversal safety, content-type
+  whitelisting, ownership checks. The patterns established here
+  scale to every later "uploaded artefact" (resumes, ID scans,
+  signed forms, etc.).
 
-  TASK:
-  1. EmployeeManager.Domain/Models/Document.cs: 7 fields above + DateTime
-     UploadedAt.
-  2. Domain/Interfaces/IDocumentRepository: CRUD signatures.
-  3. Infrastructure/DocumentRepository: JsonDataStore<List<Document>>
-     at documents.json.
-  4. Application/DocumentService: validates size, type; assigns id;
-     places file on disk; returns the model.
-  5. API/DocumentController: 5 endpoints (list-mine, list-all-admin,
-     upload, download, delete) with role checks.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Max 5MB, accept only application/pdf, image/*, text/plain.
-  - DELETE removes file + record. Always check ownership OR admin.
-  - List-all-admin requires Admin role.
+  1) Anti-traversal filenames
+     - If you save uploads as `wwwroot/docs/{user_filename}` and a
+       user names their file `../../../etc/passwd`, your code
+       writes outside the docs folder. Disaster.
+     - Fix: NEVER use user-provided filenames on disk. Generate a
+       GUID. Store the original "display name" in the model.
+     - Same idea: `Path.GetFileName(userInput)` strips directories
+       and returns just the name component. Useful when you DO need
+       to preserve the name (defense in depth).
 
-  WHAT YOU JUST LEARNED:
-  Clean-arch slice with file storage. The repository hides the file IO.
+  2) The ownership check
+     - Every operation MUST verify the caller owns the document
+       OR is an admin.
+     - Pattern in the service:
+         if (doc.OwnerUsername != callerUsername && callerRole != "Admin")
+             return Forbidden;
+     - Never trust a route id without checking ownership.
+
+  3) Content-type whitelisting
+     - Accept-list (PDF, image/*, text/plain), don't block-list
+       (everything except .exe).
+     - The reason: you can't enumerate all dangerous types. New
+       attack vectors appear; the whitelist holds.
+
+  4) DTOs vs domain models on the wire
+     - Don't return `Document` with `StoragePath` exposed — that
+       leaks server-side disk layout.
+     - Return a DTO (`DocumentDto`) that has display-relevant
+       fields only (id, fileName, sizeBytes, uploadedAt, ownerName).
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/Document.cs              (NEW)
+    EmployeeManager.Domain/Models/DocumentDto.cs           (NEW)
+    EmployeeManager.Domain/Repositories/IDocumentRepository.cs (NEW)
+    EmployeeManager.Infrastructure/Repositories/DocumentRepository.cs (NEW)
+    EmployeeManager.Application/Services/IDocumentService.cs (NEW)
+    EmployeeManager.Application/Services/DocumentService.cs  (NEW)
+    EmployeeManager.API/Controllers/DocumentsController.cs   (NEW)
+    EmployeeManager.API/Program.cs                            (DI registrations)
+    EmployeeManager.API/bin/Debug/net10.0/Data/documents.json (will autocreate)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Domain model + DTO
+  NEW FILE: EmployeeManager.Domain/Models/Document.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public class Document
+      {
+          public Guid Id { get; set; }
+          public string OwnerUsername { get; set; } = string.Empty;
+          public string FileName { get; set; } = string.Empty;       // display name
+          public string ContentType { get; set; } = string.Empty;    // MIME type
+          public long SizeBytes { get; set; }
+          public string StoragePath { get; set; } = string.Empty;    // server-side, internal
+          public DateTime UploadedAt { get; set; }
+      }
+
+  NEW FILE: EmployeeManager.Domain/Models/DocumentDto.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public class DocumentDto
+      {
+          public Guid Id { get; set; }
+          public string OwnerUsername { get; set; } = string.Empty;
+          public string FileName { get; set; } = string.Empty;
+          public string ContentType { get; set; } = string.Empty;
+          public long SizeBytes { get; set; }
+          public DateTime UploadedAt { get; set; }
+      }
+
+  STEP 2 — Repository
+  NEW FILE: EmployeeManager.Domain/Repositories/IDocumentRepository.cs
+
+      namespace EmployeeManager.Domain.Repositories;
+      using EmployeeManager.Domain.Models;
+
+      public interface IDocumentRepository
+      {
+          Task<List<Document>> GetAllAsync();
+          Task<List<Document>> GetByOwnerAsync(string ownerUsername);
+          Task<Document?> GetByIdAsync(Guid id);
+          Task<Document> CreateAsync(Document doc);
+          Task<bool> DeleteAsync(Guid id);
+      }
+
+  NEW FILE: EmployeeManager.Infrastructure/Repositories/DocumentRepository.cs
+
+      using EmployeeManager.Domain.Models;
+      using EmployeeManager.Domain.Repositories;
+      using EmployeeManager.Infrastructure.Storage;
+
+      namespace EmployeeManager.Infrastructure.Repositories;
+
+      public class DocumentRepository : IDocumentRepository
+      {
+          private readonly JsonDataStore<List<Document>> _store;
+
+          public DocumentRepository(JsonDataStore<List<Document>> store)
+          {
+              _store = store;
+          }
+
+          public async Task<List<Document>> GetAllAsync()
+              => await _store.ReadAsync() ?? new();
+
+          public async Task<List<Document>> GetByOwnerAsync(string ownerUsername)
+          {
+              var all = await GetAllAsync();
+              return all
+                  .Where(d => string.Equals(d.OwnerUsername, ownerUsername,
+                                            StringComparison.OrdinalIgnoreCase))
+                  .ToList();
+          }
+
+          public async Task<Document?> GetByIdAsync(Guid id)
+          {
+              var all = await GetAllAsync();
+              return all.FirstOrDefault(d => d.Id == id);
+          }
+
+          public async Task<Document> CreateAsync(Document doc)
+          {
+              if (doc.Id == Guid.Empty) doc.Id = Guid.NewGuid();
+              doc.UploadedAt = DateTime.UtcNow;
+
+              await _store.ReadModifyWriteAsync(list =>
+              {
+                  list ??= new();
+                  list.Add(doc);
+                  return list;
+              });
+              return doc;
+          }
+
+          public async Task<bool> DeleteAsync(Guid id)
+          {
+              var removed = false;
+              await _store.ReadModifyWriteAsync(list =>
+              {
+                  list ??= new();
+                  var idx = list.FindIndex(d => d.Id == id);
+                  if (idx >= 0) { list.RemoveAt(idx); removed = true; }
+                  return list;
+              });
+              return removed;
+          }
+      }
+
+  Adjust the namespaces / using statements if your JsonDataStore
+  lives in a different namespace.
+
+  STEP 3 — Service
+  NEW FILE: EmployeeManager.Application/Services/IDocumentService.cs
+
+      using EmployeeManager.Domain.Models;
+      namespace EmployeeManager.Application.Services;
+
+      public interface IDocumentService
+      {
+          Task<List<DocumentDto>> ListMineAsync(string username);
+          Task<List<DocumentDto>> ListAllAsync();
+          Task<UploadResult> UploadAsync(string username, IFormFile file);
+          Task<(byte[]?, Document?)> DownloadAsync(string username, string role, Guid id);
+          Task<DeleteResult> DeleteAsync(string username, string role, Guid id);
+      }
+
+      public record UploadResult(bool Success, DocumentDto? Document, string? Error);
+      public record DeleteResult(bool Success, string? Error);
+
+  Wait — `IFormFile` is in Microsoft.AspNetCore.Http. Add this NuGet
+  reference to the Application project:
+
+      dotnet add EmployeeManager.Application package Microsoft.AspNetCore.Http.Features
+
+  (Or accept that the service depends on the framework. Pragmatic
+  for now; you can decouple later.)
+
+  NEW FILE: EmployeeManager.Application/Services/DocumentService.cs
+
+      using EmployeeManager.Domain.Models;
+      using EmployeeManager.Domain.Repositories;
+      using Microsoft.AspNetCore.Hosting;
+      using Microsoft.AspNetCore.Http;
+      using Microsoft.Extensions.Logging;
+
+      namespace EmployeeManager.Application.Services;
+
+      public class DocumentService : IDocumentService
+      {
+          private static readonly HashSet<string> AllowedTypes = new(StringComparer.OrdinalIgnoreCase)
+          {
+              "application/pdf",
+              "text/plain",
+              "image/png",
+              "image/jpeg",
+              "image/gif",
+          };
+          private const long MaxBytes = 5_000_000;
+
+          private readonly IDocumentRepository _repo;
+          private readonly IWebHostEnvironment _env;
+          private readonly ILogger<DocumentService> _logger;
+
+          public DocumentService(
+              IDocumentRepository repo,
+              IWebHostEnvironment env,
+              ILogger<DocumentService> logger)
+          {
+              _repo = repo;
+              _env = env;
+              _logger = logger;
+          }
+
+          public async Task<List<DocumentDto>> ListMineAsync(string username)
+              => (await _repo.GetByOwnerAsync(username)).Select(ToDto).ToList();
+
+          public async Task<List<DocumentDto>> ListAllAsync()
+              => (await _repo.GetAllAsync()).Select(ToDto).ToList();
+
+          public async Task<UploadResult> UploadAsync(string username, IFormFile file)
+          {
+              if (file is null || file.Length == 0)
+                  return new(false, null, "No file uploaded.");
+
+              if (file.Length > MaxBytes)
+                  return new(false, null, $"File too large (max {MaxBytes / 1_000_000} MB).");
+
+              if (!AllowedTypes.Contains(file.ContentType))
+                  return new(false, null, $"Type '{file.ContentType}' is not allowed.");
+
+              var ext = Path.GetExtension(file.FileName);
+              var safeFileName = Path.GetFileName(file.FileName); // strips directories
+              var id = Guid.NewGuid();
+
+              var dir = Path.Combine(_env.WebRootPath ?? "wwwroot", "documents", username);
+              Directory.CreateDirectory(dir);
+
+              var diskName = $"{id}{ext}";
+              var fullPath = Path.Combine(dir, diskName);
+
+              await using (var stream = File.Create(fullPath))
+              {
+                  await file.CopyToAsync(stream);
+              }
+
+              var doc = await _repo.CreateAsync(new Document
+              {
+                  Id = id,
+                  OwnerUsername = username,
+                  FileName = safeFileName,
+                  ContentType = file.ContentType,
+                  SizeBytes = file.Length,
+                  StoragePath = fullPath,
+              });
+
+              return new(true, ToDto(doc), null);
+          }
+
+          public async Task<(byte[]?, Document?)> DownloadAsync(
+              string username, string role, Guid id)
+          {
+              var doc = await _repo.GetByIdAsync(id);
+              if (doc is null) return (null, null);
+              if (!CanAccess(doc, username, role)) return (null, null);
+              if (!File.Exists(doc.StoragePath)) return (null, null);
+
+              var bytes = await File.ReadAllBytesAsync(doc.StoragePath);
+              return (bytes, doc);
+          }
+
+          public async Task<DeleteResult> DeleteAsync(string username, string role, Guid id)
+          {
+              var doc = await _repo.GetByIdAsync(id);
+              if (doc is null) return new(false, "Not found.");
+
+              if (!CanAccess(doc, username, role)) return new(false, "Forbidden.");
+
+              if (File.Exists(doc.StoragePath))
+              {
+                  try { File.Delete(doc.StoragePath); }
+                  catch (Exception ex)
+                  {
+                      _logger.LogWarning(ex, "Failed to delete {Path}", doc.StoragePath);
+                      // Continue — orphan the file on disk rather than fail the user
+                  }
+              }
+
+              await _repo.DeleteAsync(id);
+              return new(true, null);
+          }
+
+          private static bool CanAccess(Document doc, string username, string role)
+              => string.Equals(doc.OwnerUsername, username, StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase);
+
+          private static DocumentDto ToDto(Document d) => new()
+          {
+              Id = d.Id,
+              OwnerUsername = d.OwnerUsername,
+              FileName = d.FileName,
+              ContentType = d.ContentType,
+              SizeBytes = d.SizeBytes,
+              UploadedAt = d.UploadedAt,
+          };
+      }
+
+  STEP 4 — Controller
+  NEW FILE: EmployeeManager.API/Controllers/DocumentsController.cs
+
+      using System.Security.Claims;
+      using EmployeeManager.Application.Services;
+      using Microsoft.AspNetCore.Authorization;
+      using Microsoft.AspNetCore.Mvc;
+
+      namespace EmployeeManager.API.Controllers;
+
+      [ApiController]
+      [Route("api/[controller]")]
+      [Authorize]
+      public class DocumentsController : ControllerBase
+      {
+          private readonly IDocumentService _docs;
+
+          public DocumentsController(IDocumentService docs) { _docs = docs; }
+
+          private (string username, string role) Caller()
+          {
+              var u = User.Identity?.Name ?? string.Empty;
+              var r = User.FindFirstValue(ClaimTypes.Role) ?? "Employee";
+              return (u, r);
+          }
+
+          [HttpGet("mine")]
+          public async Task<IActionResult> ListMine()
+          {
+              var (u, _) = Caller();
+              return Ok(await _docs.ListMineAsync(u));
+          }
+
+          [HttpGet]
+          [Authorize(Roles = "Admin")]   // server-side gate, NOT just UI
+          public async Task<IActionResult> ListAll()
+              => Ok(await _docs.ListAllAsync());
+
+          [HttpPost]
+          [RequestSizeLimit(10_000_000)]   // hard cap at the framework level
+          public async Task<IActionResult> Upload(IFormFile file)
+          {
+              var (u, _) = Caller();
+              var result = await _docs.UploadAsync(u, file);
+              if (!result.Success)
+                  return BadRequest(new { message = result.Error });
+              return Ok(result.Document);
+          }
+
+          [HttpGet("{id:guid}/download")]
+          public async Task<IActionResult> Download(Guid id)
+          {
+              var (u, r) = Caller();
+              var (bytes, doc) = await _docs.DownloadAsync(u, r, id);
+              if (bytes is null || doc is null)
+                  return NotFound();
+              return File(bytes, doc.ContentType, doc.FileName);
+          }
+
+          [HttpDelete("{id:guid}")]
+          public async Task<IActionResult> Delete(Guid id)
+          {
+              var (u, r) = Caller();
+              var result = await _docs.DeleteAsync(u, r, id);
+              if (!result.Success)
+                  return result.Error == "Forbidden." ? Forbid() : NotFound();
+              return NoContent();
+          }
+      }
+
+  STEP 5 — DI registrations
+  In Program.cs, add (next to the other AddScoped/AddSingleton):
+
+      builder.Services.AddSingleton(
+          new JsonDataStore<List<Document>>(
+              Path.Combine(AppContext.BaseDirectory, "Data", "documents.json")));
+      builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
+      builder.Services.AddScoped<IDocumentService, DocumentService>();
+
+  STEP 6 — Test the endpoints in your HTTP client
+   - Log in as admin.
+   - POST /api/documents with a form-data body, key=`file`, value=
+     a small PDF or PNG. Should return the DTO.
+   - GET /api/documents/mine → array with one entry.
+   - GET /api/documents/{id}/download → returns the bytes.
+   - DELETE /api/documents/{id} → 204.
+   - Verify the file appeared at wwwroot/documents/admin/.../*.pdf
+     during the test and was gone after delete.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Filename on disk is the document ID + extension. NEVER use the
+    user-provided filename in the path.
+  - Use HashSet<string> with OrdinalIgnoreCase for the
+    content-type whitelist — `Contains` becomes O(1) and case-
+    insensitive.
+  - Always include the role and ownership check in the service.
+    Don't sprinkle [Authorize(Roles="Admin")] across actions and
+    consider the job done — the per-row check matters too.
+  - `[Authorize(Roles = "Admin")]` on ListAll is the OUTER gate;
+    the service layer's CanAccess is the INNER gate. Belt and
+    braces.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Full clean-arch slice for an upload feature.
+  - Anti-traversal filenames.
+  - Content-type whitelisting via HashSet.
+  - DTO vs domain model on the wire.
+  - The pair (outer [Authorize], inner ownership check) for
+    multi-role APIs.
 
 
-CHALLENGE 25.2 — TS types + query hooks (mine + all)        Target: 30 min
+CHALLENGE 25.2 — TS types + query hooks (mine + all)        Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. src/Types/Document.ts: Document interface (camelCase).
-  2. src/queries/documentKeys.ts:
-       all: ['documents'] as const,
-       mine: ['documents', 'mine'] as const,
-       allAdmin: ['documents', 'admin'] as const,
-  3. queries/useMyDocuments.ts → GET /api/documents/mine.
-  4. queries/useAllDocuments.ts → GET /api/documents (admin only —
-     guarded inside the hook OR via route).
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Documents has two READ surfaces — "my documents" and "all
+  documents" (admin only). This challenge teaches the multi-key
+  pattern: separate query keys for separate endpoints, both stored
+  in the cache simultaneously without conflict. An admin viewing
+  /documents-admin/ then /documents has both lists cached and can
+  switch instantly.
 
-  RULES:
-  - Two separate query keys = two cache entries. An admin user can
-    have both populated.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Multiple read endpoints for the same domain, separate keys for each.
+  1) Multiple cache entries for one domain
+     - documentKeys.mine() === ['documents', 'mine']
+     - documentKeys.allAdmin() === ['documents', 'admin']
+     - Same domain root (`'documents'`) so a domain-wide invalidate
+       wipes both.
+     - Different leaf so they don't collide.
+
+  2) `enabled: bool` on useQuery
+     - Conditional fetching. Pass `enabled: user.role === 'Admin'`
+       and the query never fires for non-admins.
+     - Useful when a hook is mounted in a tree where the user might
+       not have access — instead of unmounting, you gate the fetch.
+
+  3) Query-key hierarchy as the unit of cache invalidation
+     - `queryClient.invalidateQueries({ queryKey: documentKeys.all })`
+       invalidates BOTH mine and allAdmin in one shot.
+     - This is why every domain's keys share a common root.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/Types/Document.ts             (NEW)
+    src/Queries/documentKeys.ts       (NEW)
+    src/Queries/useMyDocuments.ts     (NEW)
+    src/Queries/useAllDocuments.ts    (NEW)
+    src/services/api.ts               (add list functions)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Type
+  NEW FILE: src/Types/Document.ts
+
+      export interface DocumentDto {
+          id: string;
+          ownerUsername: string;
+          fileName: string;
+          contentType: string;
+          sizeBytes: number;
+          uploadedAt: string;     // ISO date
+      }
+
+  STEP 2 — Query keys
+  NEW FILE: src/Queries/documentKeys.ts
+
+      export const documentKeys = {
+          all:       ['documents'] as const,
+          mine:      () => [...documentKeys.all, 'mine'] as const,
+          allAdmin:  () => [...documentKeys.all, 'admin'] as const,
+          detail:    (id: string) => [...documentKeys.all, 'detail', id] as const,
+      };
+
+  STEP 3 — API methods
+  Append to src/services/api.ts:
+
+      import type { DocumentDto } from '../Types/Document';
+
+      export const fetchMyDocuments = () =>
+          api.get<DocumentDto[]>('/documents/mine');
+
+      export const fetchAllDocuments = () =>
+          api.get<DocumentDto[]>('/documents');
+
+  STEP 4 — Hooks
+  NEW FILE: src/Queries/useMyDocuments.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { fetchMyDocuments } from '../services/api';
+      import { documentKeys } from './documentKeys';
+      import type { DocumentDto } from '../Types/Document';
+
+      export const useMyDocuments = () =>
+          useQuery({
+              queryKey: documentKeys.mine(),
+              queryFn: async () => (await fetchMyDocuments()).data,
+              staleTime: 30 * 1000,    // 30s — list churns when uploading
+          });
+
+  NEW FILE: src/Queries/useAllDocuments.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { fetchAllDocuments } from '../services/api';
+      import { documentKeys } from './documentKeys';
+      import { useAuth } from '../Context/AuthContext';
+
+      export const useAllDocuments = () => {
+          const { user } = useAuth();
+          return useQuery({
+              queryKey: documentKeys.allAdmin(),
+              queryFn: async () => (await fetchAllDocuments()).data,
+              enabled: user?.role === 'Admin',
+              staleTime: 30 * 1000,
+          });
+      };
+
+  Why `enabled: user?.role === 'Admin'`? Non-admins shouldn't even
+  attempt the request — saves a guaranteed 403 round-trip.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Two endpoints, two query keys. Cache them separately.
+  - `enabled` is the right tool for "don't fetch unless conditions
+    are met." Don't fake it with early return — useQuery still
+    runs.
+  - Keep the staleTime short for lists that change on user action
+    (upload, delete). For mostly-static data, 5 minutes is fine.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Multi-key pattern within one domain.
+  - The `enabled` option for conditional queries.
+  - Shared root for batched invalidation.
 
 
-CHALLENGE 25.3 — My Documents page (list + delete)           Target: 35 min
+CHALLENGE 25.3 — My Documents page (list + delete)           Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. routes.ts: `myDocuments: () => '/documents' as const`.
-  2. MyDocumentsPage.tsx: table of own documents (fileName, size,
-     uploadedAt, Delete button).
-  3. useDeleteDocument mutation with optimistic remove + rollback.
-  4. ConfirmModal reused from Round 12.2.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Round 17.3 introduced optimistic mutations on Employees. This
+  round replays that pattern with a different domain so it sticks.
+  By the end you should be able to write "optimistic delete with
+  rollback" from memory in any feature.
 
-  RULES:
-  - Optimistic delete OK (you know the id).
-  - Reuse ConfirmModal — don't write a second one.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Round 12.2 + 17.3 patterns reapplied. Confirm modal + optimistic
-  delete + invalidation.
+  1) Optimistic updates revisited
+     - The pattern in TanStack Query:
+         onMutate: snapshot the cache, write the optimistic update,
+                   return the snapshot as `context`.
+         onError:  rollback by writing the snapshot back.
+         onSettled: refetch to reconcile any drift.
+     - "Settled" runs whether success or error — that's the right
+       reconciliation hook.
+
+  2) Reusing ConfirmModal
+     - You built ConfirmModal in Round 12.2. Its props (open,
+       title, message, onConfirm, onCancel) are generic enough to
+       reuse here. DO NOT duplicate.
+
+  3) Human-friendly file sizes
+     - `1234567 bytes` → "1.18 MB". Tiny helper, used everywhere:
+
+         const formatBytes = (n: number) => {
+             if (n < 1024) return `${n} B`;
+             if (n < 1_048_576) return `${(n / 1024).toFixed(1)} KB`;
+             return `${(n / 1_048_576).toFixed(2)} MB`;
+         };
+
+     Put it in src/utils/format.ts — you'll reuse it on every
+     upload page.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/utils/format.ts                  (NEW — formatBytes helper)
+    src/services/api.ts                  (add deleteDocument)
+    src/Queries/useDeleteDocument.ts     (NEW)
+    src/routes.ts                        (myDocuments())
+    src/components/MyDocumentsPage.tsx   (NEW)
+    src/App.tsx                          (route)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — formatBytes helper
+  NEW FILE: src/utils/format.ts
+
+      export const formatBytes = (n: number) => {
+          if (n < 1024) return `${n} B`;
+          if (n < 1_048_576) return `${(n / 1024).toFixed(1)} KB`;
+          return `${(n / 1_048_576).toFixed(2)} MB`;
+      };
+
+  STEP 2 — API delete method
+  In src/services/api.ts:
+
+      export const deleteDocument = (id: string) =>
+          api.delete(`/documents/${id}`);
+
+  STEP 3 — Mutation hook
+  NEW FILE: src/Queries/useDeleteDocument.ts
+
+      import { useMutation, useQueryClient } from '@tanstack/react-query';
+      import { toast } from 'react-toastify';
+      import { deleteDocument } from '../services/api';
+      import { documentKeys } from './documentKeys';
+      import type { DocumentDto } from '../Types/Document';
+
+      export const useDeleteDocument = () => {
+          const queryClient = useQueryClient();
+
+          return useMutation({
+              mutationFn: (id: string) => deleteDocument(id),
+
+              // OPTIMISTIC UPDATE — runs before the request fires
+              onMutate: async (id) => {
+                  // 1. Cancel any in-flight refetches that might overwrite our optimistic update
+                  await queryClient.cancelQueries({ queryKey: documentKeys.mine() });
+
+                  // 2. Snapshot the current cache (for rollback)
+                  const previous = queryClient.getQueryData<DocumentDto[]>(
+                      documentKeys.mine());
+
+                  // 3. Write the optimistic state
+                  queryClient.setQueryData<DocumentDto[]>(
+                      documentKeys.mine(),
+                      (old) => old?.filter(d => d.id !== id) ?? []);
+
+                  // 4. Return context — onError can use it to rollback
+                  return { previous };
+              },
+
+              onError: (_err, _id, context) => {
+                  if (context?.previous) {
+                      queryClient.setQueryData(documentKeys.mine(), context.previous);
+                  }
+                  toast.error('Failed to delete document.');
+              },
+
+              onSuccess: () => {
+                  toast.success('Document deleted.');
+              },
+
+              onSettled: () => {
+                  // Reconcile with the server in either case.
+                  queryClient.invalidateQueries({ queryKey: documentKeys.mine() });
+              },
+          });
+      };
+
+  STEP 4 — Route
+  src/routes.ts:
+
+      myDocuments: () => '/documents' as const,
+
+  STEP 5 — The page
+  NEW FILE: src/components/MyDocumentsPage.tsx
+
+      import { useState } from 'react';
+      import { format } from 'date-fns';
+      import { useMyDocuments } from '../Queries/useMyDocuments';
+      import { useDeleteDocument } from '../Queries/useDeleteDocument';
+      import { formatBytes } from '../utils/format';
+      import ConfirmModal from './ConfirmModal';
+      import type { DocumentDto } from '../Types/Document';
+
+      const MyDocumentsPage = () => {
+          const { data: documents, isLoading, isError } = useMyDocuments();
+          const deleteMutation = useDeleteDocument();
+          const [pendingDelete, setPendingDelete] = useState<DocumentDto | null>(null);
+
+          if (isLoading) {
+              return <p className="p-6 text-gray-500">Loading documents…</p>;
+          }
+          if (isError) {
+              return <p className="p-6 text-red-600">Failed to load documents.</p>;
+          }
+
+          return (
+              <div className="max-w-4xl mx-auto p-6">
+                  <h1 className="text-2xl font-semibold mb-4">My Documents</h1>
+
+                  {documents && documents.length === 0 ? (
+                      <div className="card text-center text-gray-500">
+                          No documents yet. Upload one in the next round.
+                      </div>
+                  ) : (
+                      <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+                          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                              <thead className="bg-gray-50 dark:bg-gray-900">
+                                  <tr>
+                                      <th className="px-6 py-3 text-left text-xs font-medium
+                                                     text-gray-500 uppercase tracking-wider">
+                                          Name
+                                      </th>
+                                      <th className="px-6 py-3 text-left text-xs font-medium
+                                                     text-gray-500 uppercase tracking-wider">
+                                          Size
+                                      </th>
+                                      <th className="px-6 py-3 text-left text-xs font-medium
+                                                     text-gray-500 uppercase tracking-wider">
+                                          Uploaded
+                                      </th>
+                                      <th className="px-6 py-3"></th>
+                                  </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                                  {documents?.map(doc => (
+                                      <tr key={doc.id}>
+                                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                              {doc.fileName}
+                                          </td>
+                                          <td className="px-6 py-4 whitespace-nowrap text-sm
+                                                         text-gray-500">
+                                              {formatBytes(doc.sizeBytes)}
+                                          </td>
+                                          <td className="px-6 py-4 whitespace-nowrap text-sm
+                                                         text-gray-500">
+                                              {format(new Date(doc.uploadedAt), 'MMM d, yyyy')}
+                                          </td>
+                                          <td className="px-6 py-4 whitespace-nowrap text-right">
+                                              <button onClick={() => setPendingDelete(doc)}
+                                                      className="text-sm text-red-600 hover:text-red-800">
+                                                  Delete
+                                              </button>
+                                          </td>
+                                      </tr>
+                                  ))}
+                              </tbody>
+                          </table>
+                      </div>
+                  )}
+
+                  <ConfirmModal
+                      open={!!pendingDelete}
+                      title="Delete document?"
+                      message={`Are you sure you want to delete "${pendingDelete?.fileName}"? This cannot be undone.`}
+                      onConfirm={() => {
+                          if (pendingDelete) {
+                              deleteMutation.mutate(pendingDelete.id);
+                              setPendingDelete(null);
+                          }
+                      }}
+                      onCancel={() => setPendingDelete(null)}
+                  />
+              </div>
+          );
+      };
+
+      export default MyDocumentsPage;
+
+  Adjust the ConfirmModal prop names if your existing component
+  uses different names (`isOpen` vs `open`, etc.).
+
+  STEP 6 — Register the route in App.tsx
+
+      { path: routes.myDocuments(), element: <MyDocumentsPage /> },
+
+  And add a nav link in AuthLayout.tsx.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always cancel in-flight queries in onMutate. Without it, an
+    in-flight refetch could overwrite your optimistic update.
+  - Always return the snapshot from onMutate so onError can
+    rollback.
+  - Always invalidate in onSettled. Optimistic state can drift
+    from server state — reconcile.
+  - Reuse ConfirmModal. Don't write another. (See your "Minimal
+    Scope" memory.)
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - The complete optimistic-delete recipe (cancel, snapshot,
+    write, rollback on error, invalidate on settled).
+  - formatBytes as a stock utility.
+  - Empty-state rendering — "no documents yet" beats an empty
+    table.
 
 
-CHALLENGE 25.4 — Download flow                              Target: 25 min
+CHALLENGE 25.4 — Authenticated download                     Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Authenticated download = fetch + blob + invisible-anchor click.
-    Browser navigation (`window.location = url`) doesn't send the
-    Authorization header.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  You can't download an [Authorize]-protected file by setting
+  `window.location.href = '/api/documents/123/download'`. Browser
+  navigation doesn't send the `Authorization: Bearer ...` header
+  — it just navigates. The download lands on the login page or 401.
 
-  TASK:
-  1. api.ts: downloadDocument(id) — axios GET with responseType:
-     'blob' + Authorization header (interceptor handles).
-  2. On the Download click, call it, get blob, create object URL,
-     trigger an <a download={fileName}>.click(), revoke URL.
+  The pattern: fetch the bytes via axios (which DOES send the
+  header through your existing interceptor), turn them into a
+  Blob, create a temporary object URL, click an invisible <a>,
+  revoke the URL. Five steps, ~15 lines.
 
-  RULES:
-  - Always revokeObjectURL after click (memory leak otherwise).
-  - Filename from the model, not the URL.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Auth-protected download in 15 lines. Reused for CSV export (28.4).
+  1) `responseType: 'blob'`
+     - Axios default deserialises response.data as JSON.
+     - For binary responses (downloads), tell it: `responseType:
+       'blob'`. Now response.data is a Blob (raw bytes + content
+       type), not a parsed object.
+
+  2) `<a download="filename">` — the browser save dialog
+     - The `download` attribute hints the browser to save the link
+       target as a file rather than navigate to it.
+     - The value becomes the suggested filename.
+     - Programmatically: create the anchor, set href and download,
+       .click(), then remove. The user sees a save dialog.
+
+  3) URL.createObjectURL + revokeObjectURL
+     - Same lifecycle as the avatar preview in 23.5.
+     - createObjectURL returns a temporary `blob:` URL that points
+       at the Blob in memory.
+     - revokeObjectURL frees the memory. Call it AFTER the click.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/services/api.ts                  (downloadDocument)
+    src/utils/triggerDownload.ts         (NEW — generic helper)
+    src/components/MyDocumentsPage.tsx   (add Download button)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — API method
+  Append to src/services/api.ts:
+
+      export const downloadDocument = (id: string) =>
+          api.get(`/documents/${id}/download`, {
+              responseType: 'blob',     // ← binary mode
+          });
+
+  STEP 2 — Generic download trigger
+  Files of any kind reuse the "blob → anchor click → revoke"
+  recipe. Extract it once.
+
+  NEW FILE: src/utils/triggerDownload.ts
+
+      // Saves a Blob to disk with the given filename. Used by every
+      // authenticated-download flow (documents, CSV exports, zips).
+      export const triggerDownload = (blob: Blob, fileName: string) => {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fileName;
+
+          // The anchor must be in the DOM for some browsers to register
+          // the click programmatically.
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+
+          // Free the blob reference. The download has already started;
+          // the browser has its own reference to the bytes.
+          URL.revokeObjectURL(url);
+      };
+
+  STEP 3 — Hook up the Download button
+  In MyDocumentsPage.tsx, add a Download button to each row:
+
+      import { toast } from 'react-toastify';
+      import { downloadDocument } from '../services/api';
+      import { triggerDownload } from '../utils/triggerDownload';
+
+      const handleDownload = async (doc: DocumentDto) => {
+          try {
+              const response = await downloadDocument(doc.id);
+              triggerDownload(response.data, doc.fileName);
+          } catch {
+              toast.error('Download failed.');
+          }
+      };
+
+      // In the JSX, alongside the Delete button:
+      <button onClick={() => handleDownload(doc)}
+              className="text-sm text-brand-600 hover:text-brand-800 mr-3">
+          Download
+      </button>
+
+  STEP 4 — Test
+   - Upload a small PDF via your HTTP client (until Round 26 adds
+     a UI uploader).
+   - Click Download → browser save dialog appears with the
+     original filename → file matches the upload byte-for-byte.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always revoke the object URL after click. Otherwise the Blob
+    sits in memory until the tab closes.
+  - The filename comes from the MODEL, not from the URL. URLs in
+    your API are GUID-named; users want to see their original
+    filename.
+  - Appending the anchor to document.body is necessary in some
+    browsers (Firefox) for the programmatic click to register.
+    Always do it; never assume.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Authenticated downloads via Blob + anchor click.
+  - `responseType: 'blob'` for binary axios responses.
+  - The triggerDownload utility (reused for CSV in 33.5, leaves
+    export, etc.).
 
 
-CHALLENGE 25.5 — Document type/size validation (client)     Target: 20 min
+CHALLENGE 25.5 — Type/size validation (Zod for files)        Target: 30 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Zod schema for upload form: file (File type), type in [...],
-     size < 5_000_000.
-  2. Show validation errors BEFORE attempting upload.
-  3. Server still validates — defense in depth.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Server validation is the source of truth, but the client should
+  reject obviously-bad files BEFORE uploading. Saves bandwidth and
+  gives instant feedback. Zod can validate File objects too — same
+  schema-driven UX you used for text fields.
 
-  RULES:
-  - Don't waste bandwidth. Client validation = UX. Server = security.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Two-layer validation. Same pattern in every upload feature.
+  1) Validating File objects with Zod
+     - `z.instanceof(File)` — Zod's runtime check for browser File
+       instances.
+     - Chain `.refine(...)` for the actual rules:
+         schema.refine(f => f.size <= MAX, 'File too large')
+               .refine(f => ALLOWED.includes(f.type), 'Type not allowed')
+     - The error path defaults to the field. For a single-file
+       schema, that's the root.
+
+  2) Why a Zod schema and not raw if-statements
+     - Same validator drives the upload form AND a programmatic
+       check (e.g. clipboard paste in 26.5). One source of truth.
+     - You can derive a TS type from it for elsewhere.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/schemas/documentSchema.ts        (NEW)
+    src/components/MyDocumentsPage.tsx   (optional — wire later in 26)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  NEW FILE: src/schemas/documentSchema.ts
+
+      import { z } from 'zod';
+
+      export const MAX_DOCUMENT_BYTES = 5_000_000;          // 5 MB
+      export const ALLOWED_DOCUMENT_TYPES = [
+          'application/pdf',
+          'text/plain',
+          'image/png',
+          'image/jpeg',
+          'image/gif',
+      ] as const;
+
+      // The actual schema validates a single File against type + size.
+      // `z.instanceof(File)` is a runtime check, not a structural type.
+      export const documentFileSchema = z
+          .instanceof(File, { message: 'Please select a file.' })
+          .refine(
+              (file) => file.size <= MAX_DOCUMENT_BYTES,
+              { message: `File must be ≤ ${MAX_DOCUMENT_BYTES / 1_000_000} MB.` },
+          )
+          .refine(
+              (file) => ALLOWED_DOCUMENT_TYPES.includes(
+                  file.type as typeof ALLOWED_DOCUMENT_TYPES[number]),
+              { message: 'Only PDF, text, and image files are allowed.' },
+          );
+
+      // Helper: returns an array of error messages for a candidate file.
+      // Useful for non-form contexts (drag-drop, clipboard paste).
+      export const validateDocumentFile = (file: File): string[] => {
+          const result = documentFileSchema.safeParse(file);
+          if (result.success) return [];
+          return result.error.errors.map(e => e.message);
+      };
+
+  Anatomy:
+   - `safeParse` returns `{ success, data | error }` instead of
+     throwing. Ideal when you need a graceful UX.
+   - `result.error.errors` is Zod's standard issue array. Each
+     entry has `.message` and `.path`.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Keep the constants (MAX_BYTES, allowed types) in ONE place.
+    The schema imports them; UI components import them. The
+    server has its own copy — KEEP THEM IN SYNC manually.
+  - `as const` on the allowed-types array narrows it to a readonly
+    tuple of string literals — gives TS proper type info inside
+    `.includes()`.
+  - safeParse, not `.parse()`. The latter throws; you don't want
+    a thrown error mid-form.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Zod can validate File objects.
+  - safeParse for "validate without throwing."
+  - The validate-helper pattern for reusing a schema outside RHF.
+  - Round 25 capstone: full document storage stack from disk →
+    repository → service → controller → query hooks → list page →
+    delete → download → validator. Round 26 adds the upload UI on
+    top.
 
 
 ================================================================================
@@ -5513,109 +10261,907 @@ Pacing: One challenge per day. The upload UI itself — drag-drop,
 progress, errors.
 
 
-CHALLENGE 26.1 — Upload form (basic file input)             Target: 25 min
+CHALLENGE 26.1 — Upload form (basic file input)              Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. UploadDocumentForm.tsx: <input type="file" /> + selected-file
-     preview (name + size).
-  2. useUploadDocument mutation: POST FormData to /api/documents.
-  3. On success: invalidateQueries(documentKeys.mine) + toast.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Round 25 built the server side of documents. Round 26 builds the
+  upload UX. Start small — a styled file input with selection
+  preview, a useUploadDocument mutation, and a wired-up submit
+  button. Subsequent challenges add the rich UX (progress bar,
+  drag-drop, multi-file queue, clipboard paste) on top.
 
-  RULES:
-  - Disable submit while isPending.
-  - Reset file input after upload.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Round 23.5 again, slightly richer.
+  1) The `<input type="file">` semantic
+     - Native file picker. The user chooses ONE file (or more, with
+       `multiple`).
+     - The element holds the selected file(s) in `inputRef.current.files`.
+     - The `value` is unsettable from JS — you can only RESET it
+       (assign empty string).
+
+  2) Re-selecting the same file
+     - Browsers don't fire `onChange` if the user picks the SAME
+       file twice in a row (the value didn't change).
+     - Fix: after every upload, `inputRef.current.value = ''`. Now
+       the next selection — even of the same file — triggers
+       onChange normally.
+
+  3) Validating before submit
+     - Use the schema from 25.5 (`validateDocumentFile`) to check
+       the file the moment it's selected. Show errors inline; don't
+       wait for the user to click Submit.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/services/api.ts                       (uploadDocument)
+    src/Queries/useUploadDocument.ts          (NEW)
+    src/components/UploadDocumentForm.tsx     (NEW)
+    src/components/MyDocumentsPage.tsx        (mount the form)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — API method
+  Append to src/services/api.ts:
+
+      export const uploadDocument = (file: File) => {
+          const fd = new FormData();
+          fd.append('file', file);
+          return api.post<DocumentDto>('/documents', fd);
+      };
+
+  STEP 2 — Mutation hook
+  NEW FILE: src/Queries/useUploadDocument.ts
+
+      import { useMutation, useQueryClient } from '@tanstack/react-query';
+      import { toast } from 'react-toastify';
+      import { isAxiosError } from 'axios';
+      import { uploadDocument } from '../services/api';
+      import { documentKeys } from './documentKeys';
+
+      export const useUploadDocument = () => {
+          const queryClient = useQueryClient();
+
+          return useMutation({
+              mutationFn: (file: File) => uploadDocument(file),
+              onSuccess: () => {
+                  toast.success('Uploaded.');
+                  queryClient.invalidateQueries({ queryKey: documentKeys.mine() });
+                  // If the user is an admin, refresh that view too.
+                  queryClient.invalidateQueries({ queryKey: documentKeys.allAdmin() });
+              },
+              onError: (err) => {
+                  const msg = isAxiosError<{ message?: string }>(err)
+                      ? err.response?.data?.message ?? 'Upload failed.'
+                      : 'Upload failed.';
+                  toast.error(msg);
+              },
+          });
+      };
+
+  STEP 3 — The form component
+  NEW FILE: src/components/UploadDocumentForm.tsx
+
+      import { useRef, useState } from 'react';
+      import { useUploadDocument } from '../Queries/useUploadDocument';
+      import { validateDocumentFile } from '../schemas/documentSchema';
+      import { formatBytes } from '../utils/format';
+
+      const UploadDocumentForm = () => {
+          const inputRef = useRef<HTMLInputElement>(null);
+          const [file, setFile] = useState<File | null>(null);
+          const [validationErrors, setValidationErrors] = useState<string[]>([]);
+          const uploadMutation = useUploadDocument();
+
+          const handleSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+              const picked = e.target.files?.[0];
+              if (!picked) return;
+
+              const errors = validateDocumentFile(picked);
+              setValidationErrors(errors);
+              setFile(errors.length === 0 ? picked : null);
+          };
+
+          const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+              e.preventDefault();
+              if (!file) return;
+              uploadMutation.mutate(file, {
+                  onSettled: () => {
+                      // Reset BOTH the React state and the input value.
+                      // The input value reset lets the user pick the same
+                      // file again (next time it's relevant).
+                      setFile(null);
+                      setValidationErrors([]);
+                      if (inputRef.current) inputRef.current.value = '';
+                  },
+              });
+          };
+
+          return (
+              <form onSubmit={handleSubmit} className="card mb-6">
+                  <h2 className="text-lg font-medium mb-3">Upload a document</h2>
+
+                  <div className="flex items-center gap-3">
+                      <input
+                          ref={inputRef}
+                          type="file"
+                          onChange={handleSelect}
+                          accept=".pdf,.txt,image/*"
+                          className="hidden"
+                          id="document-file-input"
+                          disabled={uploadMutation.isPending}
+                      />
+                      <label htmlFor="document-file-input"
+                             className="btn-secondary cursor-pointer">
+                          Choose file
+                      </label>
+
+                      <span className="text-sm text-gray-600 dark:text-gray-300">
+                          {file
+                              ? `${file.name} (${formatBytes(file.size)})`
+                              : 'No file selected'}
+                      </span>
+
+                      <button type="submit"
+                              disabled={!file || uploadMutation.isPending}
+                              className="btn-primary ml-auto">
+                          {uploadMutation.isPending ? 'Uploading…' : 'Upload'}
+                      </button>
+                  </div>
+
+                  {validationErrors.length > 0 && (
+                      <ul className="mt-3 text-sm text-red-600 list-disc list-inside">
+                          {validationErrors.map((msg, i) => <li key={i}>{msg}</li>)}
+                      </ul>
+                  )}
+              </form>
+          );
+      };
+
+      export default UploadDocumentForm;
+
+  STEP 4 — Mount on MyDocumentsPage
+  Add at the top of MyDocumentsPage.tsx's return:
+
+      <UploadDocumentForm />
+
+  Import it at the top of the file.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always reset the input value after upload. Otherwise picking
+    the same file again does nothing (silently).
+  - Validate on SELECT, not on submit. The user sees errors
+    immediately and doesn't waste a click.
+  - Don't append the Authorization header to FormData yourself.
+    Your axios interceptor already does it.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Reapplied the FormData + axios pattern from 23.5 in a new
+    feature.
+  - The validate-on-select UX pattern.
+  - input.value = '' for re-selection.
 
 
-CHALLENGE 26.2 — Upload progress bar                        Target: 30 min
+CHALLENGE 26.2 — Upload progress bar                         Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Axios `onUploadProgress: (e) => setProgress(e.loaded / e.total)`
-    fires repeatedly during upload. Drive a progress bar from it.
-  - Mutation `onMutate` receives the same args you passed to .mutate;
-    use it to seed a local "uploading file X" state.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  A spinner is good UX for small uploads. For multi-megabyte files
+  on slow connections, a progress bar is the difference between
+  "is this app broken?" and "I can see it working." Axios exposes
+  the upload-progress event directly.
 
-  TASK:
-  1. Local state `progress` (0-100).
-  2. Pass onUploadProgress to axios.post call.
-  3. Render a styled progress bar (Tailwind utility classes).
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - On upload fail/reset, set progress back to 0.
+  1) `onUploadProgress` on axios
+     - Axios config field. Fires as bytes leave the client.
+     - Callback receives an event with `loaded` (bytes sent so
+       far) and `total` (total bytes). `loaded / total = ratio`.
+     - For downloads, the equivalent is `onDownloadProgress`.
 
-  WHAT YOU JUST LEARNED:
-  Streaming upload feedback. Same pattern fits any progress UI.
+  2) Bar styling with Tailwind
+     - Outer track: bg-gray-200 rounded-full h-2.
+     - Inner fill: bg-brand-600 h-full rounded-full + dynamic width.
+     - The width comes from inline style (`style={{ width: percent + '%' }}`)
+       because Tailwind doesn't generate arbitrary-percent classes
+       at runtime.
+
+  3) Threading progress state through the mutation
+     - Local component state (`useState<number>(0)`) drives the
+       bar.
+     - The axios config receives a closure that calls setProgress.
+     - Reset to 0 in onSettled to clean up.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/services/api.ts                  (uploadDocument signature change)
+    src/components/UploadDocumentForm.tsx (progress UI)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Extend uploadDocument to accept a progress callback
+  Update src/services/api.ts:
+
+      export const uploadDocument = (
+          file: File,
+          onProgress?: (percent: number) => void,
+      ) => {
+          const fd = new FormData();
+          fd.append('file', file);
+          return api.post<DocumentDto>('/documents', fd, {
+              onUploadProgress: (event) => {
+                  if (!event.total || !onProgress) return;
+                  const percent = Math.round((event.loaded / event.total) * 100);
+                  onProgress(percent);
+              },
+          });
+      };
+
+  STEP 2 — Thread the callback through the mutation hook
+  Update src/Queries/useUploadDocument.ts. The mutation now takes
+  an object so we can pass both the file AND the progress callback:
+
+      type UploadArgs = {
+          file: File;
+          onProgress?: (percent: number) => void;
+      };
+
+      export const useUploadDocument = () => {
+          const queryClient = useQueryClient();
+          return useMutation({
+              mutationFn: ({ file, onProgress }: UploadArgs) =>
+                  uploadDocument(file, onProgress),
+              onSuccess: () => {
+                  toast.success('Uploaded.');
+                  queryClient.invalidateQueries({ queryKey: documentKeys.mine() });
+                  queryClient.invalidateQueries({ queryKey: documentKeys.allAdmin() });
+              },
+              onError: (err) => {
+                  const msg = isAxiosError<{ message?: string }>(err)
+                      ? err.response?.data?.message ?? 'Upload failed.'
+                      : 'Upload failed.';
+                  toast.error(msg);
+              },
+          });
+      };
+
+  Adjust the import to match `UploadArgs` if you reuse types.
+
+  STEP 3 — Wire progress in the form
+  In UploadDocumentForm.tsx, add a progress state and pass the
+  callback:
+
+      const [progress, setProgress] = useState(0);
+
+      // In handleSubmit:
+      uploadMutation.mutate(
+          { file, onProgress: setProgress },
+          {
+              onSettled: () => {
+                  setProgress(0);
+                  setFile(null);
+                  setValidationErrors([]);
+                  if (inputRef.current) inputRef.current.value = '';
+              },
+          },
+      );
+
+      // In the JSX, below the choose/upload row, conditionally render:
+      {uploadMutation.isPending && (
+          <div className="mt-3">
+              <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                  <div
+                      className="h-full bg-brand-600 transition-all"
+                      style={{ width: `${progress}%` }}
+                  />
+              </div>
+              <p className="mt-1 text-xs text-gray-500">{progress}%</p>
+          </div>
+      )}
+
+  Anatomy:
+   - The `transition-all` Tailwind utility smooths the width
+     changes — without it, the bar JUMPS in steps.
+   - Width via inline `style={{ width: '${n}%' }}`. Tailwind
+     wouldn't generate `w-37%` arbitrary classes at runtime.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always reset progress to 0 in onSettled. Otherwise the bar
+    "sticks" at 100% after success.
+  - Use `event.total` defensively. Some uploads (chunked transfer
+    encoding) don't expose it; the callback then skips.
+  - Don't try to use Tailwind's `w-{n}` for the dynamic width —
+    those are static utilities. Inline style is correct here.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - onUploadProgress for axios uploads.
+  - Threading a callback through a mutation hook by changing the
+    args to an object.
+  - When Tailwind utilities aren't enough — inline style for
+    runtime-computed values.
 
 
-CHALLENGE 26.3 — Drag-and-drop zone                         Target: 30 min
+CHALLENGE 26.3 — Drag-and-drop zone                          Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Native drag events on a div: onDragEnter / onDragOver / onDragLeave
-    / onDrop. Must `e.preventDefault()` on dragOver or browser won't
-    fire drop.
-  - `e.dataTransfer.files` is a FileList.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Drag-and-drop turns "click button → file dialog → navigate → pick"
+  into a one-gesture interaction. The native browser API does most
+  of the work, but you must handle four events with subtle ordering
+  rules and visual feedback for each state.
 
-  TASK:
-  1. Replace the file input with a drag-drop zone (still has a fallback
-     click-to-browse).
-  2. Visual states: idle, valid-file-hovering, invalid-file-hovering,
-     uploading.
-  3. Multi-file: queue them and upload sequentially.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Use Tailwind state classes (`border-dashed border-2 hover:bg-...`).
-  - Validate type/size on drop, not on upload.
+  1) The four drag events
+     - `onDragEnter` — pointer + dragged item enters the element.
+       Use it to mark "highlighted."
+     - `onDragOver`  — fires CONTINUOUSLY while over the element.
+       MUST `preventDefault()` here or the browser won't fire `drop`.
+     - `onDragLeave` — pointer leaves. Clear the highlight.
+     - `onDrop`      — item released over the element. Also call
+       `preventDefault()` to stop the browser from opening the file.
 
-  WHAT YOU JUST LEARNED:
-  Drag events + visual feedback. Reused in any uploadable surface.
+  2) `e.dataTransfer.files`
+     - FileList (array-like, not an actual Array).
+     - Convert with `Array.from(e.dataTransfer.files)` for ergonomics.
+
+  3) Drag-counter pattern
+     - Naïve: setHover(true) on enter, false on leave. PROBLEM:
+       drag events fire on CHILD elements too, so moving over an
+       inner element fires "leave" on the outer. Hover state
+       flickers.
+     - Fix: maintain a counter. ++ on enter, -- on leave. Hover is
+       true while counter > 0. Reset on drop.
+
+  4) Click-to-browse fallback
+     - The drop zone IS a label for the hidden file input. Click
+       → file dialog. Drop → same handler. One UI, two affordances.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/UploadDocumentForm.tsx  (replace input UI with drop zone)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  Replace the choose-file row of UploadDocumentForm.tsx with a drop
+  zone. Full revised component:
+
+      import { useRef, useState } from 'react';
+      import clsx from 'clsx';
+      import { useUploadDocument } from '../Queries/useUploadDocument';
+      import { validateDocumentFile } from '../schemas/documentSchema';
+      import { formatBytes } from '../utils/format';
+
+      const UploadDocumentForm = () => {
+          const inputRef = useRef<HTMLInputElement>(null);
+          const [file, setFile] = useState<File | null>(null);
+          const [validationErrors, setValidationErrors] = useState<string[]>([]);
+          const [progress, setProgress] = useState(0);
+          const [dragCount, setDragCount] = useState(0);
+          const isHovering = dragCount > 0;
+          const uploadMutation = useUploadDocument();
+
+          const acceptFile = (candidate: File) => {
+              const errors = validateDocumentFile(candidate);
+              setValidationErrors(errors);
+              setFile(errors.length === 0 ? candidate : null);
+          };
+
+          const handleSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+              const picked = e.target.files?.[0];
+              if (picked) acceptFile(picked);
+          };
+
+          const handleDragEnter = (e: React.DragEvent<HTMLLabelElement>) => {
+              e.preventDefault();
+              setDragCount(c => c + 1);
+          };
+          const handleDragOver = (e: React.DragEvent<HTMLLabelElement>) => {
+              e.preventDefault();    // REQUIRED — without this, drop won't fire
+          };
+          const handleDragLeave = (e: React.DragEvent<HTMLLabelElement>) => {
+              e.preventDefault();
+              setDragCount(c => Math.max(0, c - 1));
+          };
+          const handleDrop = (e: React.DragEvent<HTMLLabelElement>) => {
+              e.preventDefault();
+              setDragCount(0);
+              const dropped = e.dataTransfer.files?.[0];
+              if (dropped) acceptFile(dropped);
+          };
+
+          const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+              e.preventDefault();
+              if (!file) return;
+              uploadMutation.mutate(
+                  { file, onProgress: setProgress },
+                  {
+                      onSettled: () => {
+                          setProgress(0);
+                          setFile(null);
+                          setValidationErrors([]);
+                          if (inputRef.current) inputRef.current.value = '';
+                      },
+                  },
+              );
+          };
+
+          return (
+              <form onSubmit={handleSubmit} className="mb-6">
+                  <input
+                      ref={inputRef}
+                      type="file"
+                      onChange={handleSelect}
+                      accept=".pdf,.txt,image/*"
+                      className="hidden"
+                      id="document-file-input"
+                      disabled={uploadMutation.isPending}
+                  />
+
+                  <label
+                      htmlFor="document-file-input"
+                      onDragEnter={handleDragEnter}
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                      className={clsx(
+                          'block border-2 border-dashed rounded-lg p-8 text-center cursor-pointer',
+                          'transition-colors',
+                          isHovering
+                              ? 'border-brand-500 bg-brand-50 dark:bg-brand-900/20'
+                              : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800',
+                      )}
+                  >
+                      <p className="text-sm text-gray-600 dark:text-gray-300">
+                          {file
+                              ? `Selected: ${file.name} (${formatBytes(file.size)})`
+                              : 'Drag a file here, or click to browse'}
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">
+                          PDF, TXT, PNG, JPG, GIF — up to 5 MB
+                      </p>
+                  </label>
+
+                  {validationErrors.length > 0 && (
+                      <ul className="mt-3 text-sm text-red-600 list-disc list-inside">
+                          {validationErrors.map((msg, i) => <li key={i}>{msg}</li>)}
+                      </ul>
+                  )}
+
+                  {uploadMutation.isPending && (
+                      <div className="mt-3">
+                          <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                              <div
+                                  className="h-full bg-brand-600 transition-all"
+                                  style={{ width: `${progress}%` }}
+                              />
+                          </div>
+                          <p className="mt-1 text-xs text-gray-500">{progress}%</p>
+                      </div>
+                  )}
+
+                  <div className="mt-3 flex justify-end">
+                      <button type="submit"
+                              disabled={!file || uploadMutation.isPending}
+                              className="btn-primary">
+                          {uploadMutation.isPending ? 'Uploading…' : 'Upload'}
+                      </button>
+                  </div>
+              </form>
+          );
+      };
+
+      export default UploadDocumentForm;
+
+  Test:
+   - Drag a valid PDF onto the zone. Border + bg highlight while
+     hovering. Drop. File is selected. Click Upload.
+   - Drag an invalid file (.exe, oversized). On drop, validation
+     errors render below.
+   - Click the zone (anywhere on the label). File dialog opens
+     (because the label is for the hidden input).
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - preventDefault on `onDragOver` is mandatory. Without it,
+    Chrome and Firefox silently swallow the drop.
+  - Use the drag-counter pattern, not a single boolean. Without
+    it, the highlight flickers when the cursor crosses child
+    elements (text, icon).
+  - Validate on drop, not on submit. Reject bad files before they
+    take a slot.
+  - The `<label>` wrapping the hidden input is the right semantic
+    — keyboard-accessible, screen-reader-friendly. Don't use a
+    bare div with onClick.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - The four-event drag-and-drop dance + preventDefault rules.
+  - The drag-counter pattern for flicker-free hover state.
+  - Label-as-drop-zone for accessibility + click fallback.
 
 
-CHALLENGE 26.4 — Multi-file queue                           Target: 30 min
+CHALLENGE 26.4 — Multi-file queue                            Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Queue state: array of `{ file, status: 'pending'|'uploading'|
-     'done'|'error', progress }`.
-  2. Process one at a time (sequential), update status per item.
-  3. Show the queue with per-item progress + retry on error.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Real uploaders accept multiple files at once — drag five
+  documents onto the zone, expect five uploads. This challenge
+  introduces a small state machine: each file moves through
+  pending → uploading → done | error, with per-file progress, and
+  a Retry button for failures.
 
-  RULES:
-  - Don't parallelize uploads — browser concurrent connection limits.
-  - Keep failed items in the queue with a Retry button.
+  The queue is sequential (one at a time). Parallelising would
+  saturate the browser's connection limit and slow everything
+  down.
 
-  WHAT YOU JUST LEARNED:
-  Queue state machines. The pattern fits any batched async operation.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Per-item state in an array
+     - Each queue entry has an id, file, status, progress, error.
+     - Updates target a single id — use map + spread:
+         setQueue(q => q.map(item =>
+             item.id === id ? { ...item, status: 'uploading' } : item));
+     - Never mutate; always create a new array + new object for
+       the changed item.
+
+  2) Sequential async with for...of + await
+     - `for (const item of queue) await uploadOne(item);` runs
+       them one after another.
+     - The alternative `queue.forEach(async ...)` fires them all
+       at once — WRONG for our purpose.
+
+  3) AbortController + axios cancellation (optional)
+     - You can cancel an in-flight upload with `AbortController`.
+       Useful for "Cancel" buttons. We'll skip it here for
+       simplicity, but it's the next step.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/UploadDocumentForm.tsx  (rewrite to manage a queue)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Queue item type
+  At the top of UploadDocumentForm.tsx:
+
+      type Status = 'pending' | 'uploading' | 'done' | 'error';
+
+      interface QueueItem {
+          id: string;        // crypto.randomUUID()
+          file: File;
+          status: Status;
+          progress: number;
+          error?: string;
+      }
+
+  STEP 2 — Rework state
+  Replace the single `file` state with a queue:
+
+      const [queue, setQueue] = useState<QueueItem[]>([]);
+      const [running, setRunning] = useState(false);
+
+      const enqueue = (files: File[]) => {
+          const items: QueueItem[] = [];
+          for (const f of files) {
+              const errors = validateDocumentFile(f);
+              items.push({
+                  id: crypto.randomUUID(),
+                  file: f,
+                  status: errors.length > 0 ? 'error' : 'pending',
+                  progress: 0,
+                  error: errors[0],
+              });
+          }
+          setQueue(prev => [...prev, ...items]);
+      };
+
+  Note we now ENQUEUE on selection/drop instead of holding one file.
+
+  STEP 3 — The processor
+  Add a function that walks the queue sequentially:
+
+      const processQueue = async () => {
+          if (running) return;
+          setRunning(true);
+
+          // Read the current queue from state via a ref — the closure
+          // would otherwise see stale state. For learning, the simpler
+          // path is: iterate the queue snapshot at the time of click.
+          //
+          // (For new items added MID-run, they'll be picked up by a
+          // subsequent processQueue call.)
+          const snapshot = queue.filter(item => item.status === 'pending');
+
+          for (const item of snapshot) {
+              const id = item.id;
+              setQueue(q => q.map(x => x.id === id
+                  ? { ...x, status: 'uploading', progress: 0 } : x));
+
+              try {
+                  await uploadDocument(item.file, (pct) => {
+                      setQueue(q => q.map(x => x.id === id
+                          ? { ...x, progress: pct } : x));
+                  });
+                  setQueue(q => q.map(x => x.id === id
+                      ? { ...x, status: 'done', progress: 100 } : x));
+              } catch (err) {
+                  const msg = isAxiosError<{ message?: string }>(err)
+                      ? err.response?.data?.message ?? 'Upload failed.'
+                      : 'Upload failed.';
+                  setQueue(q => q.map(x => x.id === id
+                      ? { ...x, status: 'error', error: msg } : x));
+              }
+          }
+
+          // Final cache invalidation once everything settled.
+          queryClient.invalidateQueries({ queryKey: documentKeys.mine() });
+          setRunning(false);
+      };
+
+  Use `queryClient` from `useQueryClient()` at the top of the
+  component. Use `uploadDocument` directly (not the mutation hook)
+  because we're doing the orchestration ourselves.
+
+  STEP 4 — The retry button per row
+  Failed items can be re-queued:
+
+      const retry = (id: string) => {
+          setQueue(q => q.map(x => x.id === id
+              ? { ...x, status: 'pending', progress: 0, error: undefined }
+              : x));
+      };
+
+  STEP 5 — Render the queue
+  Replace the single-file display with a list:
+
+      {queue.length > 0 && (
+          <ul className="mt-3 space-y-2">
+              {queue.map(item => (
+                  <li key={item.id} className="border rounded p-2">
+                      <div className="flex justify-between items-center text-sm">
+                          <span>{item.file.name} ({formatBytes(item.file.size)})</span>
+                          <span className={clsx(
+                              'text-xs px-2 py-0.5 rounded',
+                              item.status === 'done'      && 'bg-green-100 text-green-800',
+                              item.status === 'error'     && 'bg-red-100 text-red-800',
+                              item.status === 'uploading' && 'bg-blue-100 text-blue-800',
+                              item.status === 'pending'   && 'bg-gray-100 text-gray-700',
+                          )}>
+                              {item.status}
+                          </span>
+                      </div>
+
+                      {item.status === 'uploading' && (
+                          <div className="h-1 bg-gray-200 rounded-full mt-2 overflow-hidden">
+                              <div className="h-full bg-brand-600 transition-all"
+                                   style={{ width: `${item.progress}%` }} />
+                          </div>
+                      )}
+
+                      {item.status === 'error' && (
+                          <div className="flex justify-between items-center mt-1">
+                              <span className="text-xs text-red-600">{item.error}</span>
+                              <button onClick={() => retry(item.id)}
+                                      className="text-xs text-brand-600">
+                                  Retry
+                              </button>
+                          </div>
+                      )}
+                  </li>
+              ))}
+          </ul>
+      )}
+
+      <div className="mt-3 flex justify-end">
+          <button type="button"
+                  onClick={processQueue}
+                  disabled={running || queue.every(x => x.status !== 'pending')}
+                  className="btn-primary">
+              {running ? 'Uploading…' : 'Upload all'}
+          </button>
+      </div>
+
+  Update onDrop / onSelect to enqueue an array — file inputs
+  with `multiple` produce FileList:
+
+      const handleDrop = (e: React.DragEvent<HTMLLabelElement>) => {
+          e.preventDefault();
+          setDragCount(0);
+          enqueue(Array.from(e.dataTransfer.files));
+      };
+
+      // <input multiple ...>
+      const handleSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+          if (e.target.files) enqueue(Array.from(e.target.files));
+      };
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Sequential, not parallel. The browser limits parallel
+    connections to a host; queuing them serially actually
+    completes faster on average for many files.
+  - Always update by id, never by index. Index shifts when an
+    item is removed.
+  - Don't lose error info on retry. Keep the file but reset
+    status/progress.
+  - The closure over `queue` is stale inside the for loop —
+    that's why we snapshot at the start. If you want LIVE
+    queue-additions during run, refactor to read from a ref.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Per-item state machines.
+  - Sequential async with for...of + await.
+  - Update-by-id pattern for mutable arrays in React.
+  - Retry by status reset, not by re-enqueue.
 
 
-CHALLENGE 26.5 — Capstone: paste-from-clipboard              Target: 25 min
+CHALLENGE 26.5 — Capstone: paste-from-clipboard              Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Paste event: `onPaste(e)` on window or on a specific element.
-    `e.clipboardData.items` is a list; filter for image/* types and
-    call `.getAsFile()`.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Power users hit Print Screen → switch to your app → Ctrl+V →
+  expect the screenshot to upload. Apps that DO this feel magical;
+  apps that don't feel dated. The Clipboard API makes it ~20 lines.
 
-  TASK:
-  1. On the documents page, add a window-level paste listener.
-  2. If user pastes a screenshot (browser converts to a File), add
-     it to the upload queue.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Clean up the listener in useEffect cleanup.
-  - Don't intercept paste on text inputs.
+  1) Window-level paste listener
+     - The paste event fires on whatever element is focused.
+     - For a "paste anywhere on the page" UX, listen on window or
+       document.
+     - `useEffect` is where you add/remove the listener.
 
-  WHAT YOU JUST LEARNED:
-  Clipboard API for files. Polish that good apps have.
+  2) `ClipboardEvent.clipboardData.items`
+     - Items have a `kind` (`'string'` or `'file'`) and a `type`
+       (MIME). For images: kind === 'file' AND type starts with
+       'image/'.
+     - `.getAsFile()` extracts the underlying File.
+
+  3) The "don't intercept paste in inputs" rule
+     - If the user is typing in a search box and pastes text, they
+       expect text. Bail out if `e.target` is an editable element.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/MyDocumentsPage.tsx OR
+    src/components/UploadDocumentForm.tsx  (where you add the listener)
+
+  We'll put the listener inside UploadDocumentForm so it's
+  co-located with the queue.
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  Inside UploadDocumentForm.tsx, add:
+
+      import { useEffect } from 'react';
+      // ...
+
+      // Helper: should this paste be ignored? (user is typing somewhere)
+      const isEditableTarget = (target: EventTarget | null): boolean => {
+          if (!(target instanceof HTMLElement)) return false;
+          if (target.isContentEditable) return true;
+          const tag = target.tagName;
+          return tag === 'INPUT' || tag === 'TEXTAREA';
+      };
+
+      useEffect(() => {
+          const handlePaste = (event: ClipboardEvent) => {
+              if (isEditableTarget(event.target)) return;
+              if (!event.clipboardData) return;
+
+              const items = Array.from(event.clipboardData.items);
+              const files: File[] = [];
+
+              for (const item of items) {
+                  if (item.kind === 'file' && item.type.startsWith('image/')) {
+                      const f = item.getAsFile();
+                      if (f) files.push(f);
+                  }
+              }
+
+              if (files.length === 0) return;
+
+              event.preventDefault();
+              enqueue(files);
+          };
+
+          window.addEventListener('paste', handlePaste);
+          return () => window.removeEventListener('paste', handlePaste);
+      }, []);  // empty deps — listener mounted once for the form's lifetime
+
+  Wait — `enqueue` is defined inside the component. The empty
+  deps array means the closure captures the INITIAL `enqueue`,
+  which itself closes over the initial `setQueue`. setQueue is
+  stable across renders (React guarantees), so this is fine.
+  If `enqueue` reads other state, you'd need to revise.
+
+  Test:
+   1. Print Screen on Windows (or Cmd+Shift+4 → Ctrl on Mac).
+   2. Click into your /documents page (anywhere outside an input).
+   3. Ctrl+V. The screenshot appears in the queue with status
+      'pending' and a generated filename like `image.png`.
+   4. Hit Upload all. Bonus: the filename will be ugly (PNGs from
+      clipboard have no real name). Worth adding a prompt for a
+      filename — leave that as a polish exercise.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always clean up the listener in the return value of useEffect.
+    Re-mounting (in dev mode's StrictMode double-render) without
+    cleanup leaks listeners that fire twice.
+  - Always check `isEditableTarget` first. Otherwise users in a
+    text input feel betrayed when their paste vanishes into the
+    uploader.
+  - Browsers only expose images via the clipboard items list, not
+    PDFs/text files. The user can still paste those into a text
+    target — they get the file CONTENT as text. Don't try to
+    handle non-image files here.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - The Clipboard API for files (images only).
+  - Window-level event listeners in React via useEffect.
+  - The "don't intercept inputs" defensive check.
+  - Round 26 capstone: a feature-complete upload UX — drag-drop,
+    multi-file queue, progress bars, retry, paste-to-upload.
+    Reused for every later upload (CSV import, resume upload,
+    expense receipts).
 
 
 ================================================================================
@@ -5625,99 +11171,995 @@ ROUND 27 — FEATURE: DOCUMENTS — ADMIN VIEW (designed 2026-05-15)
 Pacing: One challenge per day. Role-based view + admin delete.
 
 
-CHALLENGE 27.1 — Admin documents page (list all)            Target: 30 min
+CHALLENGE 27.1 — Admin documents page (list all)             Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. routes.ts: `adminDocuments: () => '/admin/documents' as const`.
-  2. AdminDocumentsPage.tsx — guarded by ProtectedRoute roles=['Admin'].
-  3. Table columns: owner name, fileName, size, uploadedAt, actions
-     (Download, Delete).
-  4. useAllDocuments hook from Round 25.2.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  The admin view introduces a new layout — full table of EVERY
+  user's documents — but reuses everything you've built: the
+  ProtectedRoute with roles (20.5), the useAllDocuments hook (25.2),
+  the formatBytes utility (25.3), the triggerDownload helper (25.4).
+  This challenge is about composition more than new concepts.
 
-  RULES:
-  - Server-side authorization is the gate. Route guard is UX.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Role-based page from existing role-guard infrastructure (Round 20.4).
+  1) Two-layer authorisation, revisited
+     - The route guard (`roles={['Admin']}`) handles UI: non-admins
+       can't navigate here.
+     - The server's `[Authorize(Roles = "Admin")]` is the security
+       gate. A non-admin who knows the URL still gets 403.
+     - Both exist for different reasons. Don't skip either.
+
+  2) Why the admin page is its own component
+     - You could parametrise MyDocumentsPage with a `mode: 'mine'
+       | 'all'` prop. Don't. The conditional logic accumulates
+       quickly (different actions, different columns, different
+       empty states) and becomes a tangle.
+     - Two pages, one shared subcomponent for the table row IS
+       the right line. Make that split now.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/routes.ts                       (adminDocuments())
+    src/components/AdminDocumentsPage.tsx (NEW)
+    src/components/DocumentRow.tsx      (NEW — shared between mine/admin)
+    src/App.tsx                         (admin route + role guard)
+    src/Context/AuthLayout.tsx          (admin nav link)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Route
+  src/routes.ts:
+
+      adminDocuments: () => '/admin/documents' as const,
+
+  STEP 2 — Extract a shared row component
+  NEW FILE: src/components/DocumentRow.tsx
+
+      import { format } from 'date-fns';
+      import { formatBytes } from '../utils/format';
+      import { downloadDocument } from '../services/api';
+      import { triggerDownload } from '../utils/triggerDownload';
+      import { toast } from 'react-toastify';
+      import type { DocumentDto } from '../Types/Document';
+
+      interface DocumentRowProps {
+          doc: DocumentDto;
+          showOwner?: boolean;        // admin view shows owner column
+          onDelete: (doc: DocumentDto) => void;
+      }
+
+      const DocumentRow = ({ doc, showOwner, onDelete }: DocumentRowProps) => {
+          const handleDownload = async () => {
+              try {
+                  const response = await downloadDocument(doc.id);
+                  triggerDownload(response.data, doc.fileName);
+              } catch {
+                  toast.error('Download failed.');
+              }
+          };
+
+          return (
+              <tr>
+                  {showOwner && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {doc.ownerUsername}
+                      </td>
+                  )}
+                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      {doc.fileName}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {formatBytes(doc.sizeBytes)}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {format(new Date(doc.uploadedAt), 'MMM d, yyyy')}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+                      <button onClick={handleDownload}
+                              className="text-brand-600 hover:text-brand-800 mr-3">
+                          Download
+                      </button>
+                      <button onClick={() => onDelete(doc)}
+                              className="text-red-600 hover:text-red-800">
+                          Delete
+                      </button>
+                  </td>
+              </tr>
+          );
+      };
+
+      export default DocumentRow;
+
+  Refactor MyDocumentsPage to render DocumentRow rows. Pass
+  `onDelete={setPendingDelete}` from the parent. Cleaner page,
+  no behaviour change.
+
+  STEP 3 — The admin page
+  NEW FILE: src/components/AdminDocumentsPage.tsx
+
+      import { useState } from 'react';
+      import { useAllDocuments } from '../Queries/useAllDocuments';
+      import { useDeleteDocument } from '../Queries/useDeleteDocument';
+      import ConfirmModal from './ConfirmModal';
+      import DocumentRow from './DocumentRow';
+      import type { DocumentDto } from '../Types/Document';
+
+      const AdminDocumentsPage = () => {
+          const { data: documents, isLoading, isError } = useAllDocuments();
+          const deleteMutation = useDeleteDocument();
+          const [pendingDelete, setPendingDelete] = useState<DocumentDto | null>(null);
+
+          if (isLoading) return <p className="p-6 text-gray-500">Loading…</p>;
+          if (isError) return <p className="p-6 text-red-600">Failed to load.</p>;
+
+          return (
+              <div className="max-w-6xl mx-auto p-6">
+                  <h1 className="text-2xl font-semibold mb-4">All Documents (Admin)</h1>
+
+                  {documents && documents.length === 0 ? (
+                      <div className="card text-center text-gray-500">
+                          No documents in the system yet.
+                      </div>
+                  ) : (
+                      <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+                          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                              <thead className="bg-gray-50 dark:bg-gray-900">
+                                  <tr>
+                                      <th className="px-6 py-3 text-left text-xs font-medium
+                                                     text-gray-500 uppercase tracking-wider">Owner</th>
+                                      <th className="px-6 py-3 text-left text-xs font-medium
+                                                     text-gray-500 uppercase tracking-wider">Name</th>
+                                      <th className="px-6 py-3 text-left text-xs font-medium
+                                                     text-gray-500 uppercase tracking-wider">Size</th>
+                                      <th className="px-6 py-3 text-left text-xs font-medium
+                                                     text-gray-500 uppercase tracking-wider">Uploaded</th>
+                                      <th className="px-6 py-3"></th>
+                                  </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                                  {documents?.map(doc => (
+                                      <DocumentRow key={doc.id}
+                                                   doc={doc}
+                                                   showOwner
+                                                   onDelete={setPendingDelete} />
+                                  ))}
+                              </tbody>
+                          </table>
+                      </div>
+                  )}
+
+                  <ConfirmModal
+                      open={!!pendingDelete}
+                      title="Delete document?"
+                      message={`Delete "${pendingDelete?.fileName}" (owner: ${pendingDelete?.ownerUsername})?`}
+                      onConfirm={() => {
+                          if (pendingDelete) {
+                              deleteMutation.mutate(pendingDelete.id);
+                              setPendingDelete(null);
+                          }
+                      }}
+                      onCancel={() => setPendingDelete(null)}
+                  />
+              </div>
+          );
+      };
+
+      export default AdminDocumentsPage;
+
+  STEP 4 — Register with the admin role guard
+  In src/App.tsx, add an admin-only branch:
+
+      {
+          element: <ProtectedRoute roles={['Admin']} />,
+          children: [
+              {
+                  element: <AuthLayout />,
+                  children: [
+                      { path: routes.adminDocuments(), element: <AdminDocumentsPage /> },
+                  ],
+              },
+          ],
+      },
+
+  STEP 5 — Conditional nav link
+  In AuthLayout.tsx, show the link only to admins:
+
+      const { user } = useAuth();
+      // ...
+      {user?.role === 'Admin' && (
+          <NavLink to={routes.adminDocuments()}>All Documents</NavLink>
+      )}
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Don't fake admin views by toggling a flag inside the My page.
+    Two pages compose better — separate URL, separate guard,
+    separate cache key.
+  - Reuse DocumentRow on both pages. If you find yourself adding
+    `if (showOwner)` branches everywhere, the abstraction is wrong.
+  - The server's [Authorize(Roles = "Admin")] on /api/documents
+    is your insurance. A leaked admin URL can't be exploited by
+    a non-admin token.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Composition over parametrisation — two pages, one shared row.
+  - Two-layer authorisation in practice.
+  - Reusing existing utilities (downloadDocument, formatBytes,
+    triggerDownload) across feature surfaces.
 
 
-CHALLENGE 27.2 — Filter by owner (admin)                    Target: 30 min
+CHALLENGE 27.2 — Filter by owner (URL search params)         Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. searchParams: ownerId (optional).
-  2. Filter the list client-side (small dataset) — for prod you'd
-     server-paginate.
-  3. Dropdown of owners (derive from list) + clear filter.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  When the admin filters by owner, the filter should be part of
+  the URL — refreshing the page should keep the filter, and the
+  URL should be shareable. This is the "search-params-as-state"
+  pattern from Round 18.4, reapplied in a new domain.
 
-  RULES:
-  - Reapply the search-param-as-state pattern from Round 18.4.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  URL-driven filter on a new domain. Same pattern as employee filter.
+  1) useSearchParams
+     - React Router hook. Returns `[searchParams, setSearchParams]`.
+     - `searchParams.get('owner')` reads the value.
+     - `setSearchParams({ owner: 'alice' })` updates the URL.
+     - Updates are reactive — every consumer re-renders on change.
+
+  2) `useMemo` for derived data
+     - When filtering a list based on inputs, the result is a
+       NEW array on every render. Wrapping in useMemo skips the
+       recompute if inputs haven't changed.
+     - For tiny lists (< 100 items), the optimisation is invisible.
+       Still, it's a habit worth building.
+
+  3) `new Set()` for deduplication
+     - `Array.from(new Set(documents.map(d => d.ownerUsername)))`
+       produces the unique owner list for the dropdown.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/AdminDocumentsPage.tsx  (add the filter UI)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  Add the filter dropdown and a useMemo for the visible list:
+
+      import { useMemo } from 'react';
+      import { useSearchParams } from 'react-router-dom';
+
+      // Inside the component:
+      const [searchParams, setSearchParams] = useSearchParams();
+      const ownerFilter = searchParams.get('owner') ?? '';
+
+      const ownerOptions = useMemo(() => {
+          if (!documents) return [];
+          return Array.from(new Set(documents.map(d => d.ownerUsername))).sort();
+      }, [documents]);
+
+      const visibleDocuments = useMemo(() => {
+          if (!documents) return [];
+          if (!ownerFilter) return documents;
+          return documents.filter(d => d.ownerUsername === ownerFilter);
+      }, [documents, ownerFilter]);
+
+      const handleOwnerChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+          const value = e.target.value;
+          if (value) {
+              setSearchParams({ owner: value });
+          } else {
+              setSearchParams({});
+          }
+      };
+
+  Render the dropdown above the table:
+
+      <div className="mb-4 flex items-center gap-3">
+          <label className="text-sm text-gray-600">Owner:</label>
+          <select value={ownerFilter}
+                  onChange={handleOwnerChange}
+                  className="rounded border-gray-300 dark:bg-gray-800 text-sm">
+              <option value="">All</option>
+              {ownerOptions.map(name => (
+                  <option key={name} value={name}>{name}</option>
+              ))}
+          </select>
+          {ownerFilter && (
+              <button onClick={() => setSearchParams({})}
+                      className="text-sm text-brand-600">
+                  Clear filter
+              </button>
+          )}
+      </div>
+
+  Update the rendered list to use `visibleDocuments` instead of
+  `documents` in the table body. Empty-state branch becomes
+  `visibleDocuments.length === 0` — also covers "filter has no
+  matches."
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always go through setSearchParams; never mutate the URL with
+    window.history.pushState directly. React Router needs to
+    know the URL changed.
+  - When clearing a filter, pass `{}` to setSearchParams to remove
+    ALL params, OR delete the specific key with `searchParams.delete('owner')`
+    then `setSearchParams(searchParams)`. Either works.
+  - The empty-state message should differ for "no documents at
+    all" vs "no documents match this filter." Subtle but matters
+    for UX.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - URL search params as the source of truth for filter state.
+  - useMemo for derived data.
+  - Unique-list derivation via Set.
 
 
-CHALLENGE 27.3 — Admin delete with reason                   Target: 35 min
+CHALLENGE 27.3 — Admin delete with reason                    Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Audit-friendly admin actions need a REASON. Add a `reason: string`
-    parameter to the delete endpoint when called by admin.
-  - We'll wire actual audit logging in Round 34. For now, just
-    capture and store the reason.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  When an admin deletes someone ELSE's document, the action needs
+  an audit trail. The first piece of that trail is a REASON —
+  short text the admin types explaining why. Round 33 will wire
+  the full audit-log feature; this challenge captures the reason
+  and stores it (silently for now) so the API surface is ready
+  when audit lands.
 
-  TASK:
-  1. Extend DELETE /api/documents/{id} to accept `{ reason: string }`
-     in the body when caller != owner.
-  2. Server validates: reason required if deleting someone else's doc.
-  3. Client: ConfirmModal variant that includes a reason textarea.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Don't break the existing own-document delete (no reason needed).
+  1) Same-endpoint branching by identity
+     - DELETE /api/documents/{id} stays. The behaviour branches on
+       caller_owns_it vs not.
+     - Body becomes OPTIONAL — own-deletes send nothing; admin
+       deletes someone else send `{ reason }`.
+     - Server: if caller != owner and reason is missing → 400.
 
-  WHAT YOU JUST LEARNED:
-  Same endpoint, branching by caller identity. Common pattern in
-  multi-role APIs.
+  2) HTTP DELETE with a body
+     - HTTP allows DELETE to carry a request body, though some
+       proxies strip it. For learning this is fine; in production
+       hardened APIs you'd use POST /api/documents/{id}/delete or
+       reuse the URL with a query string.
+
+  3) Specialised ConfirmModal
+     - Your existing ConfirmModal is generic. Don't bloat it with
+       reason-textarea logic. Make a sister component —
+       ConfirmWithReasonModal — that wraps the same chrome plus a
+       textarea.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/DeleteDocumentRequest.cs (NEW)
+    EmployeeManager.Application/Services/DocumentService.cs (accept reason)
+    EmployeeManager.Application/Services/IDocumentService.cs
+    EmployeeManager.API/Controllers/DocumentsController.cs  (accept body)
+    src/services/api.ts                                     (deleteDocument signature)
+    src/Queries/useDeleteDocument.ts                        (accept reason)
+    src/components/ConfirmWithReasonModal.tsx               (NEW)
+    src/components/AdminDocumentsPage.tsx                   (use the new modal)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Request DTO
+  NEW FILE: EmployeeManager.Domain/Models/DeleteDocumentRequest.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public class DeleteDocumentRequest
+      {
+          public string? Reason { get; set; }
+      }
+
+  STEP 2 — Service signature
+  Update IDocumentService.cs:
+
+      Task<DeleteResult> DeleteAsync(string username, string role,
+                                     Guid id, string? reason);
+
+  In DocumentService.cs DeleteAsync:
+
+      public async Task<DeleteResult> DeleteAsync(
+          string username, string role, Guid id, string? reason)
+      {
+          var doc = await _repo.GetByIdAsync(id);
+          if (doc is null) return new(false, "Not found.");
+
+          if (!CanAccess(doc, username, role)) return new(false, "Forbidden.");
+
+          // If this is a cross-user delete (admin removing someone else's
+          // document), require a reason.
+          var crossUser = !string.Equals(doc.OwnerUsername, username,
+                                          StringComparison.OrdinalIgnoreCase);
+          if (crossUser && string.IsNullOrWhiteSpace(reason))
+              return new(false, "Reason required.");
+
+          if (crossUser)
+          {
+              // Audit hook — Round 33 will replace the log call with
+              // a real AuditLog write.
+              _logger.LogInformation(
+                  "Admin {Admin} deleted document {DocId} owned by {Owner}. Reason: {Reason}",
+                  username, id, doc.OwnerUsername, reason);
+          }
+
+          if (File.Exists(doc.StoragePath))
+          {
+              try { File.Delete(doc.StoragePath); }
+              catch (Exception ex)
+              {
+                  _logger.LogWarning(ex, "Failed to delete file {Path}", doc.StoragePath);
+              }
+          }
+
+          await _repo.DeleteAsync(id);
+          return new(true, null);
+      }
+
+  STEP 3 — Controller — accept the optional body
+  Update DocumentsController.cs Delete action:
+
+      [HttpDelete("{id:guid}")]
+      public async Task<IActionResult> Delete(
+          Guid id,
+          [FromBody] DeleteDocumentRequest? body = null)
+      {
+          var (u, r) = Caller();
+          var result = await _docs.DeleteAsync(u, r, id, body?.Reason);
+          if (!result.Success)
+          {
+              return result.Error switch
+              {
+                  "Forbidden."        => Forbid(),
+                  "Reason required."  => BadRequest(new { message = result.Error }),
+                  _                   => NotFound(),
+              };
+          }
+          return NoContent();
+      }
+
+  NEW HERE: switch expressions (C#)
+  - `result.Error switch { ... }` returns a value per arm.
+  - The `_` arm is the default.
+  - More concise than a long if-else chain.
+
+  STEP 4 — Client: pass reason through
+  Update src/services/api.ts:
+
+      export const deleteDocument = (id: string, reason?: string) =>
+          api.delete(`/documents/${id}`, {
+              data: reason ? { reason } : undefined,
+          });
+
+  Notice: axios's `delete` sends a body via the `data` option (not
+  the second argument like POST).
+
+  Update useDeleteDocument.ts to take an object:
+
+      type DeleteArgs = { id: string; reason?: string };
+
+      // mutationFn signature:
+      mutationFn: ({ id, reason }: DeleteArgs) => deleteDocument(id, reason),
+      // onMutate / onSuccess / onError / onSettled — also receive
+      // `{ id, reason }` as their first arg; refactor accordingly.
+
+      // Inside onMutate, use `id` not the bare argument:
+      onMutate: async ({ id }) => {
+          await queryClient.cancelQueries({ queryKey: documentKeys.mine() });
+          const previous = queryClient.getQueryData<DocumentDto[]>(documentKeys.mine());
+          queryClient.setQueryData<DocumentDto[]>(documentKeys.mine(),
+              (old) => old?.filter(d => d.id !== id) ?? []);
+          return { previous };
+      },
+
+  Update MyDocumentsPage to pass `{ id }`:
+
+      deleteMutation.mutate({ id: pendingDelete.id });
+
+  STEP 5 — The reason modal
+  NEW FILE: src/components/ConfirmWithReasonModal.tsx
+
+      import { useState, useEffect } from 'react';
+
+      interface ConfirmWithReasonModalProps {
+          open: boolean;
+          title: string;
+          message: string;
+          minReasonLength?: number;
+          onConfirm: (reason: string) => void;
+          onCancel: () => void;
+      }
+
+      const ConfirmWithReasonModal = ({
+          open, title, message, minReasonLength = 5, onConfirm, onCancel,
+      }: ConfirmWithReasonModalProps) => {
+          const [reason, setReason] = useState('');
+
+          // Reset the textarea every time the modal opens.
+          useEffect(() => {
+              if (open) setReason('');
+          }, [open]);
+
+          if (!open) return null;
+
+          const canConfirm = reason.trim().length >= minReasonLength;
+
+          return (
+              <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+                   role="dialog" aria-modal="true">
+                  <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg
+                                  max-w-md w-full p-6">
+                      <h3 className="text-lg font-semibold mb-2">{title}</h3>
+                      <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
+                          {message}
+                      </p>
+                      <label className="block text-sm font-medium mb-1">
+                          Reason (min {minReasonLength} characters)
+                      </label>
+                      <textarea
+                          value={reason}
+                          onChange={e => setReason(e.target.value)}
+                          rows={3}
+                          className="w-full rounded border-gray-300 mb-4"
+                          placeholder="Why is this being deleted?"
+                      />
+                      <div className="flex justify-end gap-2">
+                          <button type="button" className="btn-secondary"
+                                  onClick={onCancel}>Cancel</button>
+                          <button type="button" className="btn-danger"
+                                  disabled={!canConfirm}
+                                  onClick={() => onConfirm(reason.trim())}>
+                              Delete
+                          </button>
+                      </div>
+                  </div>
+              </div>
+          );
+      };
+
+      export default ConfirmWithReasonModal;
+
+  STEP 6 — Use it in AdminDocumentsPage
+  Swap ConfirmModal for ConfirmWithReasonModal:
+
+      <ConfirmWithReasonModal
+          open={!!pendingDelete}
+          title="Delete document?"
+          message={`Delete "${pendingDelete?.fileName}" (owner: ${pendingDelete?.ownerUsername})? This will be logged.`}
+          onConfirm={(reason) => {
+              if (pendingDelete) {
+                  deleteMutation.mutate({ id: pendingDelete.id, reason });
+                  setPendingDelete(null);
+              }
+          }}
+          onCancel={() => setPendingDelete(null)}
+      />
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Reason required only on cross-user deletes. Own deletes stay
+    one-click. Otherwise the UX feels bureaucratic.
+  - axios.delete takes the body via `{ data }`, not as the second
+    positional argument. Easy to get wrong.
+  - Use `aria-modal="true"` and `role="dialog"` on the overlay.
+    Required for screen readers to announce the modal.
+  - Trim the reason before submission. Whitespace-only doesn't
+    count as a reason.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Same-endpoint behaviour branching on caller identity.
+  - axios.delete with a body.
+  - C# switch expressions for compact result mapping.
+  - Modal composition: ConfirmModal + ConfirmWithReasonModal as
+    sister components, not a configurable mega-component.
 
 
-CHALLENGE 27.4 — Bulk download as zip (server)              Target: 30 min
+CHALLENGE 27.4 — Bulk download as ZIP (server-side stream)   Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. POST /api/documents/zip { ids: string[] } — streams a ZIP of
-     selected files.
-  2. Use System.IO.Compression.ZipArchive into the response stream.
-  3. Client: select multiple docs (checkboxes), Download Zip button.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Admins routinely need to download a folder's worth of documents.
+  Doing it one click at a time is painful. A bulk-zip endpoint
+  takes a list of ids, streams a ZIP archive, and the browser saves
+  it as a single file. The server-streaming part is the lesson:
+  build the archive into the response body without ever loading
+  the whole thing into memory.
 
-  RULES:
-  - Stream, don't buffer. A user could zip 100 files.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Server streaming for batch downloads. Memory-safe pattern.
+  1) Streaming vs buffering
+     - Buffering: build the whole zip in memory, then send it.
+       Easy. Crashes on a 1GB request.
+     - Streaming: write the zip directly into the response body.
+       Memory usage stays flat regardless of zip size.
+
+  2) `ZipArchive` in .NET
+     - `new ZipArchive(stream, ZipArchiveMode.Create)` builds a
+       new archive into `stream`.
+     - Each `CreateEntry` returns a sub-stream you write to.
+     - Wrap in `using` blocks so finalisers run and the archive's
+       central directory is flushed.
+
+  3) Selection state on the client
+     - Maintain a Set<string> of selected document ids.
+     - Toggle on row click; clear on bulk action.
+     - Use a Set (not an array) so add/remove/has are all O(1).
+
+  4) "Select all in this view"
+     - The select-all checkbox in the table header is
+       indeterminate when SOME but not all rows are selected.
+     - `<input type="checkbox" ref={el => el && (el.indeterminate = ...)} />`
+       — the indeterminate flag isn't an HTML attribute, only
+       a JS property. Set via ref.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Application/Services/IDocumentService.cs (add ZipAsync)
+    EmployeeManager.Application/Services/DocumentService.cs  (impl)
+    EmployeeManager.API/Controllers/DocumentsController.cs    (action)
+    src/services/api.ts                                      (downloadZip)
+    src/components/AdminDocumentsPage.tsx                    (selection UI)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Service method: stream into a target stream
+  Add to IDocumentService.cs:
+
+      Task ZipAsync(Stream destination, IEnumerable<Guid> ids,
+                    string callerUsername, string callerRole);
+
+  In DocumentService.cs:
+
+      using System.IO.Compression;
+      // ...
+
+      public async Task ZipAsync(Stream destination, IEnumerable<Guid> ids,
+                                 string callerUsername, string callerRole)
+      {
+          // `leaveOpen: true` keeps the response stream open after the
+          // archive is disposed (the framework closes the response).
+          using var archive = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen: true);
+
+          foreach (var id in ids)
+          {
+              var doc = await _repo.GetByIdAsync(id);
+              if (doc is null) continue;
+              if (!CanAccess(doc, callerUsername, callerRole)) continue;
+              if (!File.Exists(doc.StoragePath)) continue;
+
+              // Sanitise the entry name — strip any directory parts.
+              var entryName = Path.GetFileName(doc.FileName);
+              var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
+
+              await using var entryStream = entry.Open();
+              await using var fileStream = File.OpenRead(doc.StoragePath);
+              await fileStream.CopyToAsync(entryStream);
+          }
+      }
+
+  STEP 2 — Controller action
+  Append to DocumentsController.cs:
+
+      public record ZipRequest(List<Guid> Ids);
+
+      [HttpPost("zip")]
+      public async Task<IActionResult> Zip([FromBody] ZipRequest request)
+      {
+          var (u, r) = Caller();
+
+          // Set the response headers BEFORE writing the body.
+          Response.ContentType = "application/zip";
+          Response.Headers["Content-Disposition"] =
+              $"attachment; filename=\"documents-{DateTime.UtcNow:yyyyMMdd-HHmmss}.zip\"";
+
+          // The framework's response.Body is the streaming target.
+          await _docs.ZipAsync(Response.Body, request.Ids, u, r);
+
+          return new EmptyResult();
+      }
+
+  Why `EmptyResult`? You've already written the response body. The
+  framework just needs to know the action completed.
+
+  STEP 3 — Client: API method
+  Append to src/services/api.ts:
+
+      export const downloadDocumentsZip = (ids: string[]) =>
+          api.post('/documents/zip', { ids }, { responseType: 'blob' });
+
+  STEP 4 — Selection state in the admin page
+  At the top of AdminDocumentsPage:
+
+      const [selected, setSelected] = useState<Set<string>>(new Set());
+
+      const toggle = (id: string) =>
+          setSelected(prev => {
+              const next = new Set(prev);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+          });
+
+      const allVisibleIds = visibleDocuments.map(d => d.id);
+      const allSelected = allVisibleIds.length > 0
+          && allVisibleIds.every(id => selected.has(id));
+      const someSelected = allVisibleIds.some(id => selected.has(id)) && !allSelected;
+
+      const toggleAll = () => {
+          setSelected(prev => {
+              if (allSelected) {
+                  const next = new Set(prev);
+                  allVisibleIds.forEach(id => next.delete(id));
+                  return next;
+              } else {
+                  return new Set([...prev, ...allVisibleIds]);
+              }
+          });
+      };
+
+      const handleDownloadZip = async () => {
+          if (selected.size === 0) return;
+          try {
+              const response = await downloadDocumentsZip(Array.from(selected));
+              triggerDownload(response.data,
+                  `documents-${new Date().toISOString().slice(0, 10)}.zip`);
+              setSelected(new Set());
+          } catch {
+              toast.error('Zip download failed.');
+          }
+      };
+
+  STEP 5 — UI additions
+  Add a checkbox column in the header and per row. Add a download
+  bar above the table that shows when something is selected:
+
+      // Header checkbox cell:
+      <th className="px-4 py-3 w-10">
+          <input
+              type="checkbox"
+              checked={allSelected}
+              ref={el => { if (el) el.indeterminate = someSelected; }}
+              onChange={toggleAll}
+          />
+      </th>
+
+      // In each row (you'll want to modify DocumentRow or pass an
+      // optional `selected` + `onToggleSelect` pair):
+      <td className="px-4 py-4 w-10">
+          <input
+              type="checkbox"
+              checked={selected.has(doc.id)}
+              onChange={() => toggle(doc.id)}
+          />
+      </td>
+
+      // Bulk action bar above the table — only visible when something is selected:
+      {selected.size > 0 && (
+          <div className="mb-3 flex items-center gap-3 bg-brand-50 dark:bg-brand-900/20 p-3 rounded">
+              <span className="text-sm">{selected.size} selected</span>
+              <button onClick={handleDownloadZip} className="btn-primary">
+                  Download zip
+              </button>
+              <button onClick={() => setSelected(new Set())}
+                      className="text-sm text-gray-600">
+                  Clear
+              </button>
+          </div>
+      )}
+
+  Pass selection props to DocumentRow:
+
+      <DocumentRow
+          key={doc.id}
+          doc={doc}
+          showOwner
+          selected={selected.has(doc.id)}
+          onToggleSelect={() => toggle(doc.id)}
+          onDelete={setPendingDelete}
+      />
+
+  Add the matching props to DocumentRow:
+
+      interface DocumentRowProps {
+          doc: DocumentDto;
+          showOwner?: boolean;
+          selected?: boolean;
+          onToggleSelect?: () => void;
+          onDelete: (doc: DocumentDto) => void;
+      }
+
+      // Render the checkbox column when onToggleSelect is provided.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Write response headers BEFORE the body. Once any byte hits
+    the stream, headers are sealed.
+  - `leaveOpen: true` on ZipArchive — otherwise it would close
+    Response.Body and the framework can't complete the response.
+  - Sets in React state: ALWAYS create a new Set. `set.add(x)`
+    mutates — React doesn't see a change. `new Set(prev).add(x)`
+    creates a fresh reference.
+  - The indeterminate checkbox state is set via ref, not as an
+    attribute. HTML has no `indeterminate=...` attribute.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Server-side streaming via ZipArchive + Response.Body.
+  - Selection state as a Set<id> with immutable updates.
+  - Indeterminate checkboxes via ref.
+  - The "header → body" header rule for streaming responses.
 
 
-CHALLENGE 27.5 — Stats panel (admin)                         Target: 30 min
+CHALLENGE 27.5 — Stats panel (admin)                         Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Top of AdminDocumentsPage: cards showing
-     - Total documents
-     - Total size (formatted MB/GB)
-     - Documents added this week
-  2. Compute client-side from useAllDocuments().data.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  The admin documents page is a natural home for high-level stats
+  — total docs, total size, this week's count. Computing on the
+  client from the cached list saves a roundtrip and stays in sync
+  with the filter (stats reflect the visible subset). This
+  challenge also pre-builds the Card/Stat component you'll reuse
+  on the Manager Dashboard in Round 34.
 
-  RULES:
-  - Use the same Card component you build for the dashboard in
-    Round 36.2 — extract it now or there.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Aggregations from client cache. Same pattern fits any dashboard.
+  1) Derived aggregates with useMemo
+     - Sum, count, max — all derive from the list.
+     - Wrap in useMemo so they only recompute when the list
+       changes.
+
+  2) "This week" boundary
+     - date-fns ships `startOfWeek(date, { weekStartsOn: 1 })` for
+       Monday-anchored weeks. Use it instead of hand-computing.
+     - Compare `uploadedAt >= startOfWeek(now)` to count this week.
+
+  3) The StatCard primitive
+     - Three pieces: a label (top), a value (centre, big), an
+       optional sub-label (bottom). Reused in every dashboard.
+     - Build it as a tiny component now; you'll thank yourself in
+       Round 34.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/StatCard.tsx               (NEW — reusable)
+    src/components/AdminDocumentsPage.tsx     (compute + render stats)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — StatCard primitive
+  NEW FILE: src/components/StatCard.tsx
+
+      interface StatCardProps {
+          label: string;
+          value: string | number;
+          sublabel?: string;
+      }
+
+      const StatCard = ({ label, value, sublabel }: StatCardProps) => (
+          <div className="card text-center">
+              <p className="text-xs uppercase tracking-wider text-gray-500
+                            dark:text-gray-400">
+                  {label}
+              </p>
+              <p className="text-2xl font-semibold mt-1">{value}</p>
+              {sublabel && (
+                  <p className="text-xs text-gray-400 mt-1">{sublabel}</p>
+              )}
+          </div>
+      );
+
+      export default StatCard;
+
+  STEP 2 — Compute aggregates in AdminDocumentsPage
+  At the top of the component, after `visibleDocuments`:
+
+      import { startOfWeek } from 'date-fns';
+      import StatCard from './StatCard';
+      import { formatBytes } from '../utils/format';
+
+      const stats = useMemo(() => {
+          if (!visibleDocuments) return null;
+          const total = visibleDocuments.length;
+          const totalBytes = visibleDocuments.reduce(
+              (sum, d) => sum + d.sizeBytes, 0);
+
+          const monday = startOfWeek(new Date(), { weekStartsOn: 1 });
+          const thisWeek = visibleDocuments.filter(
+              d => new Date(d.uploadedAt) >= monday).length;
+
+          return { total, totalBytes, thisWeek };
+      }, [visibleDocuments]);
+
+  STEP 3 — Render the cards above the table
+  Add directly under the page heading:
+
+      {stats && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <StatCard label="Total documents" value={stats.total} />
+              <StatCard label="Total size" value={formatBytes(stats.totalBytes)} />
+              <StatCard label="Added this week" value={stats.thisWeek}
+                        sublabel="since Monday" />
+          </div>
+      )}
+
+  Test:
+   - Visit /admin/documents — three cards show counts.
+   - Filter by owner → cards update to reflect that owner only.
+   - Upload a new document from another tab → after the
+     invalidation, stats refresh.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Compute from visibleDocuments, not documents. The user expects
+    stats to follow their filter.
+  - StatCard is the same primitive you'll mount on the Manager
+    Dashboard (Round 34). Don't duplicate.
+  - Use date-fns for date boundaries. Hand-rolled "this week"
+    code is famous for off-by-one bugs across DST and locales.
+  - `reduce((sum, d) => sum + d.sizeBytes, 0)` — always supply the
+    initial value `0`. Without it, reduce starts from the FIRST
+    element which gets confusing on edge cases.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Client-side aggregates from a cached list.
+  - date-fns boundary helpers (startOfWeek).
+  - The StatCard primitive — Round-34 deposit.
+  - Round 27 capstone: the admin surface is complete — list,
+    filter, delete-with-reason, bulk zip, stats. Documents
+    feature done across Rounds 25, 26, and 27.
 
 
 ================================================================================
@@ -5729,119 +12171,1131 @@ rounds (28/29/30/31) because the state machine (request → approve →
 reject → cancel → request-rollback) is rich and worth practising.
 
 
-CHALLENGE 28.1 — Leave domain model                         Target: 35 min
+CHALLENGE 28.1 — Leave domain model + balance computation    Target: 60 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Two records:
-    * LeaveRequest: id, employeeId, startDate, endDate, days, type
-      ('Annual'|'Sick'|'Unpaid'), reason, status ('Pending'|
-      'Approved'|'Rejected'|'Cancelled'|'RollbackRequested'|
-      'RolledBack'), createdAt, decidedAt?, decidedByUserId?,
-      decisionNote?, rollbackNote?
-    * LeaveBalance: derived per employee per year — totalAllowance
-      (25), used, pending, remaining.
-  - Balance is COMPUTED from approved+pending requests, not stored.
-    Stored balance gets stale.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Leave is the richest feature in the system — a state machine with
+  six statuses, a derived balance that updates on every request, and
+  workflows that span employees + managers. This challenge sets the
+  domain foundation. The state machine you design here lives in
+  every Round 28-31 challenge.
 
-  TASK:
-  1. Domain/Models/LeaveRequest.cs + LeaveType enum + LeaveStatus enum.
-  2. Domain/Models/LeaveBalance.cs (DTO, not persisted).
-  3. Repository: LeaveRequestRepository (JSON store).
-  4. Service: LeaveService with GetBalance(employeeId, year) that
-     reads approved+pending for the year and computes.
+  The most important decision is BALANCE IS COMPUTED, not stored.
+  Storing an "allowance: 25, used: 7" pair sounds simpler — until
+  someone cancels an approved request and you forget to decrement
+  the counter. Computed = single source of truth (the requests
+  table); the balance is just a function over it.
 
-  RULES:
-  - Status is a discriminated union on the client side — write it
-    as a TS literal union to mirror.
-  - Balance computation: used = sum(days where status=Approved AND
-    year matches); pending = sum where status=Pending.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Domain modeling for a status-machine feature. Status drives UI.
+  1) Status as a state machine
+     - Six states: Pending → (Approved | Rejected | Cancelled) →
+       (RollbackRequested → RolledBack | unchanged).
+     - Transitions are restricted: you can't move from Approved →
+       Pending, or from Rejected → anything. Encode the rules in
+       service-layer guards.
+     - Every read of a leave request consults the status. Every
+       write checks the transition is legal.
+
+  2) Derived vs stored data — the load-bearing rule
+     - Derived: balance is a function of the requests list.
+       `balance.used = sum(approved.days)`. Recomputed on every read.
+     - Stored: the request rows themselves. Persistent, audited,
+       rollback-able.
+     - Stored derived data goes stale on edge cases. Always
+       derive when the source rows are accessible.
+
+  3) C# enums vs string literals on the wire
+     - On disk and on the wire, use STRINGS: `"Approved"`,
+       `"Pending"`. JSON-friendly, debuggable, locale-free.
+     - In C# code, use an enum (`public enum LeaveStatus { Pending, ... }`)
+       and tell System.Text.Json to serialise as strings via
+       `JsonStringEnumConverter`. Type safety in code, strings on
+       the wire — best of both.
+
+  4) Business-day counting
+     - A "leave day" excludes weekends (and ideally holidays). A
+       Monday-to-Friday request is 5 days. Monday-to-Monday is 6,
+       not 8.
+     - Server-side helper: walk start to end, increment if
+       `day.DayOfWeek` is not Saturday/Sunday.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/LeaveType.cs               (NEW enum)
+    EmployeeManager.Domain/Models/LeaveStatus.cs             (NEW enum)
+    EmployeeManager.Domain/Models/LeaveRequest.cs            (NEW)
+    EmployeeManager.Domain/Models/LeaveBalance.cs            (NEW DTO)
+    EmployeeManager.Domain/Repositories/ILeaveRequestRepository.cs (NEW)
+    EmployeeManager.Infrastructure/Repositories/LeaveRequestRepository.cs (NEW)
+    EmployeeManager.Application/Services/ILeaveService.cs    (NEW)
+    EmployeeManager.Application/Services/LeaveService.cs     (NEW)
+    EmployeeManager.API/Program.cs                            (DI + JsonStringEnumConverter)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Enums
+  NEW FILE: EmployeeManager.Domain/Models/LeaveType.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public enum LeaveType
+      {
+          Annual,
+          Sick,
+          Unpaid,
+      }
+
+  NEW FILE: EmployeeManager.Domain/Models/LeaveStatus.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public enum LeaveStatus
+      {
+          Pending,
+          Approved,
+          Rejected,
+          Cancelled,
+          RollbackRequested,
+          RolledBack,
+      }
+
+  STEP 2 — LeaveRequest domain model
+  NEW FILE: EmployeeManager.Domain/Models/LeaveRequest.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public class LeaveRequest
+      {
+          public Guid Id { get; set; }
+          public string EmployeeUsername { get; set; } = string.Empty;
+          public DateTime StartDate { get; set; }    // inclusive
+          public DateTime EndDate { get; set; }      // inclusive
+          public int Days { get; set; }              // business days, computed
+          public LeaveType Type { get; set; }
+          public string Reason { get; set; } = string.Empty;
+
+          public LeaveStatus Status { get; set; } = LeaveStatus.Pending;
+          public DateTime CreatedAt { get; set; }
+
+          // Decision metadata — only populated after a manager acts.
+          public DateTime? DecidedAt { get; set; }
+          public string? DecidedByUsername { get; set; }
+          public string? DecisionNote { get; set; }
+
+          // Rollback metadata — populated when an approved leave is reverted.
+          public string? RollbackNote { get; set; }
+      }
+
+  STEP 3 — Balance DTO
+  NEW FILE: EmployeeManager.Domain/Models/LeaveBalance.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      // DTO — not persisted. Computed on every read.
+      public class LeaveBalance
+      {
+          public int Year { get; set; }
+          public int TotalAllowance { get; set; }    // 25 for now; configurable later
+          public int Used { get; set; }              // approved.days
+          public int Pending { get; set; }           // pending.days
+          public int Remaining => TotalAllowance - Used - Pending;
+      }
+
+  Notice `Remaining` is a computed property — no setter. Always
+  fresh, never out of sync.
+
+  STEP 4 — Repository
+  NEW FILE: EmployeeManager.Domain/Repositories/ILeaveRequestRepository.cs
+
+      using EmployeeManager.Domain.Models;
+      namespace EmployeeManager.Domain.Repositories;
+
+      public interface ILeaveRequestRepository
+      {
+          Task<List<LeaveRequest>> GetAllAsync();
+          Task<List<LeaveRequest>> GetByEmployeeAsync(string username);
+          Task<LeaveRequest?> GetByIdAsync(Guid id);
+          Task<LeaveRequest> CreateAsync(LeaveRequest request);
+          Task<bool> UpdateAsync(LeaveRequest request);
+      }
+
+  NEW FILE: EmployeeManager.Infrastructure/Repositories/LeaveRequestRepository.cs
+
+      using EmployeeManager.Domain.Models;
+      using EmployeeManager.Domain.Repositories;
+      using EmployeeManager.Infrastructure.Storage;
+
+      namespace EmployeeManager.Infrastructure.Repositories;
+
+      public class LeaveRequestRepository : ILeaveRequestRepository
+      {
+          private readonly JsonDataStore<List<LeaveRequest>> _store;
+
+          public LeaveRequestRepository(JsonDataStore<List<LeaveRequest>> store)
+          {
+              _store = store;
+          }
+
+          public async Task<List<LeaveRequest>> GetAllAsync()
+              => await _store.ReadAsync() ?? new();
+
+          public async Task<List<LeaveRequest>> GetByEmployeeAsync(string username)
+              => (await GetAllAsync())
+                  .Where(r => string.Equals(r.EmployeeUsername, username,
+                                            StringComparison.OrdinalIgnoreCase))
+                  .ToList();
+
+          public async Task<LeaveRequest?> GetByIdAsync(Guid id)
+              => (await GetAllAsync()).FirstOrDefault(r => r.Id == id);
+
+          public async Task<LeaveRequest> CreateAsync(LeaveRequest request)
+          {
+              if (request.Id == Guid.Empty) request.Id = Guid.NewGuid();
+              request.CreatedAt = DateTime.UtcNow;
+
+              await _store.ReadModifyWriteAsync(list =>
+              {
+                  list ??= new();
+                  list.Add(request);
+                  return list;
+              });
+              return request;
+          }
+
+          public async Task<bool> UpdateAsync(LeaveRequest request)
+          {
+              var updated = false;
+              await _store.ReadModifyWriteAsync(list =>
+              {
+                  list ??= new();
+                  var idx = list.FindIndex(r => r.Id == request.Id);
+                  if (idx >= 0) { list[idx] = request; updated = true; }
+                  return list;
+              });
+              return updated;
+          }
+      }
+
+  STEP 5 — Service with the balance calculation
+  NEW FILE: EmployeeManager.Application/Services/ILeaveService.cs
+
+      using EmployeeManager.Domain.Models;
+      namespace EmployeeManager.Application.Services;
+
+      public interface ILeaveService
+      {
+          Task<LeaveBalance> GetBalanceAsync(string username, int? year = null);
+          Task<List<LeaveRequest>> GetMyLeavesAsync(string username, int? year = null);
+          int ComputeBusinessDays(DateTime start, DateTime end);
+      }
+
+  NEW FILE: EmployeeManager.Application/Services/LeaveService.cs
+
+      using EmployeeManager.Domain.Models;
+      using EmployeeManager.Domain.Repositories;
+
+      namespace EmployeeManager.Application.Services;
+
+      public class LeaveService : ILeaveService
+      {
+          private const int DefaultAllowance = 25;
+
+          private readonly ILeaveRequestRepository _repo;
+
+          public LeaveService(ILeaveRequestRepository repo)
+          {
+              _repo = repo;
+          }
+
+          public async Task<LeaveBalance> GetBalanceAsync(string username, int? year = null)
+          {
+              var effectiveYear = year ?? DateTime.UtcNow.Year;
+              var requests = await _repo.GetByEmployeeAsync(username);
+
+              // Filter by year (using StartDate's year).
+              var yearRequests = requests
+                  .Where(r => r.StartDate.Year == effectiveYear)
+                  .ToList();
+
+              var used = yearRequests
+                  .Where(r => r.Status == LeaveStatus.Approved)
+                  .Sum(r => r.Days);
+
+              var pending = yearRequests
+                  .Where(r => r.Status == LeaveStatus.Pending
+                              || r.Status == LeaveStatus.RollbackRequested)
+                  .Sum(r => r.Days);
+
+              return new LeaveBalance
+              {
+                  Year = effectiveYear,
+                  TotalAllowance = DefaultAllowance,
+                  Used = used,
+                  Pending = pending,
+              };
+          }
+
+          public async Task<List<LeaveRequest>> GetMyLeavesAsync(string username, int? year = null)
+          {
+              var requests = await _repo.GetByEmployeeAsync(username);
+              if (year is not null)
+                  requests = requests.Where(r => r.StartDate.Year == year.Value).ToList();
+              return requests
+                  .OrderByDescending(r => r.CreatedAt)
+                  .ToList();
+          }
+
+          public int ComputeBusinessDays(DateTime start, DateTime end)
+          {
+              if (end < start) return 0;
+              var count = 0;
+              for (var day = start.Date; day <= end.Date; day = day.AddDays(1))
+              {
+                  if (day.DayOfWeek != DayOfWeek.Saturday
+                      && day.DayOfWeek != DayOfWeek.Sunday)
+                  {
+                      count++;
+                  }
+              }
+              return count;
+          }
+      }
+
+  Notice the business-day counter is a SERVICE METHOD, not a
+  static utility. The service owns leave logic; future enhancements
+  (national-holiday calendar lookup) plug in here.
+
+  STEP 6 — DI registrations + JSON enum-as-string
+  In EmployeeManager.API/Program.cs:
+
+      // Near other JsonDataStore registrations
+      builder.Services.AddSingleton(new JsonDataStore<List<LeaveRequest>>(
+          Path.Combine(AppContext.BaseDirectory, "Data", "leaveRequests.json")));
+      builder.Services.AddScoped<ILeaveRequestRepository, LeaveRequestRepository>();
+      builder.Services.AddScoped<ILeaveService, LeaveService>();
+
+      // Configure System.Text.Json to serialise enums as strings.
+      // Add this to your existing AddControllers chain:
+      builder.Services.AddControllers()
+          .AddJsonOptions(opts =>
+          {
+              opts.JsonSerializerOptions.Converters.Add(
+                  new System.Text.Json.Serialization.JsonStringEnumConverter());
+          });
+
+  Without the enum converter, JSON serialises enums as integers
+  (Approved → 1). Strings are easier to debug AND easier for the
+  TS side to consume directly.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Never store derived data. Allowance + Used + Pending as
+    separate persisted fields will drift the first time a status
+    transition is missed.
+  - Always serialise enums as strings on the wire. Integers in
+    JSON make logs and HTTP traces unreadable.
+  - The status machine has SIX states but only a handful of legal
+    transitions. The service layer is where you enforce them
+    (Rounds 29-31).
+  - Business-day counter walks the range — fine for ≤ ~3-month
+    ranges. For multi-year ranges, you'd want an arithmetic formula.
+    Not worth optimising now.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - C# enums + JsonStringEnumConverter for type safety + readable wire.
+  - Derived data via a service method (balance from requests).
+  - Computed properties on DTOs (`Remaining => Total - Used - Pending`).
+  - Business-day counting as a service responsibility.
+  - The status-machine pattern for multi-step workflows.
 
 
-CHALLENGE 28.2 — TS types + status union                    Target: 25 min
+CHALLENGE 28.2 — TS types + status helpers                   Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Discriminated union for status:
-       type LeaveStatus =
-         | 'Pending' | 'Approved' | 'Rejected'
-         | 'Cancelled' | 'RollbackRequested' | 'RolledBack';
-  - Helper sets of statuses that share UI treatment:
-       const closed: LeaveStatus[] = ['Approved', 'Rejected',
-         'Cancelled', 'RolledBack'];
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  The .NET enum serialises as a string on the wire. On the TS side,
+  you mirror it as a literal union — same domain vocabulary, full
+  type safety. Then you extract the "what can I do with this
+  status?" logic into helpers, so components stay declarative.
 
-  TASK:
-  1. src/Types/Leave.ts: LeaveRequest, LeaveBalance, LeaveType,
-     LeaveStatus.
-  2. Helper functions: isClosed(status), isPending(status),
-     canCancel(status), canRequestRollback(status).
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Logic lives in helpers, not inline in components. Reused in
-     multiple pages.
+  1) Literal union types
+     - `type LeaveStatus = 'Pending' | 'Approved' | ...` defines a
+       finite set. TS only accepts those exact strings.
+     - Compared to enums, unions are simpler — no runtime entity,
+       just a type. They also serialise/deserialise as the
+       string itself, no mapping.
 
-  WHAT YOU JUST LEARNED:
-  State machine helpers. Componentry stays declarative.
+  2) Exhaustive switch with `never`
+     - When you switch on a status, TS can verify every case is
+       handled if the default arm assigns to `never`:
+
+         const label = (s: LeaveStatus) => {
+             switch (s) {
+                 case 'Pending':  return 'Pending';
+                 case 'Approved': return 'Approved';
+                 // ...all cases
+                 default: {
+                     const _exhaustive: never = s;   // fails if a case is missing
+                     return _exhaustive;
+                 }
+             }
+         };
+
+     - Add a new status to the union? TS errors on this switch.
+
+  3) Helper sets vs functions
+     - Helpers like `isClosed(status)` compose better than
+       inline `status === 'X' || status === 'Y' || ...`.
+     - Centralised: change the rule once, every consumer updates.
+
+  4) `Record<LeaveStatus, T>` for maps
+     - `Record<K, V>` is TS's "object with keys of type K mapping
+       to values of type V."
+     - `Record<LeaveStatus, string>` is exhaustive — TS errors if
+       you miss a key.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/Types/Leave.ts                 (NEW)
+    src/utils/leaveHelpers.ts          (NEW)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Type definitions
+  NEW FILE: src/Types/Leave.ts
+
+      export type LeaveType = 'Annual' | 'Sick' | 'Unpaid';
+
+      export type LeaveStatus =
+          | 'Pending'
+          | 'Approved'
+          | 'Rejected'
+          | 'Cancelled'
+          | 'RollbackRequested'
+          | 'RolledBack';
+
+      export interface LeaveRequest {
+          id: string;
+          employeeUsername: string;
+          startDate: string;          // ISO date string
+          endDate: string;
+          days: number;
+          type: LeaveType;
+          reason: string;
+          status: LeaveStatus;
+          createdAt: string;
+          decidedAt?: string;
+          decidedByUsername?: string;
+          decisionNote?: string;
+          rollbackNote?: string;
+      }
+
+      export interface LeaveBalance {
+          year: number;
+          totalAllowance: number;
+          used: number;
+          pending: number;
+          remaining: number;
+      }
+
+  STEP 2 — Status helpers
+  NEW FILE: src/utils/leaveHelpers.ts
+
+      import type { LeaveStatus } from '../Types/Leave';
+
+      // "Closed" = the request is finalised; no further action.
+      export const isClosed = (s: LeaveStatus): boolean =>
+          s === 'Approved' || s === 'Rejected'
+          || s === 'Cancelled' || s === 'RolledBack';
+
+      export const isPending = (s: LeaveStatus): boolean =>
+          s === 'Pending' || s === 'RollbackRequested';
+
+      // Can the employee CANCEL this request (before a manager acts)?
+      export const canCancel = (s: LeaveStatus): boolean =>
+          s === 'Pending';
+
+      // Can the employee REQUEST ROLLBACK on an approved leave?
+      export const canRequestRollback = (s: LeaveStatus): boolean =>
+          s === 'Approved';
+
+      // Can a manager APPROVE or REJECT this request?
+      export const isAwaitingDecision = (s: LeaveStatus): boolean =>
+          s === 'Pending' || s === 'RollbackRequested';
+
+      // ─ For UI: status → human-friendly label + Tailwind classes ─
+      // `Record<LeaveStatus, ...>` guarantees exhaustiveness — TS
+      // errors here if you add a status to the union and forget the
+      // map. Compiler-driven UX consistency.
+
+      interface StatusVisual {
+          label: string;
+          classes: string;     // Tailwind chip classes
+      }
+
+      export const statusVisuals: Record<LeaveStatus, StatusVisual> = {
+          Pending:            { label: 'Pending',
+                                 classes: 'bg-yellow-100 text-yellow-800' },
+          Approved:           { label: 'Approved',
+                                 classes: 'bg-green-100 text-green-800' },
+          Rejected:           { label: 'Rejected',
+                                 classes: 'bg-red-100 text-red-800' },
+          Cancelled:          { label: 'Cancelled',
+                                 classes: 'bg-gray-200 text-gray-700' },
+          RollbackRequested:  { label: 'Rollback requested',
+                                 classes: 'bg-orange-100 text-orange-800' },
+          RolledBack:         { label: 'Rolled back',
+                                 classes: 'bg-purple-100 text-purple-800' },
+      };
+
+  STEP 3 — Smoke test
+  Open any component temporarily and write:
+
+      import { canCancel, statusVisuals } from '../utils/leaveHelpers';
+      console.log(canCancel('Pending'));         // true
+      console.log(canCancel('Approved'));        // false
+      console.log(statusVisuals.Approved.label); // 'Approved'
+
+  Now remove `Approved:` from the statusVisuals record. TS will
+  error on the missing key. Confirm. Restore.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Use `Record<K, V>` when you want EXHAUSTIVE coverage — TS
+    enforces every key. For partial maps, use `Partial<Record<K, V>>`
+    or a regular object type.
+  - Helpers, not inline conditions. Once `canCancel` logic is
+    centralised, you can refine it without sweep-edits.
+  - When adding a new status to the union, follow the compiler
+    errors — they tell you exactly which helpers and visuals need
+    extending.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Literal unions for finite state.
+  - `Record<K, V>` for exhaustive lookup tables.
+  - Helper functions over inline conditions.
+  - The compiler-driven workflow: add a new state → TS surfaces
+    every place that needs updating.
 
 
-CHALLENGE 28.3 — Balance endpoint + hook                    Target: 30 min
+CHALLENGE 28.3 — Balance endpoint + leave query hooks        Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. GET /api/leave/balance?year=2026 → returns LeaveBalance for the
-     calling user.
-  2. Same endpoint with ?employeeId=... for Admin/Manager.
-  3. queries/leaveKeys.ts hierarchy.
-  4. useLeaveBalance(year?) hook.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Expose the balance and the list via two endpoints. The server
+  resolves "current year" from its own clock (never trust client
+  clocks for business logic) and "current user" from the JWT.
+  Manager/Admin can look up someone else's balance by passing an
+  `employeeUsername` query param.
 
-  RULES:
-  - Default year = current year (server-side; new DateTime.UtcNow.Year).
-  - Authorization: own balance OR Manager/Admin role.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Server resolves "current year" — don't trust client clocks for
-  business logic.
+  1) Query parameters in ASP.NET Core
+     - `[FromQuery] int? year` reads `?year=2025`. Nullable for
+       "default to server-side current year."
+     - Multiple params combine: `?year=2025&employeeUsername=alice`.
+
+  2) Authorization checks INSIDE the action
+     - The JWT identifies the caller. If the query asks about
+       someone else, verify the caller has Admin/Manager role.
+     - Reusable pattern: extract a `CallerCanQueryOthers()` helper.
+
+  3) The `staleTime: 0` choice for balance
+     - Balance is small AND changes the moment any request is
+       created / decided. `staleTime: 0` means every page mount
+       refetches.
+     - For a small dataset, that's fine. For larger data, you'd
+       invalidate on mutations and keep a longer staleTime.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.API/Controllers/LeaveController.cs   (NEW)
+    src/services/api.ts                                  (leave methods)
+    src/Queries/leaveKeys.ts                             (NEW)
+    src/Queries/useLeaveBalance.ts                       (NEW)
+    src/Queries/useMyLeaves.ts                           (NEW)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Controller
+  NEW FILE: EmployeeManager.API/Controllers/LeaveController.cs
+
+      using System.Security.Claims;
+      using EmployeeManager.Application.Services;
+      using Microsoft.AspNetCore.Authorization;
+      using Microsoft.AspNetCore.Mvc;
+
+      namespace EmployeeManager.API.Controllers;
+
+      [ApiController]
+      [Route("api/leave")]
+      [Authorize]
+      public class LeaveController : ControllerBase
+      {
+          private readonly ILeaveService _leave;
+
+          public LeaveController(ILeaveService leave) { _leave = leave; }
+
+          private (string username, string role) Caller()
+          {
+              var u = User.Identity?.Name ?? string.Empty;
+              var r = User.FindFirstValue(ClaimTypes.Role) ?? "Employee";
+              return (u, r);
+          }
+
+          // GET /api/leave/balance?year=2026&employeeUsername=alice
+          [HttpGet("balance")]
+          public async Task<IActionResult> GetBalance(
+              [FromQuery] int? year,
+              [FromQuery] string? employeeUsername)
+          {
+              var (caller, role) = Caller();
+              var target = ResolveTarget(employeeUsername, caller, role);
+              if (target is null) return Forbid();
+
+              var balance = await _leave.GetBalanceAsync(target, year);
+              return Ok(balance);
+          }
+
+          // GET /api/leave/mine?year=2026
+          [HttpGet("mine")]
+          public async Task<IActionResult> GetMine([FromQuery] int? year)
+          {
+              var (caller, _) = Caller();
+              return Ok(await _leave.GetMyLeavesAsync(caller, year));
+          }
+
+          private string? ResolveTarget(string? requested, string caller, string role)
+          {
+              // No target requested → use caller.
+              if (string.IsNullOrWhiteSpace(requested)) return caller;
+
+              // Same as caller → always allowed.
+              if (string.Equals(requested, caller, StringComparison.OrdinalIgnoreCase))
+                  return caller;
+
+              // Different user → must be Admin or Manager.
+              if (role is "Admin" or "Manager") return requested;
+
+              return null;     // signals 403
+          }
+      }
+
+  STEP 2 — Client API methods
+  Append to src/services/api.ts:
+
+      import type { LeaveBalance, LeaveRequest } from '../Types/Leave';
+
+      export const fetchLeaveBalance = (year?: number, employeeUsername?: string) =>
+          api.get<LeaveBalance>('/leave/balance', {
+              params: {
+                  ...(year !== undefined ? { year } : {}),
+                  ...(employeeUsername ? { employeeUsername } : {}),
+              },
+          });
+
+      export const fetchMyLeaves = (year?: number) =>
+          api.get<LeaveRequest[]>('/leave/mine', {
+              params: year !== undefined ? { year } : {},
+          });
+
+  NEW HERE: axios `params`
+  - The `params` config field gets serialised as `?key=value&...`.
+  - Undefined values are dropped automatically.
+  - The conditional-spread (`...(year !== undefined ? { year } : {})`)
+    keeps the URL clean — you don't end up with `?year=undefined`.
+
+  STEP 3 — Query keys
+  NEW FILE: src/Queries/leaveKeys.ts
+
+      export const leaveKeys = {
+          all: ['leave'] as const,
+          balance: (year?: number, employeeUsername?: string) =>
+              [...leaveKeys.all, 'balance', year ?? 'current', employeeUsername ?? 'me'] as const,
+          mine: (year?: number) =>
+              [...leaveKeys.all, 'mine', year ?? 'current'] as const,
+          pending: () =>           // used in Round 30
+              [...leaveKeys.all, 'pending'] as const,
+      };
+
+  NEW HERE: the year/user as part of the key
+  - Different parameters = different cache entries. Switching
+    years navigates to a different cache slot, not a refetch of
+    the same slot.
+
+  STEP 4 — Hooks
+  NEW FILE: src/Queries/useLeaveBalance.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { fetchLeaveBalance } from '../services/api';
+      import { leaveKeys } from './leaveKeys';
+
+      export const useLeaveBalance = (year?: number, employeeUsername?: string) =>
+          useQuery({
+              queryKey: leaveKeys.balance(year, employeeUsername),
+              queryFn: async () => (await fetchLeaveBalance(year, employeeUsername)).data,
+              staleTime: 0,            // always fresh — balance changes on every action
+          });
+
+  NEW FILE: src/Queries/useMyLeaves.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { fetchMyLeaves } from '../services/api';
+      import { leaveKeys } from './leaveKeys';
+
+      export const useMyLeaves = (year?: number) =>
+          useQuery({
+              queryKey: leaveKeys.mine(year),
+              queryFn: async () => (await fetchMyLeaves(year)).data,
+              staleTime: 30 * 1000,
+          });
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Server resolves both "current year" and "current user." Never
+    let the client dictate identity for business logic.
+  - Manager vs Employee in ResolveTarget — extract the role check
+    helper; you'll reuse it for Round 30's approval queue.
+  - axios `params` with conditional spread to keep URLs clean.
+  - The query key INCLUDES the year, so year switching is a cache
+    navigation, not a refetch.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - `[FromQuery]` for optional query parameters.
+  - Conditional-spread for clean axios `params`.
+  - Composite query keys for parameterised endpoints.
+  - Inline ResolveTarget — pattern reused in any "me OR someone
+    else" endpoint.
 
 
-CHALLENGE 28.4 — My Leaves page (balance + list)            Target: 35 min
+CHALLENGE 28.4 — My Leaves page (balance cards + list)       Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. routes.ts: `myLeaves: () => '/leaves' as const`.
-  2. MyLeavesPage.tsx:
-     - Top: 3 balance cards (Used / Pending / Remaining of 25).
-     - Below: list of own leave requests with status badge.
-  3. StatusBadge generalized for leave statuses (6 colors).
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Compose the StatCard (Round 27.5) and the leave helpers (28.2)
+  into the first user-facing leave page. The page shows the
+  user's balance summary at top and request history below — read-
+  only for this round; the Request button appears in Round 29.
 
-  RULES:
-  - StatusBadge becomes a generic `<StatusBadge status={...} kind="leave"
-    />`. Or per-feature components. Pick one and stick to it.
+  This challenge also introduces the GENERIC StatusBadge: a
+  component parametrised by a status union and a visuals map. One
+  badge serves leaves now, documents/users/anything later.
 
-  WHAT YOU JUST LEARNED:
-  Reusable badge for a multi-state status. UI mirrors the union.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Generic components in TS
+     - A component can be GENERIC over a type parameter:
+         function Foo<T extends string>({ ... }: { value: T; ... }) {}
+     - The `<T extends string>` constrains T to string-literal
+       unions. Useful for badges, dropdowns, status pills.
+
+  2) Passing a visuals map as a prop
+     - The badge doesn't know what statuses exist — it asks the
+       caller for both the status and the map.
+     - Caller side: `<StatusBadge status={leave.status} visuals={statusVisuals} />`.
+
+  3) When NOT to make a component generic
+     - If the status union is fixed across the app, just write
+       LeaveStatusBadge with the visuals baked in.
+     - We're going generic here BECAUSE other features (documents
+       in 27, users in later rounds) will have their own status
+       unions and want the same chrome.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/StatusBadge.tsx       (rewrite — make generic)
+    src/components/MyLeavesPage.tsx      (NEW)
+    src/routes.ts                        (myLeaves())
+    src/App.tsx                          (route)
+    src/Context/AuthLayout.tsx           (nav link)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Generic StatusBadge
+  Your current StatusBadge (from Round 21.2) takes `isActive: boolean`.
+  Generalise it to take any status union + its visuals map.
+
+  Rewrite src/components/StatusBadge.tsx:
+
+      import clsx from 'clsx';
+
+      // Generic StatusBadge. Caller provides:
+      //   status:  the current status value
+      //   visuals: a Record<Status, { label, classes }> map
+      interface StatusBadgeProps<T extends string> {
+          status: T;
+          visuals: Record<T, { label: string; classes: string }>;
+      }
+
+      function StatusBadge<T extends string>({ status, visuals }: StatusBadgeProps<T>) {
+          const v = visuals[status];
+          return (
+              <span className={clsx(
+                  'inline-block px-2 py-0.5 rounded text-xs font-semibold',
+                  v.classes,
+              )}>
+                  {v.label}
+              </span>
+          );
+      }
+
+      export default StatusBadge;
+
+  Note: anywhere your old StatusBadge was used with `isActive`,
+  you'll need to update the call site. Create a small adapter or
+  inline the visuals where needed. Example for the Employee list:
+
+      // EmployeeRow.tsx — define a tiny inline visuals map
+      const employeeStatusVisuals = {
+          active:   { label: 'Active',   classes: 'bg-green-100 text-green-800' },
+          inactive: { label: 'Inactive', classes: 'bg-gray-200 text-gray-700' },
+      } as const;
+
+      <StatusBadge
+          status={employee.isActive ? 'active' : 'inactive'}
+          visuals={employeeStatusVisuals}
+      />
+
+  STEP 2 — Route + nav
+  src/routes.ts:
+
+      myLeaves: () => '/leaves' as const,
+
+  AuthLayout.tsx — add the nav link:
+
+      <NavLink to={routes.myLeaves()}>My Leaves</NavLink>
+
+  STEP 3 — The page
+  NEW FILE: src/components/MyLeavesPage.tsx
+
+      import { format } from 'date-fns';
+      import { useLeaveBalance } from '../Queries/useLeaveBalance';
+      import { useMyLeaves } from '../Queries/useMyLeaves';
+      import StatCard from './StatCard';
+      import StatusBadge from './StatusBadge';
+      import { statusVisuals } from '../utils/leaveHelpers';
+
+      const MyLeavesPage = () => {
+          const balance  = useLeaveBalance();
+          const leaves   = useMyLeaves();
+
+          return (
+              <div className="max-w-4xl mx-auto p-6">
+                  <h1 className="text-2xl font-semibold mb-4">My Leaves</h1>
+
+                  {/* ── Balance cards ──────────────────────────────── */}
+                  {balance.isLoading ? (
+                      <div className="card mb-6">Loading balance…</div>
+                  ) : balance.isError || !balance.data ? (
+                      <div className="card mb-6 text-red-600">Failed to load balance.</div>
+                  ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                          <StatCard label="Allowance"
+                                    value={balance.data.totalAllowance}
+                                    sublabel="days/year" />
+                          <StatCard label="Used"
+                                    value={balance.data.used} />
+                          <StatCard label="Pending"
+                                    value={balance.data.pending} />
+                          <StatCard label="Remaining"
+                                    value={balance.data.remaining} />
+                      </div>
+                  )}
+
+                  {/* ── Request history ────────────────────────────── */}
+                  <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+                      {leaves.isLoading ? (
+                          <p className="p-4 text-gray-500">Loading…</p>
+                      ) : leaves.isError ? (
+                          <p className="p-4 text-red-600">Failed to load leaves.</p>
+                      ) : leaves.data && leaves.data.length > 0 ? (
+                          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                              <thead className="bg-gray-50 dark:bg-gray-900">
+                                  <tr>
+                                      <th className="px-6 py-3 text-left text-xs uppercase
+                                                     tracking-wider text-gray-500">Type</th>
+                                      <th className="px-6 py-3 text-left text-xs uppercase
+                                                     tracking-wider text-gray-500">Dates</th>
+                                      <th className="px-6 py-3 text-left text-xs uppercase
+                                                     tracking-wider text-gray-500">Days</th>
+                                      <th className="px-6 py-3 text-left text-xs uppercase
+                                                     tracking-wider text-gray-500">Reason</th>
+                                      <th className="px-6 py-3 text-left text-xs uppercase
+                                                     tracking-wider text-gray-500">Status</th>
+                                  </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                                  {leaves.data.map(req => (
+                                      <tr key={req.id}>
+                                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                              {req.type}
+                                          </td>
+                                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                              {format(new Date(req.startDate), 'MMM d')} →{' '}
+                                              {format(new Date(req.endDate), 'MMM d, yyyy')}
+                                          </td>
+                                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                              {req.days}
+                                          </td>
+                                          <td className="px-6 py-4 text-sm text-gray-600 max-w-xs truncate">
+                                              {req.reason}
+                                          </td>
+                                          <td className="px-6 py-4 whitespace-nowrap">
+                                              <StatusBadge status={req.status} visuals={statusVisuals} />
+                                          </td>
+                                      </tr>
+                                  ))}
+                              </tbody>
+                          </table>
+                      ) : (
+                          <p className="p-6 text-center text-gray-500">
+                              No leave requests yet.
+                          </p>
+                      )}
+                  </div>
+              </div>
+          );
+      };
+
+      export default MyLeavesPage;
+
+  STEP 4 — Register route in App.tsx
+
+      { path: routes.myLeaves(), element: <MyLeavesPage /> },
+
+  STEP 5 — Seed test data
+  To see the page populated, manually add a couple rows to
+  leaveRequests.json (auto-created on first read). Example:
+
+      [
+          {
+              "Id": "11111111-1111-1111-1111-111111111111",
+              "EmployeeUsername": "admin",
+              "StartDate": "2026-04-13T00:00:00",
+              "EndDate":   "2026-04-17T00:00:00",
+              "Days": 5,
+              "Type": "Annual",
+              "Reason": "Spring break",
+              "Status": "Approved",
+              "CreatedAt": "2026-03-01T10:00:00",
+              "DecidedAt": "2026-03-02T09:00:00",
+              "DecidedByUsername": "manager",
+              "DecisionNote": "Looks good."
+          },
+          {
+              "Id": "22222222-2222-2222-2222-222222222222",
+              "EmployeeUsername": "admin",
+              "StartDate": "2026-07-20T00:00:00",
+              "EndDate":   "2026-07-24T00:00:00",
+              "Days": 5,
+              "Type": "Annual",
+              "Reason": "Summer holiday",
+              "Status": "Pending",
+              "CreatedAt": "2026-05-15T11:00:00"
+          }
+      ]
+
+  Restart, visit /leaves. Cards show: Allowance 25, Used 5,
+  Pending 5, Remaining 15. The table shows both rows with the
+  right status pill colour.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Generic StatusBadge is opinionated about the props. Callers
+    must provide BOTH status and visuals. That's a feature, not a
+    bug — it forces every domain to define its own visuals map.
+  - Don't render dates with raw ISO strings (`{req.startDate}`).
+    Always go through `format(new Date(iso), ...)`.
+  - `max-w-xs truncate` on the reason column — long reasons get
+    clipped with an ellipsis. Click-to-expand can wait for later.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Generic components with type parameters.
+  - StatCard composition from Round 27.5.
+  - First multi-state UI driven by a status union + visuals map.
+  - Manual JSON seeding for quick test data.
 
 
-CHALLENGE 28.5 — Year selector                              Target: 20 min
+CHALLENGE 28.5 — Year selector + URL search params           Target: 30 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Year dropdown on MyLeavesPage (current and previous 2 years).
-  2. searchParams `year=2024`.
-  3. useLeaveBalance(year) + filter list by year.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Leave is annual. Employees often need to see "what did I take in
+  2024?" The year is a perfect URL-search-params candidate: it's
+  filter state, it's shareable, and you want it to survive a
+  refresh.
 
-  RULES:
-  - Default to current year. Allow viewing past years (history).
+  This is the third reapplication of the search-params-as-state
+  pattern (Round 18.4, Round 27.2, now here). Repetition is the
+  point — by the end you should be writing this idiom blind.
 
-  WHAT YOU JUST LEARNED:
-  Year scoping = URL param. Same pattern as filter in Round 18.4.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Parsing a string param to a number
+     - `searchParams.get('year')` returns a string or null.
+     - `Number(str)` returns NaN on invalid input; check explicitly:
+         const raw = searchParams.get('year');
+         const year = raw && /^\d{4}$/.test(raw) ? Number(raw) : undefined;
+     - Regex `^\d{4}$` validates a 4-digit year — defensive against
+       weird inputs (`?year=abc`).
+
+  2) Generating a recent-years range
+     - For the dropdown options:
+         const currentYear = new Date().getFullYear();
+         const years = [currentYear, currentYear - 1, currentYear - 2];
+     - Array of three numbers. Map to <option> elements.
+
+  3) "Default to current year" without param pollution
+     - If the user is viewing the current year, the URL should be
+       /leaves (no `?year=`).
+     - When they pick last year, /leaves?year=2025.
+     - Implementation: only call `setSearchParams({ year })` for
+       non-current years. For current year, pass `{}` to clear.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/MyLeavesPage.tsx     (add the dropdown + thread year through hooks)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  At the top of MyLeavesPage:
+
+      import { useSearchParams } from 'react-router-dom';
+
+      const MyLeavesPage = () => {
+          const [searchParams, setSearchParams] = useSearchParams();
+          const currentYear = new Date().getFullYear();
+
+          // Read year from URL. Validate it; fall back to current.
+          const rawYear = searchParams.get('year');
+          const yearFromUrl = rawYear && /^\d{4}$/.test(rawYear)
+              ? Number(rawYear)
+              : undefined;
+          const effectiveYear = yearFromUrl ?? currentYear;
+
+          // Thread the year through both hooks.
+          const balance = useLeaveBalance(effectiveYear);
+          const leaves  = useMyLeaves(effectiveYear);
+
+          // Years to offer in the dropdown.
+          const yearOptions = [currentYear, currentYear - 1, currentYear - 2];
+
+          const handleYearChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+              const picked = Number(e.target.value);
+              if (picked === currentYear) {
+                  // Default — keep URL clean.
+                  setSearchParams({});
+              } else {
+                  setSearchParams({ year: String(picked) });
+              }
+          };
+
+          return (
+              <div className="max-w-4xl mx-auto p-6">
+                  <div className="flex items-center justify-between mb-4">
+                      <h1 className="text-2xl font-semibold">My Leaves</h1>
+                      <select
+                          value={effectiveYear}
+                          onChange={handleYearChange}
+                          className="rounded border-gray-300 dark:bg-gray-800 text-sm"
+                      >
+                          {yearOptions.map(y => (
+                              <option key={y} value={y}>{y}</option>
+                          ))}
+                      </select>
+                  </div>
+
+                  {/* ... rest of the page unchanged, but uses
+                      `balance` and `leaves` (already year-scoped) ... */}
+              </div>
+          );
+      };
+
+  Test:
+   - Visit /leaves → current year, no `?year=` in the URL.
+   - Pick 2025 → URL becomes /leaves?year=2025, balance and list
+     reflect that year.
+   - Pick current year again → URL drops the param.
+   - Visit /leaves?year=abc directly → defaults to current year
+     (regex rejects the garbage).
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always validate the URL param. Users (and bots) WILL hit your
+    URL with random garbage; falling back gracefully is the bare
+    minimum.
+  - Keep "default" out of the URL. /leaves?year=2026 next to
+    /leaves looks like two distinct pages to bookmark managers
+    and crawlers.
+  - The query-key INCLUDES the year, so switching years navigates
+    between cached entries — instant back-and-forth.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Third reapplication of search-params-as-state.
+  - String-to-number parsing with defensive regex.
+  - "Default to clean URL" — don't pollute with the trivial param.
+  - Round 28 capstone: leave foundation is wired — domain model,
+    repository, service, controller, query hooks, page, year
+    selector. Round 29 plugs the request-creation flow on top.
 
 
 ================================================================================
@@ -5851,114 +13305,978 @@ ROUND 29 — FEATURE: LEAVE — REQUEST SUBMISSION (designed 2026-05-15)
 Pacing: One challenge per day. The employee's request flow.
 
 
-CHALLENGE 29.1 — Leave request schema                       Target: 25 min
+CHALLENGE 29.1 — Leave request schema (Zod)                 Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. schemas/leaveRequestSchema.ts:
-       - startDate, endDate (both ISO date strings)
-       - type: z.enum(['Annual','Sick','Unpaid'])
-       - reason: min 5
-       - refine: endDate >= startDate
-       - refine: business days ≥ 1 (no leave for 0 days)
-  2. Export z.infer type.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Before building the form, define the contract — what makes a
+  valid leave request? Cross-field rules (`endDate >= startDate`),
+  date-range rules (business days ≥ 1), and field-level rules
+  (reason at least 5 chars, type in a known set) all live in one
+  Zod schema. The form is just the UI; the schema is the truth.
 
-  RULES:
-  - All date logic in helpers — don't sprinkle Date math.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Cross-field date validation. Same shape as match-passwords (Round
-  24.2).
+  1) `z.enum([...])` for finite-set values
+     - `z.enum(['Annual', 'Sick', 'Unpaid'])` matches only those
+       three strings.
+     - Compared to `z.string().regex(...)`, enum gives proper
+       autocomplete on the inferred type and clear error messages.
+
+  2) Date strings vs Date objects in Zod
+     - HTML date inputs produce strings like `'2026-07-20'`.
+     - Two options:
+         a) `z.string()` then convert in helpers. We use this.
+         b) `z.coerce.date()` for a Date object. Useful if every
+            consumer wants Date instances.
+     - Strings simpler for ISO transport. Convert at boundaries.
+
+  3) Mirroring the server's business-day rule
+     - Server uses a service method `ComputeBusinessDays`.
+     - The client schema rejects 0-day requests using the same
+       logic — extract the function so both sides match.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/utils/leaveHelpers.ts            (add computeBusinessDays)
+    src/schemas/leaveRequestSchema.ts    (NEW)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Client-side business-day helper
+  Append to src/utils/leaveHelpers.ts:
+
+      // Mirror of LeaveService.ComputeBusinessDays. Returns 0 for
+      // invalid ranges (end < start).
+      export const computeBusinessDays = (start: string, end: string): number => {
+          if (!start || !end) return 0;
+          const startDate = new Date(start);
+          const endDate = new Date(end);
+          if (endDate < startDate) return 0;
+
+          let count = 0;
+          for (
+              let d = new Date(startDate);
+              d <= endDate;
+              d.setDate(d.getDate() + 1)
+          ) {
+              const day = d.getDay();   // 0=Sunday, 6=Saturday
+              if (day !== 0 && day !== 6) count++;
+          }
+          return count;
+      };
+
+  Note: `d.setDate(d.getDate() + 1)` MUTATES `d`. The `new Date(startDate)`
+  copy means we don't accidentally mutate the input.
+
+  STEP 2 — Zod schema
+  NEW FILE: src/schemas/leaveRequestSchema.ts
+
+      import { z } from 'zod';
+      import { computeBusinessDays } from '../utils/leaveHelpers';
+
+      // Matches yyyy-mm-dd — what <input type="date"> produces.
+      const isoDateRegex = /^\d{4}-\d{2}-\d{2}$/;
+
+      export const leaveRequestSchema = z
+          .object({
+              startDate: z
+                  .string()
+                  .regex(isoDateRegex, 'Start date is required'),
+              endDate: z
+                  .string()
+                  .regex(isoDateRegex, 'End date is required'),
+              type: z.enum(['Annual', 'Sick', 'Unpaid'], {
+                  errorMap: () => ({ message: 'Pick a leave type' }),
+              }),
+              reason: z
+                  .string()
+                  .trim()
+                  .min(5, 'Please give at least 5 characters of context'),
+          })
+          .refine((data) => new Date(data.endDate) >= new Date(data.startDate), {
+              path: ['endDate'],
+              message: 'End date must be on or after start date',
+          })
+          .refine((data) => computeBusinessDays(data.startDate, data.endDate) >= 1, {
+              path: ['endDate'],
+              message: 'Range must include at least one business day',
+          });
+
+      export type LeaveRequestFormValues = z.infer<typeof leaveRequestSchema>;
+
+  Anatomy:
+   - Two refinements stack. Each gets evaluated independently.
+   - Both errors land on `endDate` so they render near the second
+     date input (the one users typically misclick).
+   - `errorMap` on z.enum customises the default "invalid enum
+     value" message to something readable.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always put cross-field errors on a SPECIFIC field's path. Form
+    root errors are for whole-form server rejections.
+  - Mirror business-day logic from the server. If they drift
+    you'll silently reject valid requests OR accept invalid ones.
+  - `z.coerce.date()` is tempting but couples the schema to a
+    Date object — Round 29.4's date picker complications then
+    multiply. Keep strings until the boundary.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - `z.enum` for finite-set fields with custom error messages.
+  - Date-range refinement pattern (endDate >= startDate).
+  - Mirroring server logic in a client helper for parity.
 
 
-CHALLENGE 29.2 — Request endpoint + balance guard           Target: 35 min
+CHALLENGE 29.2 — Request endpoint + balance + overlap guards Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. POST /api/leave { startDate, endDate, type, reason }.
-  2. Server-side guard: balance.remaining >= requested days OR type ==
-     'Unpaid'. Otherwise 400.
-  3. Server-side guard: no overlap with existing Pending/Approved
-     requests for the same user.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  The server is the gate. Two business rules must be enforced
+  regardless of what the client sends:
 
-  RULES:
-  - Days calculation: exclude weekends. (Skip holidays for now;
-    simple business-days = Mon-Fri).
-  - Server is the source of truth for balance + overlap. Client
-    estimates only.
+  1. BALANCE — Annual + Sick leave deduct from the 25-day pool.
+     `balance.remaining >= requested days`. Unpaid leave bypasses
+     the pool (it's, well, unpaid).
+  2. OVERLAP — Can't have two pending/approved requests covering
+     overlapping date ranges. Double-booking your own time off
+     never makes sense.
 
-  WHAT YOU JUST LEARNED:
-  Domain rules ALWAYS live server-side. Client checks for UX.
+  These guards live in LeaveService and the controller surfaces
+  them as 400-with-message responses.
+
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) The "overlap" predicate
+     - Two date ranges A and B overlap if `A.start <= B.end AND
+       B.start <= A.end`. This handles all six relative arrangements
+       in one expression.
+     - Edge case: same-day boundaries — `A.end == B.start` overlaps.
+       Decision: count it as overlap (consecutive requests should
+       be one request, or one should start the next day).
+
+  2) The "ValidationError vs OK" service result pattern
+     - Reuse the pattern from Round 24.1's ChangePasswordResult:
+
+         public record CreateLeaveResult(bool Success,
+                                         LeaveRequest? Created,
+                                         string? Error);
+
+     - The controller maps Error → 400 message.
+
+  3) Validating DTO inputs at the service boundary
+     - Don't trust client-sent `days`. Recompute on the server.
+     - Parse and re-validate dates — defensive coding pays off.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/CreateLeaveRequest.cs    (NEW DTO)
+    EmployeeManager.Application/Services/ILeaveService.cs   (add CreateAsync)
+    EmployeeManager.Application/Services/LeaveService.cs    (impl)
+    EmployeeManager.API/Controllers/LeaveController.cs      (POST action)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — DTO
+  NEW FILE: EmployeeManager.Domain/Models/CreateLeaveRequest.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public class CreateLeaveRequest
+      {
+          public string StartDate { get; set; } = string.Empty;   // ISO date
+          public string EndDate { get; set; } = string.Empty;
+          public LeaveType Type { get; set; }
+          public string Reason { get; set; } = string.Empty;
+      }
+
+  STEP 2 — Service result + signature
+  Update ILeaveService.cs:
+
+      Task<CreateLeaveResult> CreateAsync(string username, CreateLeaveRequest request);
+
+  Add to LeaveService.cs (or a separate file):
+
+      public record CreateLeaveResult(
+          bool Success,
+          LeaveRequest? Created,
+          string? Error);
+
+  STEP 3 — Service implementation with both guards
+  In LeaveService.cs:
+
+      public async Task<CreateLeaveResult> CreateAsync(
+          string username, CreateLeaveRequest request)
+      {
+          // 1. Parse dates defensively.
+          if (!DateTime.TryParse(request.StartDate, out var start)
+              || !DateTime.TryParse(request.EndDate, out var end))
+              return new(false, null, "Invalid date.");
+
+          start = start.Date;
+          end = end.Date;
+
+          if (end < start)
+              return new(false, null, "End date must be on or after start.");
+
+          // 2. Compute business days.
+          var days = ComputeBusinessDays(start, end);
+          if (days < 1)
+              return new(false, null, "Range must include at least one business day.");
+
+          // 3. Reason must be present.
+          if (string.IsNullOrWhiteSpace(request.Reason) || request.Reason.Length < 5)
+              return new(false, null, "Reason is required (min 5 characters).");
+
+          // 4. Balance check (Unpaid leave skips this).
+          if (request.Type != LeaveType.Unpaid)
+          {
+              var balance = await GetBalanceAsync(username, start.Year);
+              if (balance.Remaining < days)
+                  return new(false, null,
+                      $"Insufficient balance ({balance.Remaining} remaining, {days} requested).");
+          }
+
+          // 5. Overlap check.
+          var existing = await _repo.GetByEmployeeAsync(username);
+          var hasOverlap = existing.Any(r =>
+              IsActive(r.Status) && Overlaps(start, end, r.StartDate, r.EndDate));
+          if (hasOverlap)
+              return new(false, null,
+                  "Overlaps with an existing pending or approved request.");
+
+          // 6. Persist.
+          var created = await _repo.CreateAsync(new LeaveRequest
+          {
+              EmployeeUsername = username,
+              StartDate = start,
+              EndDate = end,
+              Days = days,
+              Type = request.Type,
+              Reason = request.Reason.Trim(),
+              Status = LeaveStatus.Pending,
+          });
+
+          return new(true, created, null);
+      }
+
+      private static bool IsActive(LeaveStatus s)
+          => s == LeaveStatus.Pending
+             || s == LeaveStatus.Approved
+             || s == LeaveStatus.RollbackRequested;
+
+      private static bool Overlaps(DateTime aStart, DateTime aEnd,
+                                    DateTime bStart, DateTime bEnd)
+          => aStart <= bEnd && bStart <= aEnd;
+
+  STEP 4 — Controller action
+  Append to LeaveController.cs:
+
+      // POST /api/leave
+      [HttpPost]
+      public async Task<IActionResult> Create([FromBody] CreateLeaveRequest request)
+      {
+          var (caller, _) = Caller();
+          var result = await _leave.CreateAsync(caller, request);
+          if (!result.Success)
+              return BadRequest(new { message = result.Error });
+          return CreatedAtAction(nameof(GetMine), null, result.Created);
+      }
+
+  Test in your HTTP client:
+   - POST with valid range + Annual type → 201, employee.json
+     leaveRequests.json grew by one row with Status=Pending.
+   - POST with end < start → 400 with the start/end message.
+   - POST overlapping an existing approved range → 400.
+   - POST 30-day Annual with only 25 left → 400 insufficient balance.
+   - POST 30-day Unpaid → 201 (Unpaid skips the balance check).
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always recompute days on the server. Trusting `days` from the
+    client lets a malicious request claim "1 day" and book 30.
+  - The Overlaps function looks innocent — the SAME-DAY boundary
+    is the case to remember (`a.end == b.start` overlaps).
+  - Trim the reason before persisting. Whitespace-only reasons
+    sneak past `.MinLength(5)` if you don't.
+  - Use 201 Created on POST success — convention.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Multi-guard service method: parse, compute, balance, overlap,
+    persist.
+  - The interval-overlap predicate.
+  - Defensive recomputation of derived values (days).
 
 
-CHALLENGE 29.3 — Request form                                Target: 35 min
+CHALLENGE 29.3 — Request form (RHF + live computed values)  Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. /leaves/new route + page.
-  2. RHF + zodResolver(leaveRequestSchema).
-  3. Live computed "days" display (uses business-day helper).
-  4. Live remaining-after-this-request preview.
-  5. useCreateLeaveRequest mutation; on success: navigate /leaves +
-     invalidate balance + list.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Build the request form with live UI guidance: as the user picks
+  dates, show "this is 5 business days, you'll have 20 remaining."
+  The user knows BEFORE submitting whether the request is
+  reasonable. The server still gates, but a smart UI prevents
+  most failed submissions.
 
-  RULES:
-  - Don't submit if computed days > remaining (UX gate).
-  - Server still gates (defense in depth).
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Live-computed form values (`watch()` in RHF). Lights up the form
-  intelligently.
+  1) RHF `watch(['startDate', 'endDate'])`
+     - Returns the current values of those fields and SUBSCRIBES
+       the component to changes.
+     - Re-renders on every keystroke for those fields.
+     - Don't watch fields you don't need — unnecessary re-renders
+       hurt perf.
+
+  2) Disabling submit on UX failure
+     - Server is the gate. The client UI button disables on:
+         * form is invalid (Zod errors), OR
+         * computed days exceed remaining balance (UX gate).
+     - The user can still hit Enter; the form will re-validate
+       and reject. The visual disable is a hint, not a lock.
+
+  3) `useNavigate` for post-success redirect
+     - Same hook from Round 4. After a successful mutation, send
+       the user back to the listing page.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/services/api.ts                       (createLeaveRequest)
+    src/Queries/useCreateLeaveRequest.ts      (NEW)
+    src/routes.ts                             (newLeave())
+    src/components/NewLeaveRequestPage.tsx    (NEW)
+    src/App.tsx                               (route)
+    src/components/MyLeavesPage.tsx           ("Request leave" button)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — API method
+  Append to src/services/api.ts:
+
+      import type { LeaveRequestFormValues } from '../schemas/leaveRequestSchema';
+
+      export const createLeaveRequest = (values: LeaveRequestFormValues) =>
+          api.post<LeaveRequest>('/leave', values);
+
+  STEP 2 — Mutation hook
+  NEW FILE: src/Queries/useCreateLeaveRequest.ts
+
+      import { useMutation, useQueryClient } from '@tanstack/react-query';
+      import { toast } from 'react-toastify';
+      import { isAxiosError } from 'axios';
+      import { createLeaveRequest } from '../services/api';
+      import { leaveKeys } from './leaveKeys';
+
+      export const useCreateLeaveRequest = () => {
+          const queryClient = useQueryClient();
+
+          return useMutation({
+              mutationFn: createLeaveRequest,
+              onSuccess: () => {
+                  // Wipe the whole leave domain — list, balance, pending queue.
+                  queryClient.invalidateQueries({ queryKey: leaveKeys.all });
+                  toast.success('Leave request submitted.');
+              },
+              onError: (err) => {
+                  const msg = isAxiosError<{ message?: string }>(err)
+                      ? err.response?.data?.message ?? 'Failed to submit request.'
+                      : 'Failed to submit request.';
+                  toast.error(msg);
+              },
+          });
+      };
+
+  Note we invalidate `leaveKeys.all` (the root) rather than
+  individual keys — invalidating the parent invalidates every
+  descendant, which is what we want here.
+
+  STEP 3 — Route
+  src/routes.ts:
+
+      newLeave: () => '/leaves/new' as const,
+
+  STEP 4 — The form page
+  NEW FILE: src/components/NewLeaveRequestPage.tsx
+
+      import { useForm } from 'react-hook-form';
+      import { zodResolver } from '@hookform/resolvers/zod';
+      import { useNavigate } from 'react-router-dom';
+      import clsx from 'clsx';
+      import {
+          leaveRequestSchema,
+          LeaveRequestFormValues,
+      } from '../schemas/leaveRequestSchema';
+      import { useCreateLeaveRequest } from '../Queries/useCreateLeaveRequest';
+      import { useLeaveBalance } from '../Queries/useLeaveBalance';
+      import { computeBusinessDays } from '../utils/leaveHelpers';
+      import { routes } from '../routes';
+
+      const NewLeaveRequestPage = () => {
+          const navigate = useNavigate();
+          const balanceQuery = useLeaveBalance();
+          const createMutation = useCreateLeaveRequest();
+
+          const {
+              register,
+              handleSubmit,
+              watch,
+              formState: { errors, isSubmitting, isValid },
+          } = useForm<LeaveRequestFormValues>({
+              resolver: zodResolver(leaveRequestSchema),
+              mode: 'onChange',
+              defaultValues: { startDate: '', endDate: '',
+                               type: 'Annual', reason: '' },
+          });
+
+          // Watch the date and type fields for live computations.
+          const [startDate, endDate, type] = watch(['startDate', 'endDate', 'type']);
+          const days = computeBusinessDays(startDate, endDate);
+          const remaining = balanceQuery.data?.remaining ?? 0;
+          const wouldExceedBalance =
+              type !== 'Unpaid' && days > 0 && days > remaining;
+
+          const onSubmit = (values: LeaveRequestFormValues) => {
+              createMutation.mutate(values, {
+                  onSuccess: () => navigate(routes.myLeaves()),
+              });
+          };
+
+          const inputClass = (hasError: boolean) =>
+              clsx(
+                  'w-full rounded shadow-sm',
+                  hasError
+                      ? 'border-red-500 focus:border-red-500 focus:ring-red-500'
+                      : 'border-gray-300 focus:border-brand-500 focus:ring-brand-500',
+              );
+
+          return (
+              <div className="max-w-lg mx-auto p-6">
+                  <h1 className="text-2xl font-semibold mb-4">Request Leave</h1>
+
+                  <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 card">
+
+                      {/* ── Type ────────────────────────────────────── */}
+                      <div>
+                          <label className="block text-sm font-medium mb-1">Type</label>
+                          <select {...register('type')}
+                                  className={inputClass(!!errors.type)}>
+                              <option value="Annual">Annual</option>
+                              <option value="Sick">Sick</option>
+                              <option value="Unpaid">Unpaid</option>
+                          </select>
+                          {errors.type && (
+                              <p className="mt-1 text-sm text-red-600">{errors.type.message}</p>
+                          )}
+                      </div>
+
+                      {/* ── Dates (native input for now; 29.4 swaps for a picker) ── */}
+                      <div className="grid grid-cols-2 gap-3">
+                          <div>
+                              <label className="block text-sm font-medium mb-1">Start date</label>
+                              <input type="date" {...register('startDate')}
+                                     className={inputClass(!!errors.startDate)} />
+                              {errors.startDate && (
+                                  <p className="mt-1 text-sm text-red-600">{errors.startDate.message}</p>
+                              )}
+                          </div>
+                          <div>
+                              <label className="block text-sm font-medium mb-1">End date</label>
+                              <input type="date" {...register('endDate')}
+                                     className={inputClass(!!errors.endDate)} />
+                              {errors.endDate && (
+                                  <p className="mt-1 text-sm text-red-600">{errors.endDate.message}</p>
+                              )}
+                          </div>
+                      </div>
+
+                      {/* ── Live computed line ──────────────────────── */}
+                      {days > 0 && (
+                          <div className={clsx(
+                              'p-3 rounded text-sm',
+                              wouldExceedBalance
+                                  ? 'bg-red-50 text-red-700 border border-red-200'
+                                  : 'bg-blue-50 text-blue-700 border border-blue-200',
+                          )}>
+                              {days} business day{days === 1 ? '' : 's'}
+                              {type !== 'Unpaid' && (
+                                  <> · {wouldExceedBalance
+                                      ? `exceeds remaining balance (${remaining} left)`
+                                      : `${remaining - days} remaining after this request`}
+                                  </>
+                              )}
+                          </div>
+                      )}
+
+                      {/* ── Reason ──────────────────────────────────── */}
+                      <div>
+                          <label className="block text-sm font-medium mb-1">Reason</label>
+                          <textarea {...register('reason')}
+                                    rows={3}
+                                    className={inputClass(!!errors.reason)} />
+                          {errors.reason && (
+                              <p className="mt-1 text-sm text-red-600">{errors.reason.message}</p>
+                          )}
+                      </div>
+
+                      <div className="flex gap-2 justify-end">
+                          <button type="button" className="btn-secondary"
+                                  onClick={() => navigate(routes.myLeaves())}>
+                              Cancel
+                          </button>
+                          <button type="submit"
+                                  disabled={!isValid || wouldExceedBalance
+                                            || isSubmitting || createMutation.isPending}
+                                  className="btn-primary">
+                              {createMutation.isPending ? 'Submitting…' : 'Submit request'}
+                          </button>
+                      </div>
+                  </form>
+              </div>
+          );
+      };
+
+      export default NewLeaveRequestPage;
+
+  STEP 5 — Mount the route + link
+  In App.tsx:
+
+      { path: routes.newLeave(), element: <NewLeaveRequestPage /> },
+
+  On MyLeavesPage, add a Request button next to the year selector:
+
+      import { Link } from 'react-router-dom';
+      // ...
+      <Link to={routes.newLeave()} className="btn-primary">
+          Request leave
+      </Link>
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Use `watch()` for the FEW fields that need live computations.
+    Watching everything re-renders on every keystroke.
+  - `<input type="date">` is good enough for this round. 29.4
+    swaps for react-day-picker.
+  - The UX gate (`wouldExceedBalance`) is for user feedback. The
+    server still independently rejects — defense in depth.
+  - Plural-aware text: `${days} day${days === 1 ? '' : 's'}` is a
+    cheap-and-cheerful pluralisation. Round 46 introduces i18n
+    for the real solution.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - RHF `watch()` for live-computed UI.
+  - The UX-gate vs server-gate distinction in practice.
+  - Plural-aware text without i18n.
 
 
-CHALLENGE 29.4 — Date pickers + react-day-picker             Target: 30 min
+CHALLENGE 29.4 — Date pickers (react-day-picker)             Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Native <input type="date"> works but is browser-dependent and
-    can't disable weekends. For ranges + business-day disabling, a
-    library is needed.
-  - `react-day-picker`: small, headless, integrates with RHF via
-    Controller (next challenge teaches that).
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Native <input type="date"> works but has problems:
+   - UI varies wildly across browsers/OSs.
+   - You can't disable weekends or holidays.
+   - You can't show a range selection (start AND end together).
 
-  TASK:
-  1. npm install react-day-picker
-  2. Replace start/end date inputs with day pickers.
-  3. Disable Saturdays + Sundays.
+  `react-day-picker` is the de-facto React calendar component. It
+  handles single-date and date-range modes, disabled days, locale,
+  and is fully styleable. This challenge swaps the native inputs
+  for a single range picker.
 
-  RULES:
-  - Keep the underlying value as an ISO string. Convert at the picker
-    boundary.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Date pickers are non-trivial. Reach for a library; don't build one.
+  1) Headless / unstyled libraries
+     - react-day-picker ships almost no styles. You bring your own
+       (Tailwind in our case).
+     - The library exports a CSS file you can opt into for a
+       starting point.
+
+  2) Range mode
+     - `<DayPicker mode="range" selected={range} onSelect={setRange}
+                   disabled={{ dayOfWeek: [0, 6] }} />`
+     - `range` is `{ from: Date | undefined; to: Date | undefined }`.
+     - `disabled` accepts predicates or rule objects. `{ dayOfWeek:
+       [0, 6] }` disables Sundays and Saturdays.
+
+  3) Popover positioning
+     - Calendars take a lot of space. Render in a popover/dialog
+       so the form layout stays compact.
+     - For simplicity here: render INLINE below an input that
+       displays the selected range as text.
+
+  4) Date ↔ string conversion at the boundary
+     - DayPicker uses Date objects.
+     - Your form (and Zod schema) uses yyyy-mm-dd strings.
+     - Convert at the boundary: a tiny `formatISO` and
+       `parseISO`-style pair.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    package.json                              (react-day-picker)
+    src/components/DateRangePicker.tsx        (NEW wrapper)
+    src/components/NewLeaveRequestPage.tsx    (use the picker)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Install
+
+      npm install react-day-picker
+      npm install date-fns         # peer dependency, also used elsewhere
+
+  STEP 2 — The wrapper component
+  NEW FILE: src/components/DateRangePicker.tsx
+
+      // Wraps react-day-picker into a small component with a
+      // string-based contract — fits straight into the leave form's
+      // ISO-date schema.
+      import { useState } from 'react';
+      import { DayPicker, DateRange } from 'react-day-picker';
+      import { format } from 'date-fns';
+      import 'react-day-picker/dist/style.css';
+
+      interface DateRangePickerProps {
+          startDate: string;        // ISO date string ('' if unset)
+          endDate: string;
+          onChange: (next: { startDate: string; endDate: string }) => void;
+      }
+
+      const toIso = (d: Date | undefined) => d ? format(d, 'yyyy-MM-dd') : '';
+      const fromIso = (s: string): Date | undefined =>
+          s ? new Date(`${s}T00:00:00`) : undefined;
+
+      const DateRangePicker = ({ startDate, endDate, onChange }: DateRangePickerProps) => {
+          const [open, setOpen] = useState(false);
+
+          const range: DateRange | undefined = startDate || endDate
+              ? { from: fromIso(startDate), to: fromIso(endDate) }
+              : undefined;
+
+          const handleSelect = (next: DateRange | undefined) => {
+              onChange({
+                  startDate: toIso(next?.from),
+                  endDate: toIso(next?.to ?? next?.from),
+              });
+          };
+
+          const label = startDate && endDate
+              ? `${format(new Date(startDate), 'MMM d')} → ${format(new Date(endDate), 'MMM d, yyyy')}`
+              : startDate
+                  ? `${format(new Date(startDate), 'MMM d, yyyy')}…`
+                  : 'Pick dates';
+
+          return (
+              <div>
+                  <button type="button"
+                          onClick={() => setOpen(o => !o)}
+                          className="w-full text-left rounded border-gray-300
+                                     bg-white dark:bg-gray-800 shadow-sm px-3 py-2 text-sm">
+                      {label}
+                  </button>
+
+                  {open && (
+                      <div className="mt-2 inline-block p-2 rounded border
+                                      bg-white dark:bg-gray-800 shadow">
+                          <DayPicker
+                              mode="range"
+                              selected={range}
+                              onSelect={handleSelect}
+                              disabled={{ dayOfWeek: [0, 6] }}
+                              numberOfMonths={1}
+                              showOutsideDays
+                          />
+                          <div className="flex justify-end">
+                              <button type="button"
+                                      onClick={() => setOpen(false)}
+                                      className="text-sm text-brand-600">
+                                  Done
+                              </button>
+                          </div>
+                      </div>
+                  )}
+              </div>
+          );
+      };
+
+      export default DateRangePicker;
+
+  Anatomy:
+   - `mode="range"` gives the range selector.
+   - `disabled={{ dayOfWeek: [0, 6] }}` greys out weekends.
+   - The toggle button shows a human-friendly label; the calendar
+     pops below.
+   - `next?.to ?? next?.from` — when the user has clicked once,
+     `to` is undefined; default to the same day so the range is
+     valid.
+
+  STEP 3 — Use it in NewLeaveRequestPage
+  Replace the two `<input type="date">` blocks. The picker needs
+  the form's setValue function from RHF to update the dates:
+
+      import { useForm } from 'react-hook-form';
+      // ...
+
+      const {
+          register,
+          handleSubmit,
+          watch,
+          setValue,                  // ← add this
+          formState: { errors, isSubmitting, isValid },
+      } = useForm<LeaveRequestFormValues>({
+          // ... same as before
+      });
+
+      // Replace the date-grid section with:
+      <div>
+          <label className="block text-sm font-medium mb-1">Dates</label>
+          <DateRangePicker
+              startDate={startDate ?? ''}
+              endDate={endDate ?? ''}
+              onChange={({ startDate, endDate }) => {
+                  setValue('startDate', startDate, { shouldValidate: true });
+                  setValue('endDate',   endDate,   { shouldValidate: true });
+              }}
+          />
+          {(errors.startDate || errors.endDate) && (
+              <p className="mt-1 text-sm text-red-600">
+                  {errors.endDate?.message || errors.startDate?.message}
+              </p>
+          )}
+      </div>
+
+  NEW HERE: `setValue(name, value, { shouldValidate: true })`
+  - Programmatically set a form field.
+  - `shouldValidate: true` triggers the Zod resolver — important
+    because the picker isn't using `register`, so without this,
+    isValid stays stale.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always convert at the BOUNDARY. DayPicker speaks Date; your
+    schema speaks ISO strings. The wrapper isolates the conversion.
+  - `new Date('2026-04-13')` parses as UTC midnight. Add the
+    `T00:00:00` suffix to parse as local midnight — avoids
+    "off-by-one" displays in timezones west of UTC.
+  - `setValue` with `shouldValidate` is critical for non-register
+    inputs. Without it, you'll see green submit buttons on
+    invalid forms.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - react-day-picker basics: mode, selected, onSelect, disabled.
+  - Wrapper pattern for type conversion at the boundary.
+  - `setValue` for programmatic RHF updates.
 
 
-CHALLENGE 29.5 — RHF Controller for custom inputs            Target: 25 min
+CHALLENGE 29.5 — RHF Controller for custom inputs            Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - RHF `register` only works on uncontrolled native inputs. Custom
-    components (react-day-picker, react-select) need the `Controller`
-    wrapper:
-       <Controller name="startDate" control={control} render={({ field }) => <DayPicker {...field} />} />
-  - `field` provides value + onChange. The custom component uses them.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  29.4 used `setValue` to bridge react-day-picker and RHF. That
+  works, but it's the heavy-handed version. The IDIOMATIC RHF
+  pattern is `<Controller>` — a wrapper that creates a fully
+  integrated field for any custom component. Less prop-drilling,
+  better TS inference, cleaner re-render boundaries.
 
-  TASK:
-  1. Wrap your day-picker with Controller.
-  2. Same for the type dropdown (if you used a styled <select>).
+  This challenge migrates the date picker to Controller and
+  applies the same pattern to a styled Type dropdown — two
+  examples of the same recipe so it sticks.
 
-  RULES:
-  - Use register for native inputs, Controller for custom components.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Controller is the "any custom input" escape hatch in RHF. Used in
-  most real-world forms.
+  1) `<Controller>` from RHF
+     - Replaces `register` for components RHF can't natively bind.
+     - Signature:
+         <Controller
+             name="fieldName"
+             control={control}
+             render={({ field, fieldState }) => (
+                 <YourCustomInput
+                     value={field.value}
+                     onChange={field.onChange}
+                     onBlur={field.onBlur}
+                 />
+             )}
+         />
+     - `field` exposes value, onChange, onBlur, ref, name.
+     - `fieldState` exposes error, isDirty, isTouched, invalid.
+
+  2) When to reach for Controller
+     - Native inputs (text, checkbox, radio, select, textarea):
+       use `register`. Fast, no extra render layer.
+     - Custom components, third-party libraries, anything that
+       doesn't forward refs to the underlying input: Controller.
+
+  3) Why Controller is "cleaner" than setValue
+     - `setValue` mutates form state from outside. RHF can't
+       always optimise that.
+     - Controller subscribes the form to that specific field
+       through a proper render-prop path. Re-renders are scoped.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/NewLeaveRequestPage.tsx  (swap setValue → Controller)
+    Optional: src/components/Select.tsx     (styled select, also via Controller)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Update NewLeaveRequestPage
+  Import Controller and refactor the date-range block:
+
+      import { useForm, Controller } from 'react-hook-form';
+      // ...
+
+      const {
+          register,
+          handleSubmit,
+          watch,
+          control,                   // ← grab control
+          formState: { errors, isSubmitting, isValid },
+      } = useForm<LeaveRequestFormValues>({ /* same as before */ });
+
+  Replace the date-range JSX with:
+
+      <div>
+          <label className="block text-sm font-medium mb-1">Dates</label>
+          <Controller
+              name="startDate"
+              control={control}
+              render={({ field: startField }) => (
+                  <Controller
+                      name="endDate"
+                      control={control}
+                      render={({ field: endField }) => (
+                          <DateRangePicker
+                              startDate={startField.value ?? ''}
+                              endDate={endField.value ?? ''}
+                              onChange={({ startDate, endDate }) => {
+                                  startField.onChange(startDate);
+                                  endField.onChange(endDate);
+                              }}
+                          />
+                      )}
+                  />
+              )}
+          />
+          {(errors.startDate || errors.endDate) && (
+              <p className="mt-1 text-sm text-red-600">
+                  {errors.endDate?.message || errors.startDate?.message}
+              </p>
+          )}
+      </div>
+
+  Two-field components nest two Controllers — one per field. The
+  inner render-prop sees both fields' onChange callbacks.
+
+  Validation triggers automatically because Controller's onChange
+  is the form's onChange. No more `{ shouldValidate: true }` flag.
+
+  STEP 2 — A styled select via Controller (optional polish)
+  If you want a custom-styled dropdown (or eventually
+  react-select), the pattern stays the same. For now, a styled
+  native select works fine via `register`:
+
+      <select {...register('type')} className={inputClass(!!errors.type)}>
+          <option value="Annual">Annual</option>
+          <option value="Sick">Sick</option>
+          <option value="Unpaid">Unpaid</option>
+      </select>
+
+  When you DO swap to a third-party Select (react-select, headless
+  UI's Listbox), it'll need Controller:
+
+      <Controller
+          name="type"
+          control={control}
+          render={({ field }) => (
+              <CustomSelect
+                  value={field.value}
+                  onChange={field.onChange}
+                  options={[
+                      { value: 'Annual', label: 'Annual' },
+                      { value: 'Sick',   label: 'Sick' },
+                      { value: 'Unpaid', label: 'Unpaid' },
+                  ]}
+              />
+          )}
+      />
+
+  STEP 3 — Verify
+   - Open /leaves/new.
+   - Pick a range using the picker. The form's isValid updates
+     immediately.
+   - The watch() in the live-computed line still works (watch is
+     orthogonal to Controller — both observe form state).
+   - Submit succeeds.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Use register for native inputs, Controller for everything
+    else. This is the canonical RHF rule of thumb.
+  - Nested Controllers for multi-field custom components. Or
+    flatten by exposing the picker's API in two halves — either
+    works, nested reads more naturally.
+  - Don't forget `control={control}`. Forgetting it produces a
+    cryptic error.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - `<Controller>` as the bridge to non-native inputs.
+  - Nested Controllers for multi-field components.
+  - Round 29 capstone: a fully wired employee-side request flow —
+    Zod schema, server-side balance + overlap guards, RHF form
+    with live previews, a real date-range picker, Controller-based
+    integration. Round 30 builds the manager side on top.
 
 
 ================================================================================
@@ -5968,98 +14286,1125 @@ ROUND 30 — FEATURE: LEAVE — APPROVAL FLOW (designed 2026-05-15)
 Pacing: One challenge per day. The manager view.
 
 
-CHALLENGE 30.1 — Manager role + pending queue endpoint      Target: 30 min
+CHALLENGE 30.1 — Manager role + pending queue endpoint       Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Add 'Manager' role. Seed one user with role=Manager.
-  2. GET /api/leave/pending — returns all Pending requests across
-     direct reports. (For simplicity: Manager sees everyone's pending
-     for now; team-scoping is a later refinement.)
-  3. queries/usePendingLeaveRequests.ts.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Round 28-29 built the EMPLOYEE side of leave. Round 30 is the
+  MANAGER side. The flow has two new pieces:
 
-  RULES:
-  - Admin can also approve. Authorization: roles in ['Manager',
-    'Admin'].
+  1. A new role — Manager — with permissions between Employee and
+     Admin (can decide on leaves, can't manage user records).
+  2. A pending-queue endpoint that returns every Pending request
+     for managers to act on.
 
-  WHAT YOU JUST LEARNED:
-  Role-scoped read endpoint. Same shape as admin documents.
+  Team-scoping (only see your direct reports) is a later
+  refinement; for now Manager sees the whole org's pending list,
+  which matches small-team reality.
+
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) `[Authorize(Roles = "Manager,Admin")]`
+     - Comma-separated list of roles in ONE attribute.
+     - Caller must have AT LEAST one of those roles.
+     - Equivalent to ASP.NET's role-policy machinery without
+       extra config.
+
+  2) Sort order matters
+     - The pending queue should show OLDEST first — first come,
+       first served. Sort by CreatedAt ascending.
+     - Tiny detail. Sort wrong and managers act on the wrong
+       request first.
+
+  3) Seeding a Manager for testing
+     - Easiest path: manually add a row to employees.json with
+       Role="Manager" and a known username/password hash.
+     - In Round 39's onboarding wizard, you'll build the UI for
+       this. Today, manual JSON is fine.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.API/Controllers/LeaveController.cs   (add GetPending)
+    EmployeeManager.Application/Services/ILeaveService.cs (add GetPendingAsync)
+    EmployeeManager.Application/Services/LeaveService.cs (impl)
+    employees.json                                        (seed a Manager row)
+    src/services/api.ts                                  (fetchPendingLeaves)
+    src/Queries/usePendingLeaves.ts                      (NEW)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Service method
+  Update ILeaveService.cs:
+
+      Task<List<LeaveRequest>> GetPendingAsync();
+
+  In LeaveService.cs:
+
+      public async Task<List<LeaveRequest>> GetPendingAsync()
+      {
+          var all = await _repo.GetAllAsync();
+          return all
+              .Where(r => r.Status == LeaveStatus.Pending)
+              .OrderBy(r => r.CreatedAt)     // oldest first
+              .ToList();
+      }
+
+  STEP 2 — Controller action
+  Append to LeaveController.cs:
+
+      [HttpGet("pending")]
+      [Authorize(Roles = "Manager,Admin")]
+      public async Task<IActionResult> GetPending()
+          => Ok(await _leave.GetPendingAsync());
+
+  Test: log in as admin, hit GET /api/leave/pending. Get back the
+  Pending rows you seeded in 28.4 (or anything from 29.3).
+
+  STEP 3 — Seed a Manager
+  Open EmployeeManager.API/bin/Debug/net10.0/Data/employees.json.
+  Add a row:
+
+      {
+          "Id": "33333333-3333-3333-3333-333333333333",
+          "FirstName": "Maya",
+          "LastName": "Manager",
+          "Email": "maya@local",
+          "Department": "Engineering",
+          "Position": "Engineering Manager",
+          "Salary": 0,
+          "DateOfJoining": "2024-01-01T00:00:00",
+          "IsActive": true,
+          "PhoneNumber": "",
+          "Username": "maya",
+          "PasswordHash": "<hash of 'maya1@34' from your HashPassword>",
+          "Role": "Manager",
+          "MustChangePassword": false
+      }
+
+  Easiest way to get the PasswordHash: temporarily set
+  MustChangePassword=true on admin, log in, change password to
+  "maya1@34", copy admin's new PasswordHash into Maya's row, then
+  restore admin's password back to admin123.
+
+  STEP 4 — Client API + hook
+  Append to src/services/api.ts:
+
+      export const fetchPendingLeaves = () =>
+          api.get<LeaveRequest[]>('/leave/pending');
+
+  NEW FILE: src/Queries/usePendingLeaves.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { fetchPendingLeaves } from '../services/api';
+      import { leaveKeys } from './leaveKeys';
+      import { useAuth } from '../Context/AuthContext';
+
+      export const usePendingLeaves = () => {
+          const { user } = useAuth();
+          return useQuery({
+              queryKey: leaveKeys.pending(),
+              queryFn: async () => (await fetchPendingLeaves()).data,
+              enabled: user?.role === 'Manager' || user?.role === 'Admin',
+              staleTime: 0,           // queue churn — always fresh
+          });
+      };
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - `[Authorize(Roles = "Manager,Admin")]` — comma in ONE attribute,
+    not multiple attributes. Stacking attributes AND-s them; commas
+    OR them.
+  - Sort ascending by CreatedAt. Newest-first leaves old requests
+    rotting at the bottom.
+  - The hook's `enabled` clause prevents non-authorised users from
+    issuing a guaranteed-403 request.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Multi-role authorization via comma list.
+  - Queue ordering as an explicit design decision.
+  - Conditional `enabled` based on role.
 
 
-CHALLENGE 30.2 — Pending queue page                          Target: 35 min
+CHALLENGE 30.2 — Pending queue page                          Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. /manager/leaves/pending route — guarded.
-  2. Table: requester, dates, days, type, reason, actions.
-  3. Empty state: "No pending requests."
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  The manager's daily-driver page. Lists every pending request
+  with enough context (requester, dates, days, reason) to decide
+  on the spot. Approve/Reject buttons land in 30.4; this challenge
+  builds the layout + empty state.
 
-  RULES:
-  - Sort by createdAt asc (oldest first).
-  - Reuse Tailwind table patterns from Round 21.3.
+  By now the "role-guarded route + Tailwind table + empty state"
+  recipe should feel mechanical. The interesting thing is the
+  ergonomic details: requester name lookup, day-count clarity,
+  reason-truncation with expand-on-click.
 
-  WHAT YOU JUST LEARNED:
-  Another role-gated page. By now this is rote.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Joining data on the client
+     - The pending list has `employeeUsername` but not the full
+       name. A second hook (`useEmployees`) supplies names.
+     - Pattern: derive a Map<username, fullName> with useMemo;
+       look up per row.
+     - For larger systems you'd return the joined data from the
+       server (a `LeaveRequestWithEmployee` DTO). For our scale
+       client-side join is fine.
+
+  2) Truncate-and-expand UX
+     - Long reasons clipped to one line by default.
+     - Click → expand inline. Tiny stateful row.
+     - Pattern: a per-row `expanded` boolean. Easier when each
+       row is its own component (`PendingLeaveRow`).
+
+  3) `<details>` and `<summary>`
+     - Native HTML elements for show/hide. Free keyboard
+       support, no JS state.
+     - Style with `[&_summary]:list-none` Tailwind variants if
+       you don't want the default disclosure triangle.
+     - Use when collapse/expand is purely visual.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/routes.ts                              (pendingLeaves())
+    src/components/PendingLeavesPage.tsx       (NEW)
+    src/components/PendingLeaveRow.tsx         (NEW)
+    src/App.tsx                                (role-guarded route)
+    src/Context/AuthLayout.tsx                 (manager nav link)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Route helper
+  src/routes.ts:
+
+      pendingLeaves: () => '/manager/leaves/pending' as const,
+
+  STEP 2 — Row component
+  NEW FILE: src/components/PendingLeaveRow.tsx
+
+      import { format } from 'date-fns';
+      import type { LeaveRequest } from '../Types/Leave';
+
+      interface PendingLeaveRowProps {
+          request: LeaveRequest;
+          employeeName: string;       // resolved by parent
+      }
+
+      const PendingLeaveRow = ({ request, employeeName }: PendingLeaveRowProps) => (
+          <tr>
+              <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                  {employeeName}
+                  <p className="text-xs text-gray-400">@{request.employeeUsername}</p>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {request.type}
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {format(new Date(request.startDate), 'MMM d')} →{' '}
+                  {format(new Date(request.endDate), 'MMM d, yyyy')}
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {request.days}
+              </td>
+              <td className="px-6 py-4 text-sm text-gray-600">
+                  <details className="cursor-pointer">
+                      <summary className="line-clamp-1 list-none">
+                          {request.reason}
+                      </summary>
+                      <p className="mt-1 whitespace-pre-wrap">{request.reason}</p>
+                  </details>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
+                  {format(new Date(request.createdAt), 'MMM d')}
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+                  {/* Action buttons land in 30.4 */}
+                  <span className="text-gray-400">—</span>
+              </td>
+          </tr>
+      );
+
+      export default PendingLeaveRow;
+
+  NEW HERE: `line-clamp-N`
+  - Tailwind utility for clamping text to N lines with an
+    ellipsis.
+  - Requires the `@tailwindcss/line-clamp` plugin in older
+    versions. Tailwind 3.3+ ships it built-in.
+
+  STEP 3 — The page
+  NEW FILE: src/components/PendingLeavesPage.tsx
+
+      import { useMemo } from 'react';
+      import { usePendingLeaves } from '../Queries/usePendingLeaves';
+      import { useEmployees } from '../Queries/useEmployees';
+      import PendingLeaveRow from './PendingLeaveRow';
+
+      const PendingLeavesPage = () => {
+          const pending = usePendingLeaves();
+          const employees = useEmployees();
+
+          // Map usernames to full names for display.
+          const nameByUsername = useMemo(() => {
+              const map = new Map<string, string>();
+              employees.data?.forEach(e => {
+                  if (e.username) {
+                      map.set(e.username, `${e.firstName} ${e.lastName}`);
+                  }
+              });
+              return map;
+          }, [employees.data]);
+
+          if (pending.isLoading || employees.isLoading) {
+              return <p className="p-6 text-gray-500">Loading…</p>;
+          }
+          if (pending.isError) {
+              return <p className="p-6 text-red-600">Failed to load pending leaves.</p>;
+          }
+
+          return (
+              <div className="max-w-6xl mx-auto p-6">
+                  <h1 className="text-2xl font-semibold mb-4">Pending Leave Requests</h1>
+
+                  {pending.data && pending.data.length > 0 ? (
+                      <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+                          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                              <thead className="bg-gray-50 dark:bg-gray-900">
+                                  <tr>
+                                      <th className="px-6 py-3 text-left text-xs uppercase
+                                                     tracking-wider text-gray-500">Requester</th>
+                                      <th className="px-6 py-3 text-left text-xs uppercase
+                                                     tracking-wider text-gray-500">Type</th>
+                                      <th className="px-6 py-3 text-left text-xs uppercase
+                                                     tracking-wider text-gray-500">Dates</th>
+                                      <th className="px-6 py-3 text-left text-xs uppercase
+                                                     tracking-wider text-gray-500">Days</th>
+                                      <th className="px-6 py-3 text-left text-xs uppercase
+                                                     tracking-wider text-gray-500">Reason</th>
+                                      <th className="px-6 py-3 text-left text-xs uppercase
+                                                     tracking-wider text-gray-500">Submitted</th>
+                                      <th className="px-6 py-3"></th>
+                                  </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                                  {pending.data.map(r => (
+                                      <PendingLeaveRow
+                                          key={r.id}
+                                          request={r}
+                                          employeeName={
+                                              nameByUsername.get(r.employeeUsername)
+                                              ?? r.employeeUsername
+                                          }
+                                      />
+                                  ))}
+                              </tbody>
+                          </table>
+                      </div>
+                  ) : (
+                      <div className="card text-center text-gray-500">
+                          No pending requests. Everyone's caught up.
+                      </div>
+                  )}
+              </div>
+          );
+      };
+
+      export default PendingLeavesPage;
+
+  STEP 4 — Register with the role guard
+  In App.tsx:
+
+      {
+          element: <ProtectedRoute roles={['Manager', 'Admin']} />,
+          children: [
+              {
+                  element: <AuthLayout />,
+                  children: [
+                      { path: routes.pendingLeaves(),
+                        element: <PendingLeavesPage /> },
+                  ],
+              },
+          ],
+      },
+
+  Note `roles={['Manager', 'Admin']}` — both can access.
+
+  STEP 5 — Conditional nav link
+  In AuthLayout.tsx:
+
+      {(user?.role === 'Manager' || user?.role === 'Admin') && (
+          <NavLink to={routes.pendingLeaves()}>Pending Leaves</NavLink>
+      )}
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Build the name lookup with useMemo. Without it, the Map is
+    rebuilt on every render and every row's name resolution
+    re-runs.
+  - `Map.get` returns `undefined` if missing. Always fall back to
+    the username so unmapped rows don't show blank.
+  - `<details>` + `<summary>` is the native disclosure pattern.
+    No JS state, perfect keyboard, perfect screen reader. Use it
+    whenever possible.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Client-side join via a derived Map.
+  - `<details>`/`<summary>` for free disclosure UX.
+  - Multi-role route guard.
+  - The "everyone caught up" empty-state copy — small UX touches
+    matter.
 
 
-CHALLENGE 30.3 — Approve + reject endpoints                  Target: 30 min
+CHALLENGE 30.3 — Approve + reject endpoints                  Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. POST /api/leave/{id}/approve { note? }.
-  2. POST /api/leave/{id}/reject { note: string (required) }.
-  3. Server checks: caller is Manager/Admin, status is currently
-     Pending, updates status + decidedBy + decidedAt + decisionNote.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Two outcomes, two endpoints. /approve and /reject — not a
+  generic /decide with an action in the body. Explicit beats
+  clever: separate URLs are clearer in API docs, easier to log,
+  and each has its own validation rules (rejection note required,
+  approval note optional).
 
-  RULES:
-  - Rejection note REQUIRED (it's the reason the employee gets).
-  - Approval note optional.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Two endpoints for two outcomes — vs. a generic /decide endpoint
-  with action in body. Explicit > clever.
+  1) Status transition guards
+     - The service must verify the request is currently `Pending`
+       before transitioning to Approved or Rejected.
+     - Approving an already-approved request is a no-op at best,
+       a duplicate-action at worst. Reject with 409 Conflict.
+
+  2) Capturing decision metadata
+     - DecidedAt, DecidedByUsername, DecisionNote — set on every
+       transition. Audit trail starts here.
+     - These fields exist in LeaveRequest from 28.1; now they get
+       populated.
+
+  3) `409 Conflict` for invalid state transitions
+     - 400 (Bad Request) is for malformed input.
+     - 409 (Conflict) is for "your request is well-formed but
+       conflicts with current state."
+     - "Approve an already-approved request" is the canonical 409.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/LeaveDecisionRequest.cs   (NEW DTO)
+    EmployeeManager.Application/Services/ILeaveService.cs   (add ApproveAsync, RejectAsync)
+    EmployeeManager.Application/Services/LeaveService.cs    (impl)
+    EmployeeManager.API/Controllers/LeaveController.cs      (two new actions)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — DTO
+  NEW FILE: EmployeeManager.Domain/Models/LeaveDecisionRequest.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public class LeaveDecisionRequest
+      {
+          public string? Note { get; set; }
+      }
+
+  STEP 2 — Result type + service methods
+  Add to LeaveService.cs or its own file:
+
+      public record DecisionResult(bool Success, string? Error);
+
+  Update ILeaveService.cs:
+
+      Task<DecisionResult> ApproveAsync(string deciderUsername, Guid id, string? note);
+      Task<DecisionResult> RejectAsync (string deciderUsername, Guid id, string note);
+
+  In LeaveService.cs:
+
+      public async Task<DecisionResult> ApproveAsync(
+          string deciderUsername, Guid id, string? note)
+      {
+          var req = await _repo.GetByIdAsync(id);
+          if (req is null) return new(false, "Not found.");
+          if (req.Status != LeaveStatus.Pending)
+              return new(false, "Request is not pending.");
+
+          req.Status = LeaveStatus.Approved;
+          req.DecidedAt = DateTime.UtcNow;
+          req.DecidedByUsername = deciderUsername;
+          req.DecisionNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+
+          await _repo.UpdateAsync(req);
+          return new(true, null);
+      }
+
+      public async Task<DecisionResult> RejectAsync(
+          string deciderUsername, Guid id, string note)
+      {
+          if (string.IsNullOrWhiteSpace(note) || note.Trim().Length < 5)
+              return new(false, "Rejection requires a note (min 5 characters).");
+
+          var req = await _repo.GetByIdAsync(id);
+          if (req is null) return new(false, "Not found.");
+          if (req.Status != LeaveStatus.Pending)
+              return new(false, "Request is not pending.");
+
+          req.Status = LeaveStatus.Rejected;
+          req.DecidedAt = DateTime.UtcNow;
+          req.DecidedByUsername = deciderUsername;
+          req.DecisionNote = note.Trim();
+
+          await _repo.UpdateAsync(req);
+          return new(true, null);
+      }
+
+  STEP 3 — Controller actions
+  Append to LeaveController.cs:
+
+      // POST /api/leave/{id}/approve
+      [HttpPost("{id:guid}/approve")]
+      [Authorize(Roles = "Manager,Admin")]
+      public async Task<IActionResult> Approve(
+          Guid id, [FromBody] LeaveDecisionRequest? body = null)
+      {
+          var (caller, _) = Caller();
+          var result = await _leave.ApproveAsync(caller, id, body?.Note);
+          if (!result.Success)
+          {
+              return result.Error switch
+              {
+                  "Not found." => NotFound(),
+                  _            => Conflict(new { message = result.Error }),
+              };
+          }
+          return Ok(new { message = "Approved." });
+      }
+
+      // POST /api/leave/{id}/reject
+      [HttpPost("{id:guid}/reject")]
+      [Authorize(Roles = "Manager,Admin")]
+      public async Task<IActionResult> Reject(
+          Guid id, [FromBody] LeaveDecisionRequest body)
+      {
+          var (caller, _) = Caller();
+          var result = await _leave.RejectAsync(caller, id, body?.Note ?? string.Empty);
+          if (!result.Success)
+          {
+              return result.Error switch
+              {
+                  "Not found."                     => NotFound(),
+                  string s when s.StartsWith("Rejection requires") => BadRequest(new { message = result.Error }),
+                  _                                => Conflict(new { message = result.Error }),
+              };
+          }
+          return Ok(new { message = "Rejected." });
+      }
+
+  NEW HERE: pattern matching in switch
+  - `string s when s.StartsWith("...")` is a guard clause.
+  - Matches any string AND when the predicate is true.
+
+  Test in your HTTP client:
+   - POST /api/leave/{id}/approve as admin → 200, status flipped.
+   - POST again on the same id → 409 (already-decided).
+   - POST /api/leave/{id}/reject with `{ "note": "ok" }` (too short)
+     → 400.
+   - With a proper note → 200, status=Rejected.
+   - As a non-manager → 403.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always guard the status transition. Trusting "the client knows
+    the state" guarantees double-approvals.
+  - 409 for state conflicts, 400 for validation, 404 for missing.
+    These distinctions matter when the client decides which error
+    to render and which to retry.
+  - Reject note minimum length keeps the audit trail useful.
+    "no" doesn't help the employee improve.
+  - The Approve body is OPTIONAL. The Reject body is REQUIRED with
+    a meaningful note. Different domain rules.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Two explicit endpoints over one generic-with-action endpoint.
+  - 409 Conflict for invalid state transitions.
+  - Pattern matching with `when` guards in C# switch expressions.
+  - Asymmetric request validation (optional vs required note).
 
 
-CHALLENGE 30.4 — Approve/reject UI + mutations              Target: 35 min
+CHALLENGE 30.4 — Approve/reject UI + multi-key invalidation  Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. useApproveLeaveRequest, useRejectLeaveRequest mutations.
-  2. Approve = inline button + confirm modal (optional note).
-  3. Reject = button → modal with required reason textarea.
-  4. On success: invalidate pending list + the requester's balance +
-     their leave list.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Approving a leave changes MANY caches: the pending queue (row
+  disappears), the requester's "my leaves" list (status flips),
+  the requester's balance (Pending count drops, Used rises).
+  This challenge teaches the "invalidate the domain root" trick —
+  one call wipes every related cache.
 
-  RULES:
-  - Optimistic? Skip — the row vanishes from "pending" after; let
-    the refetch happen.
-  - Invalidate MULTIPLE keys (pending list + per-user balance/list).
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Multi-key invalidation. One write, several caches go stale.
+  1) Hierarchical invalidation
+     - `queryClient.invalidateQueries({ queryKey: leaveKeys.all })`
+       invalidates `['leave']` AND every key that starts with it
+       (`['leave', 'mine', 2026]`, `['leave', 'balance', 'current', 'me']`,
+       `['leave', 'pending']`).
+     - This is why we structured query keys hierarchically.
+
+  2) Inline modal vs side-modal
+     - Approve = optional note, low friction → confirm modal with
+       a textarea (not required).
+     - Reject = required note, high friction → fuller modal with
+       focus on the note. Same component (ConfirmWithReasonModal
+       from Round 27.3) — reused.
+
+  3) Skipping optimistic for "vanishing rows"
+     - Optimistic delete keeps the UI responsive but adds rollback
+       complexity.
+     - For a row that DISAPPEARS from one view (pending queue) and
+       APPEARS in another (closed history), the rollback gets
+       ugly. Skip optimistic; let the invalidation refetch.
+     - Rule of thumb: optimistic for instant-feedback hot paths;
+       refetch for state-machine transitions.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/services/api.ts                      (approve/reject methods)
+    src/Queries/useApproveLeave.ts           (NEW)
+    src/Queries/useRejectLeave.ts            (NEW)
+    src/components/PendingLeaveRow.tsx       (action buttons)
+    src/components/PendingLeavesPage.tsx     (modal state + handlers)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — API methods
+  Append to src/services/api.ts:
+
+      export const approveLeave = (id: string, note?: string) =>
+          api.post(`/leave/${id}/approve`, { note });
+
+      export const rejectLeave = (id: string, note: string) =>
+          api.post(`/leave/${id}/reject`, { note });
+
+  STEP 2 — Mutation hooks
+  NEW FILE: src/Queries/useApproveLeave.ts
+
+      import { useMutation, useQueryClient } from '@tanstack/react-query';
+      import { toast } from 'react-toastify';
+      import { isAxiosError } from 'axios';
+      import { approveLeave } from '../services/api';
+      import { leaveKeys } from './leaveKeys';
+
+      type ApproveArgs = { id: string; note?: string };
+
+      export const useApproveLeave = () => {
+          const queryClient = useQueryClient();
+          return useMutation({
+              mutationFn: ({ id, note }: ApproveArgs) => approveLeave(id, note),
+              onSuccess: () => {
+                  // Invalidate the whole leave domain in one shot.
+                  queryClient.invalidateQueries({ queryKey: leaveKeys.all });
+                  toast.success('Leave approved.');
+              },
+              onError: (err) => {
+                  const msg = isAxiosError<{ message?: string }>(err)
+                      ? err.response?.data?.message ?? 'Approval failed.'
+                      : 'Approval failed.';
+                  toast.error(msg);
+              },
+          });
+      };
+
+  NEW FILE: src/Queries/useRejectLeave.ts (parallel shape):
+
+      import { useMutation, useQueryClient } from '@tanstack/react-query';
+      import { toast } from 'react-toastify';
+      import { isAxiosError } from 'axios';
+      import { rejectLeave } from '../services/api';
+      import { leaveKeys } from './leaveKeys';
+
+      type RejectArgs = { id: string; note: string };
+
+      export const useRejectLeave = () => {
+          const queryClient = useQueryClient();
+          return useMutation({
+              mutationFn: ({ id, note }: RejectArgs) => rejectLeave(id, note),
+              onSuccess: () => {
+                  queryClient.invalidateQueries({ queryKey: leaveKeys.all });
+                  toast.success('Leave rejected.');
+              },
+              onError: (err) => {
+                  const msg = isAxiosError<{ message?: string }>(err)
+                      ? err.response?.data?.message ?? 'Rejection failed.'
+                      : 'Rejection failed.';
+                  toast.error(msg);
+              },
+          });
+      };
+
+  STEP 3 — Action buttons in PendingLeaveRow
+  Add two props to PendingLeaveRowProps:
+
+      onApprove: (id: string) => void;     // opens approve modal
+      onReject:  (id: string) => void;     // opens reject modal
+
+  Replace the placeholder `—` actions cell:
+
+      <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+          <button onClick={() => onApprove(request.id)}
+                  className="text-brand-600 hover:text-brand-800 mr-3">
+              Approve
+          </button>
+          <button onClick={() => onReject(request.id)}
+                  className="text-red-600 hover:text-red-800">
+              Reject
+          </button>
+      </td>
+
+  STEP 4 — Modal state + handlers in PendingLeavesPage
+  At the top of the page, after the existing state:
+
+      import { useState } from 'react';
+      import { useApproveLeave } from '../Queries/useApproveLeave';
+      import { useRejectLeave }  from '../Queries/useRejectLeave';
+      import ConfirmWithReasonModal from './ConfirmWithReasonModal';
+
+      // Inside the component:
+      const approveMutation = useApproveLeave();
+      const rejectMutation  = useRejectLeave();
+      const [pendingApprove, setPendingApprove] = useState<string | null>(null);
+      const [pendingReject,  setPendingReject]  = useState<string | null>(null);
+
+  Pass handlers to the rows:
+
+      <PendingLeaveRow
+          key={r.id}
+          request={r}
+          employeeName={...}
+          onApprove={setPendingApprove}
+          onReject={setPendingReject}
+      />
+
+  Render the two modals at the bottom of the page:
+
+      <ConfirmWithReasonModal
+          open={!!pendingApprove}
+          title="Approve leave?"
+          message="Add an optional note for the requester."
+          minReasonLength={0}        // approval note is optional
+          onConfirm={(note) => {
+              if (pendingApprove) {
+                  approveMutation.mutate({
+                      id: pendingApprove,
+                      note: note || undefined,
+                  });
+                  setPendingApprove(null);
+              }
+          }}
+          onCancel={() => setPendingApprove(null)}
+      />
+
+      <ConfirmWithReasonModal
+          open={!!pendingReject}
+          title="Reject leave?"
+          message="Please share a reason. The requester will see it."
+          minReasonLength={5}
+          onConfirm={(note) => {
+              if (pendingReject) {
+                  rejectMutation.mutate({ id: pendingReject, note });
+                  setPendingReject(null);
+              }
+          }}
+          onCancel={() => setPendingReject(null)}
+      />
+
+  STEP 5 — Adjust ConfirmWithReasonModal if needed
+  Round 27.3's version expected a fixed minReasonLength of 5.
+  Make it respect `minReasonLength={0}` properly — when it's 0,
+  the textarea is optional and the button always enables:
+
+      // In the component:
+      const canConfirm = minReasonLength === 0
+          || reason.trim().length >= minReasonLength;
+
+  Test end-to-end:
+   - Log in as maya (Manager). Visit /manager/leaves/pending.
+   - Approve one request → toast, row disappears, list refetches.
+   - Log out, log in as admin. /leaves shows the approved request
+     with new status. Balance reflects the change.
+   - Repeat for reject. Confirm the requester's view shows the
+     rejection with the note.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Invalidate the domain root for state transitions. One line
+    of code beats five-line "invalidate each sub-key" boilerplate.
+  - Skip optimistic for state-machine moves. Refetch is simpler
+    and accurate.
+  - Modal state lives in the PAGE component (which child rows to
+    open), not in the row. Rows just emit "the user clicked X."
+  - The same ConfirmWithReasonModal serves both approve (optional)
+    and reject (required) — minReasonLength flag does the work.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Hierarchical cache invalidation.
+  - "Lift the state up" — modal state on the page, action callbacks
+    on the rows.
+  - When optimistic updates HURT instead of helping.
+  - Reusing one modal for asymmetric flows via prop tuning.
 
 
-CHALLENGE 30.5 — Notification to requester (toast/in-app)    Target: 25 min
+CHALLENGE 30.5 — In-app notifications via RecentActivityStore Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. When manager approves/rejects, add an entry to the
-     RecentActivityStore (Round 22.2) for the requester. (Real
-     real-time push comes in Round 32 / 46.)
-  2. Requester sees the entry on next page load.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  When a manager decides on a request, the EMPLOYEE should see
+  feedback. Real-time push lands in Round 32 (Notifications
+  feature) and Round 41 (SignalR). For now we use the simplest
+  thing that works: a server-side notifications endpoint the
+  employee polls, paired with toast feedback on the client side
+  for in-session events.
 
-  RULES:
-  - Don't try real-time yet. Reactive load is enough until SignalR
-    (Round 46).
+  This is "poor man's real-time." It's good enough for many
+  workflows AND it teaches you the data model + read/write
+  boundaries before the SignalR round abstracts them.
 
-  WHAT YOU JUST LEARNED:
-  The poor-man's notification — stash in a shared store; let the
-  consumer read on refresh. Bridges to real-time later.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Background work in a service
+     - When approving, the service does TWO things: update the
+       leave request AND create a notification row.
+     - Don't make the controller orchestrate. The service is the
+       transaction boundary.
+
+  2) "Side-effect store" pattern
+     - The notification is a side effect of approving — never the
+       main reason. If notification creation fails, the approval
+       should still succeed.
+     - Wrap the notification create in try/catch and log
+       failures, don't bubble.
+
+  3) Tiny notifications domain — preview of Round 32
+     - This challenge stands up a SKELETON notifications system:
+       a Notification model, an in-memory store (sufficient for
+       now), and a hook the requester polls.
+     - Round 32 builds the full feature (read/unread, history
+       page, bell icon).
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/Notification.cs            (NEW)
+    EmployeeManager.Application/Services/INotificationService.cs (NEW)
+    EmployeeManager.Application/Services/NotificationService.cs  (NEW)
+    EmployeeManager.Application/Services/LeaveService.cs     (inject + emit)
+    EmployeeManager.API/Controllers/NotificationsController.cs (NEW)
+    EmployeeManager.API/Program.cs                            (DI)
+    src/Types/Notification.ts                                 (NEW)
+    src/services/api.ts                                       (fetchMyNotifications)
+    src/Queries/useMyNotifications.ts                         (NEW)
+    src/components/AuthLayout.tsx                             (display a count)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Notification model
+  NEW FILE: EmployeeManager.Domain/Models/Notification.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public class Notification
+      {
+          public Guid Id { get; set; } = Guid.NewGuid();
+          public string Username { get; set; } = string.Empty;  // recipient
+          public string Title { get; set; } = string.Empty;
+          public string Message { get; set; } = string.Empty;
+          public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+          public bool Read { get; set; }
+      }
+
+  STEP 2 — In-memory store interface + impl
+  NEW FILE: EmployeeManager.Application/Services/INotificationService.cs
+
+      using EmployeeManager.Domain.Models;
+      namespace EmployeeManager.Application.Services;
+
+      public interface INotificationService
+      {
+          void Add(string username, string title, string message);
+          IReadOnlyList<Notification> GetForUser(string username);
+          void MarkAllRead(string username);
+      }
+
+  NEW FILE: EmployeeManager.Application/Services/NotificationService.cs
+
+      using System.Collections.Concurrent;
+      using EmployeeManager.Domain.Models;
+
+      namespace EmployeeManager.Application.Services;
+
+      public class NotificationService : INotificationService
+      {
+          // Keyed by username. Each list is the user's inbox.
+          private readonly ConcurrentDictionary<string, List<Notification>> _inboxes = new();
+          private readonly object _writeLock = new();
+
+          public void Add(string username, string title, string message)
+          {
+              var entry = new Notification
+              {
+                  Username = username,
+                  Title = title,
+                  Message = message,
+              };
+              lock (_writeLock)
+              {
+                  if (!_inboxes.TryGetValue(username, out var list))
+                  {
+                      list = new();
+                      _inboxes[username] = list;
+                  }
+                  list.Add(entry);
+              }
+          }
+
+          public IReadOnlyList<Notification> GetForUser(string username)
+          {
+              return _inboxes.TryGetValue(username, out var list)
+                  ? list.OrderByDescending(n => n.CreatedAt).ToList()
+                  : new List<Notification>();
+          }
+
+          public void MarkAllRead(string username)
+          {
+              if (!_inboxes.TryGetValue(username, out var list)) return;
+              lock (_writeLock)
+              {
+                  foreach (var n in list) n.Read = true;
+              }
+          }
+      }
+
+  In-memory means notifications vanish on restart. Round 32
+  swaps this for a JsonDataStore-backed implementation; the
+  interface stays the same, callers don't change.
+
+  STEP 3 — Wire into LeaveService
+  Inject INotificationService:
+
+      public class LeaveService : ILeaveService
+      {
+          private readonly ILeaveRequestRepository _repo;
+          private readonly INotificationService _notifications;
+
+          public LeaveService(ILeaveRequestRepository repo,
+                              INotificationService notifications)
+          {
+              _repo = repo;
+              _notifications = notifications;
+          }
+          // ...
+      }
+
+  In ApproveAsync, after `_repo.UpdateAsync(req)`:
+
+      try
+      {
+          _notifications.Add(
+              req.EmployeeUsername,
+              "Leave approved",
+              $"Your {req.Type} leave from {req.StartDate:MMM d} to {req.EndDate:MMM d} was approved by {deciderUsername}."
+          );
+      }
+      catch { /* notifications are best-effort */ }
+
+  Same in RejectAsync with appropriate text. The try/catch
+  enforces: an exception in the notification path never blocks
+  the actual decision.
+
+  STEP 4 — Register the service
+  In Program.cs:
+
+      builder.Services.AddSingleton<INotificationService, NotificationService>();
+
+  Singleton because the in-memory store needs ONE shared instance
+  across requests.
+
+  STEP 5 — Controller
+  NEW FILE: EmployeeManager.API/Controllers/NotificationsController.cs
+
+      using EmployeeManager.Application.Services;
+      using Microsoft.AspNetCore.Authorization;
+      using Microsoft.AspNetCore.Mvc;
+
+      namespace EmployeeManager.API.Controllers;
+
+      [ApiController]
+      [Route("api/notifications")]
+      [Authorize]
+      public class NotificationsController : ControllerBase
+      {
+          private readonly INotificationService _notifications;
+
+          public NotificationsController(INotificationService notifications)
+          {
+              _notifications = notifications;
+          }
+
+          [HttpGet("mine")]
+          public IActionResult GetMine()
+          {
+              var username = User.Identity?.Name;
+              if (string.IsNullOrEmpty(username)) return Unauthorized();
+              return Ok(_notifications.GetForUser(username));
+          }
+
+          [HttpPost("mark-read")]
+          public IActionResult MarkAllRead()
+          {
+              var username = User.Identity?.Name;
+              if (string.IsNullOrEmpty(username)) return Unauthorized();
+              _notifications.MarkAllRead(username);
+              return NoContent();
+          }
+      }
+
+  STEP 6 — Client types + hook
+  NEW FILE: src/Types/Notification.ts
+
+      export interface Notification {
+          id: string;
+          username: string;
+          title: string;
+          message: string;
+          createdAt: string;
+          read: boolean;
+      }
+
+  Append to src/services/api.ts:
+
+      import type { Notification } from '../Types/Notification';
+
+      export const fetchMyNotifications = () =>
+          api.get<Notification[]>('/notifications/mine');
+
+  NEW FILE: src/Queries/useMyNotifications.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { fetchMyNotifications } from '../services/api';
+
+      export const useMyNotifications = () =>
+          useQuery({
+              queryKey: ['notifications', 'mine'],
+              queryFn: async () => (await fetchMyNotifications()).data,
+              refetchInterval: 30_000,    // poll every 30 seconds
+              staleTime: 0,
+          });
+
+  NEW HERE: `refetchInterval`
+  - TanStack Query option for polling.
+  - Refetches every N ms while the component is mounted.
+  - Disables automatically when window loses focus (config'able).
+  - Round 41 replaces this with a SignalR push.
+
+  STEP 7 — Show an unread count in the navbar
+  In AuthLayout.tsx, add:
+
+      import { useMyNotifications } from '../Queries/useMyNotifications';
+      // ...
+      const { data: notifications } = useMyNotifications();
+      const unreadCount = notifications?.filter(n => !n.read).length ?? 0;
+      // ...
+      <NavLink to={routes.notifications()}>
+          🔔
+          {unreadCount > 0 && (
+              <span className="ml-1 inline-block bg-red-600 text-white text-xs
+                               rounded-full px-1.5">
+                  {unreadCount}
+              </span>
+          )}
+      </NavLink>
+
+  (Adjust the link target to `routes.notifications` placeholder.
+  Round 32 wires up the full notifications page; for now this
+  is just the badge.)
+
+  Test:
+   - Maya approves admin's leave.
+   - Admin's navbar bell now shows a `1` badge within 30s.
+   - Refresh — the count persists (it's a real server endpoint).
+   - Restart the backend — count drops to 0 (in-memory store).
+     This will be fixed in Round 32.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Side-effects (notifications) wrapped in try/catch. Never let
+    a notification failure block the main action.
+  - In-memory storage is FINE for this round. Marking it as
+    "temporary" in the service comments stops future-you from
+    forgetting to swap it.
+  - The Singleton service is necessary for the shared in-memory
+    state. AddScoped would create a new instance per request and
+    lose all notifications.
+  - `refetchInterval` is the simplest polling solution. Don't
+    reach for WebSockets/SignalR until you NEED them.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Side-effect store pattern (notification = side effect of
+    approval).
+  - In-memory state with ConcurrentDictionary + lock for thread
+    safety on lists.
+  - `refetchInterval` for polling-based "real-time."
+  - Notification badge UX pattern.
+  - Round 30 capstone: full manager flow — pending queue, approve
+    + reject with notes, multi-key invalidation, notifications.
+    Round 31 closes the loop with cancel + rollback flows.
 
 
 ================================================================================
@@ -6070,122 +15415,1083 @@ Pacing: One challenge per day. The rich part of your suggestion. Two
 distinct flows depending on whether the request was already approved.
 
 
-CHALLENGE 31.1 — Cancel (pre-approval) endpoint              Target: 25 min
+CHALLENGE 31.1 — Cancel endpoint (pre-approval)              Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. POST /api/leave/{id}/cancel — owner only, status must be Pending.
-  2. Sets status = 'Cancelled' + decidedAt = now.
-  3. Server returns 409 if status is not Pending.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Round 30 gave the manager Approve/Reject. The employee needs a
+  matching escape hatch — Cancel — but only BEFORE the manager
+  acts. Once a request is Approved or Rejected, "cancel" doesn't
+  apply; the employee must request a rollback instead (31.3).
 
-  RULES:
-  - Owner-only. Manager can't "cancel" — they can only reject.
+  This challenge enforces the state machine rule strictly: the
+  endpoint accepts a cancel ONLY if status is currently Pending.
+  Any other state returns 409 Conflict — same pattern from Round
+  30.3, applied with one more transition.
 
-  WHAT YOU JUST LEARNED:
-  State-machine enforcement server-side. The status transition is
-  the rule.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Owner-only transitions
+     - Cancel can ONLY be triggered by the employee who owns the
+       request. Not the manager (they reject). Not the admin
+       (they don't intervene in this state).
+     - Server verifies: caller.username === request.employeeUsername.
+
+  2) Asymmetric authorization vs Round 30
+     - Round 30 uses `[Authorize(Roles = "Manager,Admin")]` — role-
+       based.
+     - Round 31 uses an ownership check INSIDE the action — record-
+       based.
+     - Both checks coexist on different endpoints of the same
+       feature. Pick the one that matches the operation's intent.
+
+  3) The "no action" idempotent case
+     - What if Cancel is called on an already-Cancelled request?
+     - Two choices:
+         a) 409 — strict state machine. Our choice.
+         b) 200 with the existing row — idempotent.
+     - We pick (a) here because cancellation is rare; the user
+       shouldn't be clicking it twice by accident, and a 409
+       surfaces the bug.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Application/Services/ILeaveService.cs   (add CancelAsync)
+    EmployeeManager.Application/Services/LeaveService.cs    (impl)
+    EmployeeManager.API/Controllers/LeaveController.cs      (action)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Service method
+  Update ILeaveService.cs:
+
+      Task<DecisionResult> CancelAsync(string callerUsername, Guid id);
+
+  In LeaveService.cs:
+
+      public async Task<DecisionResult> CancelAsync(string callerUsername, Guid id)
+      {
+          var req = await _repo.GetByIdAsync(id);
+          if (req is null) return new(false, "Not found.");
+
+          // Owner-only check.
+          if (!string.Equals(req.EmployeeUsername, callerUsername,
+                             StringComparison.OrdinalIgnoreCase))
+              return new(false, "Forbidden.");
+
+          // State-machine guard.
+          if (req.Status != LeaveStatus.Pending)
+              return new(false, "Request is not pending.");
+
+          req.Status = LeaveStatus.Cancelled;
+          req.DecidedAt = DateTime.UtcNow;
+          req.DecidedByUsername = callerUsername;
+          await _repo.UpdateAsync(req);
+
+          // Optional notification to the user (so it shows up
+          // in their bell). Self-notification is mostly noise;
+          // skip it. Future: notify any subscribed manager
+          // (Round 32 polish).
+
+          return new(true, null);
+      }
+
+  STEP 2 — Controller action
+  Append to LeaveController.cs:
+
+      [HttpPost("{id:guid}/cancel")]
+      public async Task<IActionResult> Cancel(Guid id)
+      {
+          var (caller, _) = Caller();
+          var result = await _leave.CancelAsync(caller, id);
+          if (!result.Success)
+          {
+              return result.Error switch
+              {
+                  "Not found." => NotFound(),
+                  "Forbidden." => Forbid(),
+                  _            => Conflict(new { message = result.Error }),
+              };
+          }
+          return Ok(new { message = "Cancelled." });
+      }
+
+  Test:
+   - POST /api/leave/{your-pending-id}/cancel as the owner → 200,
+     leaveRequests.json shows status=Cancelled.
+   - POST again on the same id → 409 (not pending anymore).
+   - POST as a DIFFERENT user → 403.
+   - POST as the owner on a non-existent id → 404.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Owner check uses OrdinalIgnoreCase. Usernames in this project
+    are case-insensitive throughout — preserving that consistency
+    matters.
+  - 409 for "not pending," 403 for "not owner," 404 for missing.
+    Distinct codes make client error rendering trivial.
+  - Don't set DecisionNote on cancel — the user cancelled, no
+    note required. (We could add one later for "why I cancelled,"
+    but the simpler UX wins for now.)
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Ownership checks vs role checks — when each fits.
+  - State-machine enforcement is a server responsibility, not a
+    client one.
+  - The 404 / 403 / 409 trio for record-based actions.
 
 
-CHALLENGE 31.2 — Cancel UI                                   Target: 25 min
+CHALLENGE 31.2 — Cancel UI                                   Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. On MyLeavesPage, show "Cancel" button only when
-     `canCancel(status)` = true (Pending).
-  2. Confirm modal, then useCancelLeaveRequest mutation.
-  3. On success: invalidate own list + balance.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Round 28.2 gave you status helpers (`canCancel`, `isClosed`,
+  etc.). This challenge is where they earn their keep: drive the
+  PRESENCE of the Cancel button from a helper, not inline ternaries.
+  Status-aware UI becomes declarative — read the status, ask the
+  helper "what can the user do?", render the matching button.
 
-  RULES:
-  - Helper from Round 28.2 (`canCancel`) drives the button visibility.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Status helpers + JSX = declarative state machine UI.
+  1) Helper-driven button visibility
+     - Bad pattern:
+         {(status === 'Pending') && <CancelButton />}
+       Hard-codes the rule in JSX. Spread across 10 components,
+       updates are scatter-edits.
+     - Good pattern:
+         {canCancel(status) && <CancelButton />}
+       Rule lives in ONE place (leaveHelpers.ts). Adding a new
+       cancellable state? Update the helper; UI updates everywhere.
+
+  2) Mutation hook reuse pattern
+     - useCancelLeaveRequest mirrors useApproveLeave from Round
+       30.4 — exact same shape, different endpoint.
+     - The pattern: mutation hook with onSuccess invalidating
+       `leaveKeys.all`. Once written, it's the same five lines
+       per transition.
+
+  3) ConfirmModal vs ConfirmWithReasonModal
+     - Cancel has no required note. Use the simpler ConfirmModal
+       from Round 12.2.
+     - Don't over-engineer. The bar for "ask for a reason" is "the
+       org needs to know why." Cancellation doesn't qualify (you
+       already approved the leave; cancelling means "never mind").
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/services/api.ts                       (cancelLeave)
+    src/Queries/useCancelLeave.ts             (NEW)
+    src/components/MyLeavesPage.tsx           (add Cancel button per row + modal)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — API method
+  Append to src/services/api.ts:
+
+      export const cancelLeave = (id: string) =>
+          api.post(`/leave/${id}/cancel`);
+
+  STEP 2 — Mutation hook
+  NEW FILE: src/Queries/useCancelLeave.ts
+
+      import { useMutation, useQueryClient } from '@tanstack/react-query';
+      import { toast } from 'react-toastify';
+      import { isAxiosError } from 'axios';
+      import { cancelLeave } from '../services/api';
+      import { leaveKeys } from './leaveKeys';
+
+      export const useCancelLeave = () => {
+          const queryClient = useQueryClient();
+          return useMutation({
+              mutationFn: (id: string) => cancelLeave(id),
+              onSuccess: () => {
+                  queryClient.invalidateQueries({ queryKey: leaveKeys.all });
+                  toast.success('Leave cancelled.');
+              },
+              onError: (err) => {
+                  const msg = isAxiosError<{ message?: string }>(err)
+                      ? err.response?.data?.message ?? 'Cancellation failed.'
+                      : 'Cancellation failed.';
+                  toast.error(msg);
+              },
+          });
+      };
+
+  STEP 3 — Add an actions column to MyLeavesPage
+  The table from 28.4 ends with Status. Add one more column for
+  per-row actions. Replace the table head:
+
+      <thead className="bg-gray-50 dark:bg-gray-900">
+          <tr>
+              <th className="px-6 py-3 text-left text-xs uppercase
+                             tracking-wider text-gray-500">Type</th>
+              <th className="px-6 py-3 text-left text-xs uppercase
+                             tracking-wider text-gray-500">Dates</th>
+              <th className="px-6 py-3 text-left text-xs uppercase
+                             tracking-wider text-gray-500">Days</th>
+              <th className="px-6 py-3 text-left text-xs uppercase
+                             tracking-wider text-gray-500">Reason</th>
+              <th className="px-6 py-3 text-left text-xs uppercase
+                             tracking-wider text-gray-500">Status</th>
+              <th className="px-6 py-3"></th>     {/* actions */}
+          </tr>
+      </thead>
+
+  STEP 4 — Modal state + row actions
+  At the top of MyLeavesPage:
+
+      import { useState } from 'react';
+      import { useCancelLeave } from '../Queries/useCancelLeave';
+      import { canCancel } from '../utils/leaveHelpers';
+      import ConfirmModal from './ConfirmModal';
+      import type { LeaveRequest } from '../Types/Leave';
+
+      // ... inside the component
+      const cancelMutation = useCancelLeave();
+      const [pendingCancel, setPendingCancel] = useState<LeaveRequest | null>(null);
+
+  In the table body, add the actions cell to each row:
+
+      <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+          {canCancel(req.status) && (
+              <button onClick={() => setPendingCancel(req)}
+                      className="text-red-600 hover:text-red-800">
+                  Cancel
+              </button>
+          )}
+      </td>
+
+  Below the table, the modal:
+
+      <ConfirmModal
+          open={!!pendingCancel}
+          title="Cancel leave request?"
+          message={`Cancel your ${pendingCancel?.type} leave for ${pendingCancel?.days} day${pendingCancel?.days === 1 ? '' : 's'}? This cannot be undone.`}
+          onConfirm={() => {
+              if (pendingCancel) {
+                  cancelMutation.mutate(pendingCancel.id);
+                  setPendingCancel(null);
+              }
+          }}
+          onCancel={() => setPendingCancel(null)}
+      />
+
+  Test:
+   - Submit a new request from /leaves/new.
+   - Back on /leaves, the Pending row shows a Cancel button.
+   - Click → modal → confirm → row reflects "Cancelled" status,
+     balance drops the Pending count.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - The visibility helper IS the rule. Don't write
+    `if (status === 'Pending' || status === 'X') ...` next to
+    `canCancel(status)` calls — split-brain code drifts.
+  - Lift modal state up to the PAGE. Rows just emit "user
+    clicked Cancel on this row."
+  - Reuse ConfirmModal, not ConfirmWithReasonModal — no required
+    note here.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Helper-driven UI for state-machine actions.
+  - Reused mutation-hook shape from Round 30 in a new transition.
+  - Picking the right modal for the friction level.
 
 
-CHALLENGE 31.3 — Request rollback (post-approval) endpoint   Target: 35 min
+CHALLENGE 31.3 — Rollback request endpoints (3-step workflow) Target: 60 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Post-approval rollback: once a leave is Approved, the employee
-    can't unilaterally cancel — they REQUEST a rollback with a note.
-    Status transitions Approved → RollbackRequested. Manager then
-    decides:
-      Approve rollback → status becomes RolledBack (balance refunded).
-      Reject rollback → status returns to Approved.
-  - The note is REQUIRED on the rollback request — it's the
-    justification.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  After approval, the employee can't simply Cancel — the leave's
+  been booked, the manager's planned around it, balance has been
+  decremented. They REQUEST a rollback. That goes back to a
+  manager who can approve (Status → RolledBack, balance refunded)
+  or reject (Status → Approved, leave stays).
 
-  TASK:
-  1. POST /api/leave/{id}/request-rollback { note: string }
-     - Owner only.
-     - Status must be Approved.
-     - Sets status=RollbackRequested + rollbackNote=note.
-  2. POST /api/leave/{id}/rollback-approve { managerNote? }
-     - Manager only.
-     - Status must be RollbackRequested.
-     - Sets status=RolledBack.
-  3. POST /api/leave/{id}/rollback-reject { managerNote: string }
-     - Manager only.
-     - Status must be RollbackRequested.
-     - Reverts status to Approved + stores managerNote.
+  Three endpoints, three transitions:
+   - request-rollback: Approved → RollbackRequested (employee)
+   - rollback-approve: RollbackRequested → RolledBack (manager)
+   - rollback-reject:  RollbackRequested → Approved (manager)
 
-  RULES:
-  - Balance computation in Round 28.3 must treat 'RolledBack' as not
-    counting toward `used`. Verify.
-  - Audit trail: don't lose the original rollbackNote on reject.
-    Maybe add a separate history field (Round 34 covers full audit).
+  Same patterns as 30.3, applied to a more complex state graph.
 
-  WHAT YOU JUST LEARNED:
-  Multi-step state machine. Each transition is its own endpoint with
-  its own preconditions. Same shape as a workflow engine.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) "Two-stage approval" workflow
+     - Employee initiates → manager decides → employee sees result.
+     - Real systems use this for expense reports, hiring decisions,
+       budget changes, anything that needs a "second eye."
+     - The status machine encodes the workflow; each transition
+       has its own endpoint and its own preconditions.
+
+  2) The "rejection returns to previous state" pattern
+     - Reject a rollback → status goes BACK to Approved.
+     - That's a reversible transition (Approved → RollbackRequested
+       → Approved), allowed because the rollback was "withdrawn."
+     - The audit trail captures BOTH the rollback note AND the
+       manager's rejection note. Don't lose either.
+
+  3) RolledBack as a balance-neutral status
+     - Verify Round 28.3's GetBalanceAsync treats RolledBack like
+       Cancelled/Rejected — it does NOT count toward `used`.
+     - Currently `used = sum(approved.days)`. RolledBack ≠
+       Approved, so it falls out naturally. Confirm.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/LeaveRequest.cs           (one new field)
+    EmployeeManager.Application/Services/ILeaveService.cs   (3 methods)
+    EmployeeManager.Application/Services/LeaveService.cs    (impls)
+    EmployeeManager.API/Controllers/LeaveController.cs      (3 actions + 1 GET)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Add the rollback-rejection note field
+  LeaveRequest.cs already has `RollbackNote` (the employee's
+  justification). Add the manager's response note:
+
+      public string? RollbackDecisionNote { get; set; }
+
+  Without this, rejecting a rollback loses the manager's reason.
+
+  STEP 2 — Service methods
+  Update ILeaveService.cs:
+
+      Task<DecisionResult> RequestRollbackAsync(string callerUsername, Guid id, string note);
+      Task<DecisionResult> ApproveRollbackAsync(string deciderUsername, Guid id, string? note);
+      Task<DecisionResult> RejectRollbackAsync (string deciderUsername, Guid id, string note);
+      Task<List<LeaveRequest>> GetRollbackRequestsAsync();
+
+  In LeaveService.cs:
+
+      public async Task<DecisionResult> RequestRollbackAsync(
+          string callerUsername, Guid id, string note)
+      {
+          if (string.IsNullOrWhiteSpace(note) || note.Trim().Length < 5)
+              return new(false, "Rollback requires a note (min 5 characters).");
+
+          var req = await _repo.GetByIdAsync(id);
+          if (req is null) return new(false, "Not found.");
+
+          if (!string.Equals(req.EmployeeUsername, callerUsername,
+                             StringComparison.OrdinalIgnoreCase))
+              return new(false, "Forbidden.");
+
+          if (req.Status != LeaveStatus.Approved)
+              return new(false, "Only approved leaves can be rolled back.");
+
+          req.Status = LeaveStatus.RollbackRequested;
+          req.RollbackNote = note.Trim();
+          await _repo.UpdateAsync(req);
+
+          // Notify the original decider (or all managers — for now,
+          // best-effort): they need to see the request.
+          if (!string.IsNullOrEmpty(req.DecidedByUsername))
+          {
+              try
+              {
+                  _notifications.Add(
+                      req.DecidedByUsername,
+                      "Rollback requested",
+                      $"{callerUsername} has requested a rollback of their leave from {req.StartDate:MMM d} to {req.EndDate:MMM d}.");
+              }
+              catch { /* best-effort */ }
+          }
+
+          return new(true, null);
+      }
+
+      public async Task<DecisionResult> ApproveRollbackAsync(
+          string deciderUsername, Guid id, string? note)
+      {
+          var req = await _repo.GetByIdAsync(id);
+          if (req is null) return new(false, "Not found.");
+          if (req.Status != LeaveStatus.RollbackRequested)
+              return new(false, "Request is not awaiting rollback decision.");
+
+          req.Status = LeaveStatus.RolledBack;
+          req.RollbackDecisionNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+          // DecidedAt and DecidedByUsername reflect the ORIGINAL approval —
+          // don't overwrite. The rollback decider can be inferred from
+          // the audit log in Round 33.
+          await _repo.UpdateAsync(req);
+
+          try
+          {
+              _notifications.Add(
+                  req.EmployeeUsername,
+                  "Rollback approved",
+                  $"Your rollback request for the leave from {req.StartDate:MMM d} to {req.EndDate:MMM d} was approved. The days have been refunded.");
+          }
+          catch { }
+
+          return new(true, null);
+      }
+
+      public async Task<DecisionResult> RejectRollbackAsync(
+          string deciderUsername, Guid id, string note)
+      {
+          if (string.IsNullOrWhiteSpace(note) || note.Trim().Length < 5)
+              return new(false, "Rejection requires a note (min 5 characters).");
+
+          var req = await _repo.GetByIdAsync(id);
+          if (req is null) return new(false, "Not found.");
+          if (req.Status != LeaveStatus.RollbackRequested)
+              return new(false, "Request is not awaiting rollback decision.");
+
+          req.Status = LeaveStatus.Approved;     // ← reverts!
+          req.RollbackDecisionNote = note.Trim();
+          // RollbackNote (employee's note) is intentionally PRESERVED —
+          // it's part of the history even though the rollback didn't go
+          // through.
+          await _repo.UpdateAsync(req);
+
+          try
+          {
+              _notifications.Add(
+                  req.EmployeeUsername,
+                  "Rollback declined",
+                  $"Your rollback request was declined. Reason: {note.Trim()}");
+          }
+          catch { }
+
+          return new(true, null);
+      }
+
+      public async Task<List<LeaveRequest>> GetRollbackRequestsAsync()
+      {
+          var all = await _repo.GetAllAsync();
+          return all
+              .Where(r => r.Status == LeaveStatus.RollbackRequested)
+              .OrderBy(r => r.CreatedAt)
+              .ToList();
+      }
+
+  STEP 3 — Controller actions
+  Append to LeaveController.cs. Add a DTO inline (or reuse
+  LeaveDecisionRequest from 30.3 — the shape is the same):
+
+      // POST /api/leave/{id}/request-rollback
+      [HttpPost("{id:guid}/request-rollback")]
+      public async Task<IActionResult> RequestRollback(
+          Guid id, [FromBody] LeaveDecisionRequest body)
+      {
+          var (caller, _) = Caller();
+          var result = await _leave.RequestRollbackAsync(caller, id, body?.Note ?? string.Empty);
+          if (!result.Success)
+          {
+              return result.Error switch
+              {
+                  "Not found." => NotFound(),
+                  "Forbidden." => Forbid(),
+                  string s when s.StartsWith("Rollback requires") => BadRequest(new { message = result.Error }),
+                  _            => Conflict(new { message = result.Error }),
+              };
+          }
+          return Ok(new { message = "Rollback requested." });
+      }
+
+      // POST /api/leave/{id}/rollback-approve
+      [HttpPost("{id:guid}/rollback-approve")]
+      [Authorize(Roles = "Manager,Admin")]
+      public async Task<IActionResult> ApproveRollback(
+          Guid id, [FromBody] LeaveDecisionRequest? body = null)
+      {
+          var (caller, _) = Caller();
+          var result = await _leave.ApproveRollbackAsync(caller, id, body?.Note);
+          if (!result.Success)
+          {
+              return result.Error switch
+              {
+                  "Not found." => NotFound(),
+                  _            => Conflict(new { message = result.Error }),
+              };
+          }
+          return Ok(new { message = "Rollback approved." });
+      }
+
+      // POST /api/leave/{id}/rollback-reject
+      [HttpPost("{id:guid}/rollback-reject")]
+      [Authorize(Roles = "Manager,Admin")]
+      public async Task<IActionResult> RejectRollback(
+          Guid id, [FromBody] LeaveDecisionRequest body)
+      {
+          var (caller, _) = Caller();
+          var result = await _leave.RejectRollbackAsync(caller, id, body?.Note ?? string.Empty);
+          if (!result.Success)
+          {
+              return result.Error switch
+              {
+                  "Not found." => NotFound(),
+                  string s when s.StartsWith("Rejection requires") => BadRequest(new { message = result.Error }),
+                  _            => Conflict(new { message = result.Error }),
+              };
+          }
+          return Ok(new { message = "Rollback rejected." });
+      }
+
+      // GET /api/leave/rollback-requested
+      [HttpGet("rollback-requested")]
+      [Authorize(Roles = "Manager,Admin")]
+      public async Task<IActionResult> GetRollbackQueue()
+          => Ok(await _leave.GetRollbackRequestsAsync());
+
+  Test end-to-end in your HTTP client:
+   - Approve a Pending leave (Round 30 endpoint).
+   - As the owner: POST /api/leave/{id}/request-rollback with a
+     note. Status flips to RollbackRequested.
+   - As manager: GET /api/leave/rollback-requested. The request
+     appears.
+   - Reject the rollback → status reverts to Approved.
+   - Request rollback again. This time approve → status RolledBack.
+   - GET /api/leave/balance — Used drops by the request's days.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - PRESERVE the original RollbackNote on rejection. It's part of
+    the audit history.
+  - Reverting (RollbackRequested → Approved) is the rare case
+    where a status can go BACKWARDS. Most transitions are one-way.
+  - Don't overwrite DecidedAt/DecidedByUsername on rollback —
+    those reflect the original approval. Track the rollback decider
+    via Round 33's audit log.
+  - Notification calls in try/catch. Best-effort, never block the
+    transaction.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Two-stage approval workflow as a state machine.
+  - Reversible transitions and preserving history fields.
+  - When to leave existing fields untouched (DecidedAt) vs
+    populating new ones (RollbackDecisionNote).
+  - The "request" endpoint pattern: employee initiates, separate
+    endpoints for decider's actions.
 
 
-CHALLENGE 31.4 — Rollback request UI (employee side)         Target: 30 min
+CHALLENGE 31.4 — Rollback request UI (employee side)         Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. MyLeavesPage: when `status === 'Approved'`, show "Request
-     Rollback" button.
-  2. Click → modal with required reason textarea.
-  3. useRequestLeaveRollback mutation.
-  4. After submit, status shows as "Rollback Pending" (UI label).
-  5. Cannot re-request while RollbackRequested.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  The employee's view needs to grow more sophisticated:
+   - Approved row gets a "Request Rollback" button.
+   - RollbackRequested row shows the submitted note + disables
+     further rollback action.
+   - RolledBack and rejected-rollback rows show their final state.
 
-  RULES:
-  - Show the rollback note clearly on the row after submission.
-  - Disable the action button while RollbackRequested.
+  This is the third reapplication of the helper-driven button
+  visibility pattern (28.2). By now you should be writing the
+  helper imports without checking.
 
-  WHAT YOU JUST LEARNED:
-  Status-aware UI. The button set on each row changes by status.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Row expansion for richer context
+     - "Pending" rows are simple — just the action button.
+     - "RollbackRequested" rows need to show the employee's
+       previously-submitted note. A small detail column.
+     - "RolledBack" rows show BOTH notes (employee's request +
+       manager's decision).
+     - Render conditionally based on status.
+
+  2) Status-aware action buttons
+     - `canCancel(status)` → Cancel button.
+     - `canRequestRollback(status)` → Rollback button (helper
+       from 28.2; verify it's `status === 'Approved'`).
+     - One row template; helpers decide which buttons render.
+
+  3) Avoiding action-overload
+     - Don't show three buttons on every row "just in case." The
+       UI gets noisy.
+     - Render ONLY the actions the current status allows.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/services/api.ts                       (requestLeaveRollback)
+    src/Queries/useRequestLeaveRollback.ts    (NEW)
+    src/components/MyLeavesPage.tsx           (rollback button + note display)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — API method
+  Append to src/services/api.ts:
+
+      export const requestLeaveRollback = (id: string, note: string) =>
+          api.post(`/leave/${id}/request-rollback`, { note });
+
+  STEP 2 — Mutation hook
+  NEW FILE: src/Queries/useRequestLeaveRollback.ts
+
+      import { useMutation, useQueryClient } from '@tanstack/react-query';
+      import { toast } from 'react-toastify';
+      import { isAxiosError } from 'axios';
+      import { requestLeaveRollback } from '../services/api';
+      import { leaveKeys } from './leaveKeys';
+
+      type Args = { id: string; note: string };
+
+      export const useRequestLeaveRollback = () => {
+          const queryClient = useQueryClient();
+          return useMutation({
+              mutationFn: ({ id, note }: Args) => requestLeaveRollback(id, note),
+              onSuccess: () => {
+                  queryClient.invalidateQueries({ queryKey: leaveKeys.all });
+                  toast.success('Rollback requested.');
+              },
+              onError: (err) => {
+                  const msg = isAxiosError<{ message?: string }>(err)
+                      ? err.response?.data?.message ?? 'Request failed.'
+                      : 'Request failed.';
+                  toast.error(msg);
+              },
+          });
+      };
+
+  STEP 3 — Add rollback action + note display to MyLeavesPage
+  Imports:
+
+      import { canCancel, canRequestRollback, statusVisuals } from '../utils/leaveHelpers';
+      import ConfirmWithReasonModal from './ConfirmWithReasonModal';
+      import { useRequestLeaveRollback } from '../Queries/useRequestLeaveRollback';
+
+  State + handlers:
+
+      const rollbackMutation = useRequestLeaveRollback();
+      const [pendingRollback, setPendingRollback] = useState<LeaveRequest | null>(null);
+
+  In the row's actions cell, show whichever button matches the
+  current status:
+
+      <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+          {canCancel(req.status) && (
+              <button onClick={() => setPendingCancel(req)}
+                      className="text-red-600 hover:text-red-800 mr-3">
+                  Cancel
+              </button>
+          )}
+          {canRequestRollback(req.status) && (
+              <button onClick={() => setPendingRollback(req)}
+                      className="text-orange-600 hover:text-orange-800">
+                  Request rollback
+              </button>
+          )}
+      </td>
+
+  In the Reason cell, append the rollback notes when present:
+
+      <td className="px-6 py-4 text-sm text-gray-600 max-w-xs">
+          <div className="truncate">{req.reason}</div>
+          {req.rollbackNote && (
+              <div className="mt-1 text-xs text-orange-700">
+                  Rollback note: {req.rollbackNote}
+              </div>
+          )}
+          {req.rollbackDecisionNote && (
+              <div className="mt-1 text-xs text-gray-500">
+                  Manager response: {req.rollbackDecisionNote}
+              </div>
+          )}
+      </td>
+
+  Below the table, the rollback modal:
+
+      <ConfirmWithReasonModal
+          open={!!pendingRollback}
+          title="Request rollback?"
+          message="Why do you need to roll back this approved leave? Your manager will see the reason."
+          minReasonLength={5}
+          onConfirm={(note) => {
+              if (pendingRollback) {
+                  rollbackMutation.mutate({ id: pendingRollback.id, note });
+                  setPendingRollback(null);
+              }
+          }}
+          onCancel={() => setPendingRollback(null)}
+      />
+
+  STEP 4 — Update the TS types
+  Add the new field on src/Types/Leave.ts:
+
+      rollbackDecisionNote?: string;
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Helpers `canCancel` and `canRequestRollback` are mutually
+    exclusive in practice (status can't be both Pending AND
+    Approved). The order of buttons in the JSX is therefore
+    irrelevant — only one ever renders.
+  - The `mr-3` on Cancel handles the gap if BOTH were ever shown
+    (defensive — keeps spacing consistent if you add a status
+    that allows both).
+  - Truncate the main reason; render the rollback notes
+    underneath it without truncation. The rollback story is the
+    important context here.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Multi-action row design driven by status helpers.
+  - Layered detail rendering — main + secondary notes.
+  - Third reapplication of the lifted-modal-state pattern.
 
 
-CHALLENGE 31.5 — Rollback decision UI (manager side)         Target: 35 min
+CHALLENGE 31.5 — Rollback decision UI (manager side)         Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. ManagerLeavesPage gets a new tab/section: "Rollback Requests."
-  2. GET /api/leave/rollback-requested (new endpoint OR reuse
-     pending with status filter).
-  3. Each row shows: original leave dates, original reason, rollback
-     note (the employee's justification).
-  4. Two actions: Approve Rollback (optional manager note) / Reject
-     Rollback (required note).
-  5. After decision: invalidate pending-rollback list + the
-     requester's leave list + balance.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  The manager already has a Pending queue (Round 30.2). This
+  challenge adds a second queue — Rollback Requests — and the
+  approve/reject mutations for them. The UI pattern is identical
+  to 30.4; the differences are which endpoint, which status, and
+  the additional context (original leave dates + employee's note).
 
-  RULES:
-  - The manager sees BOTH the original request context AND the new
-    rollback note. Make it scannable.
-  - Approving rollback REFUNDS days into balance.remaining.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Two-stage approval. Same shape as expense reports, change requests,
-  any workflow where the org wants a second eye.
+  1) Tab navigation on a single page
+     - Two manager queues live under one navigation entry.
+     - Tabs are sub-navigation inside the page.
+     - Simple implementation: a `useState<'pending'|'rollback'>('pending')`
+       with two buttons styled as tabs.
+
+  2) The "more context per row" judgment
+     - Rollback decisions are higher-stakes — the manager already
+       approved this leave once. They want to see:
+         - Original leave dates + days.
+         - Original reason.
+         - Employee's rollback note (the WHY).
+         - When the rollback was requested.
+     - Render all of this; the manager should never have to
+       click into a detail page.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/services/api.ts                          (3 more leave methods)
+    src/Queries/useRollbackQueue.ts              (NEW)
+    src/Queries/useApproveRollback.ts            (NEW)
+    src/Queries/useRejectRollback.ts             (NEW)
+    src/components/PendingLeavesPage.tsx         (add tabs + rollback section)
+    src/components/RollbackRequestRow.tsx        (NEW)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — API methods
+  Append to src/services/api.ts:
+
+      export const fetchRollbackQueue = () =>
+          api.get<LeaveRequest[]>('/leave/rollback-requested');
+
+      export const approveRollback = (id: string, note?: string) =>
+          api.post(`/leave/${id}/rollback-approve`, { note });
+
+      export const rejectRollback = (id: string, note: string) =>
+          api.post(`/leave/${id}/rollback-reject`, { note });
+
+  STEP 2 — Query keys addition
+  Extend src/Queries/leaveKeys.ts:
+
+      rollbackQueue: () =>
+          [...leaveKeys.all, 'rollback-queue'] as const,
+
+  STEP 3 — Hooks
+  NEW FILE: src/Queries/useRollbackQueue.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { fetchRollbackQueue } from '../services/api';
+      import { leaveKeys } from './leaveKeys';
+      import { useAuth } from '../Context/AuthContext';
+
+      export const useRollbackQueue = () => {
+          const { user } = useAuth();
+          return useQuery({
+              queryKey: leaveKeys.rollbackQueue(),
+              queryFn: async () => (await fetchRollbackQueue()).data,
+              enabled: user?.role === 'Manager' || user?.role === 'Admin',
+              staleTime: 0,
+          });
+      };
+
+  NEW FILE: src/Queries/useApproveRollback.ts (parallel to useApproveLeave):
+
+      import { useMutation, useQueryClient } from '@tanstack/react-query';
+      import { toast } from 'react-toastify';
+      import { isAxiosError } from 'axios';
+      import { approveRollback } from '../services/api';
+      import { leaveKeys } from './leaveKeys';
+
+      type Args = { id: string; note?: string };
+
+      export const useApproveRollback = () => {
+          const queryClient = useQueryClient();
+          return useMutation({
+              mutationFn: ({ id, note }: Args) => approveRollback(id, note),
+              onSuccess: () => {
+                  queryClient.invalidateQueries({ queryKey: leaveKeys.all });
+                  toast.success('Rollback approved.');
+              },
+              onError: (err) => {
+                  const msg = isAxiosError<{ message?: string }>(err)
+                      ? err.response?.data?.message ?? 'Failed.'
+                      : 'Failed.';
+                  toast.error(msg);
+              },
+          });
+      };
+
+  NEW FILE: src/Queries/useRejectRollback.ts — same shape with
+  `rejectRollback` and a required `note: string`.
+
+  STEP 4 — Row component
+  NEW FILE: src/components/RollbackRequestRow.tsx
+
+      import { format } from 'date-fns';
+      import type { LeaveRequest } from '../Types/Leave';
+
+      interface Props {
+          request: LeaveRequest;
+          employeeName: string;
+          onApprove: (id: string) => void;
+          onReject: (id: string) => void;
+      }
+
+      const RollbackRequestRow = ({ request, employeeName, onApprove, onReject }: Props) => (
+          <tr>
+              <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                  {employeeName}
+                  <p className="text-xs text-gray-400">@{request.employeeUsername}</p>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {format(new Date(request.startDate), 'MMM d')} →{' '}
+                  {format(new Date(request.endDate), 'MMM d, yyyy')}
+                  <p className="text-xs text-gray-400">{request.days} days</p>
+              </td>
+              <td className="px-6 py-4 text-sm text-gray-600 max-w-xs">
+                  <p className="font-medium text-xs text-gray-500 uppercase mb-1">
+                      Original reason
+                  </p>
+                  <p>{request.reason}</p>
+                  <p className="font-medium text-xs text-orange-700 uppercase mt-2 mb-1">
+                      Rollback note
+                  </p>
+                  <p className="whitespace-pre-wrap">{request.rollbackNote}</p>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+                  <button onClick={() => onApprove(request.id)}
+                          className="text-brand-600 hover:text-brand-800 mr-3">
+                      Approve rollback
+                  </button>
+                  <button onClick={() => onReject(request.id)}
+                          className="text-red-600 hover:text-red-800">
+                      Reject
+                  </button>
+              </td>
+          </tr>
+      );
+
+      export default RollbackRequestRow;
+
+  STEP 5 — Add tabs to PendingLeavesPage
+  Rework the top of PendingLeavesPage to include both queues:
+
+      import { useRollbackQueue } from '../Queries/useRollbackQueue';
+      import { useApproveRollback } from '../Queries/useApproveRollback';
+      import { useRejectRollback } from '../Queries/useRejectRollback';
+      import RollbackRequestRow from './RollbackRequestRow';
+
+      // ...inside the component:
+      const [activeTab, setActiveTab] = useState<'pending' | 'rollback'>('pending');
+      const rollbackQuery = useRollbackQueue();
+      const approveRollbackMut = useApproveRollback();
+      const rejectRollbackMut = useRejectRollback();
+      const [pendingApproveRollback, setPendingApproveRollback] = useState<string | null>(null);
+      const [pendingRejectRollback,  setPendingRejectRollback]  = useState<string | null>(null);
+
+      const pendingCount = pending.data?.length ?? 0;
+      const rollbackCount = rollbackQuery.data?.length ?? 0;
+
+  Replace the page heading area with tabs:
+
+      <div className="max-w-6xl mx-auto p-6">
+          <h1 className="text-2xl font-semibold mb-4">Manager Inbox</h1>
+
+          <div className="flex gap-2 mb-4 border-b border-gray-200 dark:border-gray-700">
+              <button
+                  onClick={() => setActiveTab('pending')}
+                  className={clsx(
+                      'px-4 py-2 text-sm font-medium border-b-2 -mb-px',
+                      activeTab === 'pending'
+                          ? 'border-brand-600 text-brand-600'
+                          : 'border-transparent text-gray-600 hover:text-gray-900',
+                  )}>
+                  Pending ({pendingCount})
+              </button>
+              <button
+                  onClick={() => setActiveTab('rollback')}
+                  className={clsx(
+                      'px-4 py-2 text-sm font-medium border-b-2 -mb-px',
+                      activeTab === 'rollback'
+                          ? 'border-brand-600 text-brand-600'
+                          : 'border-transparent text-gray-600 hover:text-gray-900',
+                  )}>
+                  Rollback requests ({rollbackCount})
+              </button>
+          </div>
+
+          {activeTab === 'pending' && (
+              /* Existing pending table */
+          )}
+
+          {activeTab === 'rollback' && (
+              <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+                  {rollbackQuery.isLoading ? (
+                      <p className="p-4 text-gray-500">Loading…</p>
+                  ) : rollbackQuery.data && rollbackQuery.data.length > 0 ? (
+                      <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                          <thead className="bg-gray-50 dark:bg-gray-900">
+                              <tr>
+                                  <th className="px-6 py-3 text-left text-xs uppercase
+                                                 tracking-wider text-gray-500">Requester</th>
+                                  <th className="px-6 py-3 text-left text-xs uppercase
+                                                 tracking-wider text-gray-500">Dates</th>
+                                  <th className="px-6 py-3 text-left text-xs uppercase
+                                                 tracking-wider text-gray-500">Context</th>
+                                  <th className="px-6 py-3"></th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                              {rollbackQuery.data.map(r => (
+                                  <RollbackRequestRow
+                                      key={r.id}
+                                      request={r}
+                                      employeeName={nameByUsername.get(r.employeeUsername) ?? r.employeeUsername}
+                                      onApprove={setPendingApproveRollback}
+                                      onReject={setPendingRejectRollback}
+                                  />
+                              ))}
+                          </tbody>
+                      </table>
+                  ) : (
+                      <p className="p-6 text-center text-gray-500">
+                          No rollback requests.
+                      </p>
+                  )}
+              </div>
+          )}
+
+          {/* ...existing modals for pending approve/reject... */}
+
+          <ConfirmWithReasonModal
+              open={!!pendingApproveRollback}
+              title="Approve rollback?"
+              message="The days will be refunded to the employee's balance. Optional note for the requester."
+              minReasonLength={0}
+              onConfirm={(note) => {
+                  if (pendingApproveRollback) {
+                      approveRollbackMut.mutate({
+                          id: pendingApproveRollback,
+                          note: note || undefined,
+                      });
+                      setPendingApproveRollback(null);
+                  }
+              }}
+              onCancel={() => setPendingApproveRollback(null)}
+          />
+
+          <ConfirmWithReasonModal
+              open={!!pendingRejectRollback}
+              title="Reject rollback?"
+              message="The leave stays approved. Please share why you're declining the rollback."
+              minReasonLength={5}
+              onConfirm={(note) => {
+                  if (pendingRejectRollback) {
+                      rejectRollbackMut.mutate({ id: pendingRejectRollback, note });
+                      setPendingRejectRollback(null);
+                  }
+              }}
+              onCancel={() => setPendingRejectRollback(null)}
+          />
+      </div>
+
+  NEW HERE: tab styling pattern
+  - `border-b-2 -mb-px` — the negative margin pulls the active
+    tab's bottom border DOWN over the container's border, so the
+    seam between tab and content disappears.
+  - One-line trick. Memorise it.
+
+  Test end-to-end:
+   - Approve a leave as maya. Switch to admin, request a rollback.
+   - Switch back to maya. /manager/leaves/pending shows "Rollback
+     requests (1)" in the tab header.
+   - Click the tab → see the request with both contexts.
+   - Approve the rollback → row vanishes, admin's balance refunded.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Tab counts use `?? 0` to handle isLoading. Showing "(undefined)"
+    looks broken.
+  - The rollback queue and pending queue both invalidate
+    `leaveKeys.all` — they live under the same domain and both
+    need refreshing on any decision.
+  - Render the original AND the rollback context in one row. Don't
+    make the manager click into details.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Tab navigation as in-page sub-routing.
+  - Rich row layouts for high-stakes decisions.
+  - Round 31 capstone: the leave state machine is complete —
+    Pending → Approved → RollbackRequested → RolledBack (with the
+    reverse Reject path). All four user surfaces (request,
+    cancel, request rollback, manager queues for both pending and
+    rollback) are live.
 
 
 ================================================================================
@@ -6196,114 +16502,1375 @@ Pacing: One challenge per day. Bell icon + dropdown + mark-read +
 auto-poll. SignalR real-time push comes in Round 46.
 
 
-CHALLENGE 32.1 — Notification model + create on events      Target: 35 min
+CHALLENGE 32.1 — Persisted notifications + cross-service emit Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Notification model: id, recipientUserId, title, body, link?, read,
-    createdAt.
-  - "Side effect" pattern: when a domain event happens (leave approved,
-    document uploaded), CREATE a notification for the relevant user(s).
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Round 30.5 stood up an in-memory NotificationService — fine for
+  the leave flow, but every backend restart wipes the inbox.
+  This challenge promotes notifications to first-class persisted
+  data with full CRUD, links to relevant resources, and emits from
+  multiple feature services (leave, documents). It also adds the
+  "link" field — clicking a notification jumps to the relevant
+  page.
 
-  TASK:
-  1. Domain/Models/Notification.cs.
-  2. INotificationRepository / NotificationRepository (JSON store).
-  3. NotificationService.Create(userId, title, body, link).
-  4. Call from existing services:
-     - LeaveService.Approve / Reject → notify requester
-     - DocumentService.Upload → notify all Admins
-  5. GET /api/notifications — current user's notifications, newest first.
-  6. POST /api/notifications/{id}/read.
-  7. POST /api/notifications/read-all.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Don't notify the actor (manager who approved doesn't get their own
-    notification).
+  1) Service-to-service composition
+     - LeaveService already calls INotificationService.Add (30.5).
+     - DocumentService will now do the same on upload — notify
+       admins so they know a new doc landed.
+     - "Cross-feature side effects" — services collaborate through
+       interfaces, not direct references to repositories.
 
-  WHAT YOU JUST LEARNED:
-  Services calling each other through interfaces — clean cross-feature
-  side effects.
+  2) The "don't notify the actor" rule
+     - When a manager approves, the EMPLOYEE gets notified, not
+       the manager. Self-notifications are noise.
+     - For broadcast events (any admin), filter out the actor.
+
+  3) Per-recipient delivery vs broadcast
+     - Per-recipient: leave decision → notify one employee.
+     - Broadcast: new document → notify ALL admins.
+     - The service exposes both methods. Broadcast iterates and
+       calls Add for each recipient.
+
+  4) Links inside notifications
+     - "Your leave was approved" → link to /leaves.
+     - "New document uploaded by X" → link to /admin/documents.
+     - The link is a relative path. The client uses <Link to={...}>
+       to navigate.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/Notification.cs              (add Link)
+    EmployeeManager.Domain/Repositories/INotificationRepository.cs (NEW)
+    EmployeeManager.Infrastructure/Repositories/NotificationRepository.cs (NEW)
+    EmployeeManager.Application/Services/INotificationService.cs (update signatures)
+    EmployeeManager.Application/Services/NotificationService.cs  (rewrite — persistence-backed)
+    EmployeeManager.Application/Services/LeaveService.cs        (pass link parameter)
+    EmployeeManager.Application/Services/DocumentService.cs     (emit on upload)
+    EmployeeManager.API/Controllers/NotificationsController.cs   (add mark-read, mark-all-read)
+    EmployeeManager.API/Program.cs                                (DI tweaks)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Extend the Notification model
+  Update Notification.cs from Round 30.5:
+
+      namespace EmployeeManager.Domain.Models;
+
+      public class Notification
+      {
+          public Guid Id { get; set; } = Guid.NewGuid();
+          public string Username { get; set; } = string.Empty;
+          public string Title { get; set; } = string.Empty;
+          public string Message { get; set; } = string.Empty;
+          public string? Link { get; set; }       // ← NEW: relative path
+          public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+          public bool Read { get; set; }
+      }
+
+  STEP 2 — Repository
+  NEW FILE: EmployeeManager.Domain/Repositories/INotificationRepository.cs
+
+      using EmployeeManager.Domain.Models;
+      namespace EmployeeManager.Domain.Repositories;
+
+      public interface INotificationRepository
+      {
+          Task<List<Notification>> GetByUserAsync(string username);
+          Task<Notification?> GetByIdAsync(Guid id);
+          Task<Notification> CreateAsync(Notification notification);
+          Task<bool> UpdateAsync(Notification notification);
+          Task MarkAllReadAsync(string username);
+      }
+
+  NEW FILE: EmployeeManager.Infrastructure/Repositories/NotificationRepository.cs
+
+      using EmployeeManager.Domain.Models;
+      using EmployeeManager.Domain.Repositories;
+      using EmployeeManager.Infrastructure.Storage;
+
+      namespace EmployeeManager.Infrastructure.Repositories;
+
+      public class NotificationRepository : INotificationRepository
+      {
+          private readonly JsonDataStore<List<Notification>> _store;
+
+          public NotificationRepository(JsonDataStore<List<Notification>> store)
+          {
+              _store = store;
+          }
+
+          public async Task<List<Notification>> GetByUserAsync(string username)
+              => (await _store.ReadAsync() ?? new())
+                  .Where(n => string.Equals(n.Username, username,
+                                            StringComparison.OrdinalIgnoreCase))
+                  .OrderByDescending(n => n.CreatedAt)
+                  .ToList();
+
+          public async Task<Notification?> GetByIdAsync(Guid id)
+              => (await _store.ReadAsync() ?? new()).FirstOrDefault(n => n.Id == id);
+
+          public async Task<Notification> CreateAsync(Notification notification)
+          {
+              await _store.ReadModifyWriteAsync(list =>
+              {
+                  list ??= new();
+                  list.Add(notification);
+                  return list;
+              });
+              return notification;
+          }
+
+          public async Task<bool> UpdateAsync(Notification notification)
+          {
+              var updated = false;
+              await _store.ReadModifyWriteAsync(list =>
+              {
+                  list ??= new();
+                  var idx = list.FindIndex(n => n.Id == notification.Id);
+                  if (idx >= 0) { list[idx] = notification; updated = true; }
+                  return list;
+              });
+              return updated;
+          }
+
+          public async Task MarkAllReadAsync(string username)
+          {
+              await _store.ReadModifyWriteAsync(list =>
+              {
+                  list ??= new();
+                  foreach (var n in list)
+                  {
+                      if (string.Equals(n.Username, username,
+                                        StringComparison.OrdinalIgnoreCase)
+                          && !n.Read)
+                      {
+                          n.Read = true;
+                      }
+                  }
+                  return list;
+              });
+          }
+      }
+
+  STEP 3 — Promote NotificationService to persistence-backed
+  Update INotificationService.cs:
+
+      using EmployeeManager.Domain.Models;
+      namespace EmployeeManager.Application.Services;
+
+      public interface INotificationService
+      {
+          Task AddAsync(string username, string title, string message, string? link = null);
+          Task BroadcastAsync(IEnumerable<string> usernames, string excludeUsername,
+                              string title, string message, string? link = null);
+          Task<List<Notification>> GetForUserAsync(string username);
+          Task<bool> MarkReadAsync(string callerUsername, Guid notificationId);
+          Task MarkAllReadAsync(string username);
+      }
+
+  Rewrite NotificationService.cs:
+
+      using EmployeeManager.Domain.Models;
+      using EmployeeManager.Domain.Repositories;
+      using Microsoft.Extensions.Logging;
+
+      namespace EmployeeManager.Application.Services;
+
+      public class NotificationService : INotificationService
+      {
+          private readonly INotificationRepository _repo;
+          private readonly ILogger<NotificationService> _logger;
+
+          public NotificationService(INotificationRepository repo,
+                                     ILogger<NotificationService> logger)
+          {
+              _repo = repo;
+              _logger = logger;
+          }
+
+          public async Task AddAsync(string username, string title,
+                                     string message, string? link = null)
+          {
+              if (string.IsNullOrWhiteSpace(username)) return;
+              await _repo.CreateAsync(new Notification
+              {
+                  Username = username,
+                  Title = title,
+                  Message = message,
+                  Link = link,
+              });
+          }
+
+          public async Task BroadcastAsync(IEnumerable<string> usernames,
+              string excludeUsername, string title, string message, string? link = null)
+          {
+              foreach (var u in usernames)
+              {
+                  // Don't notify the actor.
+                  if (string.Equals(u, excludeUsername, StringComparison.OrdinalIgnoreCase))
+                      continue;
+                  await AddAsync(u, title, message, link);
+              }
+          }
+
+          public Task<List<Notification>> GetForUserAsync(string username)
+              => _repo.GetByUserAsync(username);
+
+          public async Task<bool> MarkReadAsync(string callerUsername, Guid notificationId)
+          {
+              var n = await _repo.GetByIdAsync(notificationId);
+              if (n is null) return false;
+
+              // Owner-only — caller must be the recipient.
+              if (!string.Equals(n.Username, callerUsername, StringComparison.OrdinalIgnoreCase))
+                  return false;
+
+              if (n.Read) return true;        // already read — no-op
+              n.Read = true;
+              await _repo.UpdateAsync(n);
+              return true;
+          }
+
+          public Task MarkAllReadAsync(string username)
+              => _repo.MarkAllReadAsync(username);
+      }
+
+  STEP 4 — DI wiring
+  Update Program.cs. Replace the singleton registration from
+  Round 30.5 with the persistent version:
+
+      // Remove: AddSingleton<INotificationService, NotificationService>();
+
+      // Add:
+      builder.Services.AddSingleton(new JsonDataStore<List<Notification>>(
+          Path.Combine(AppContext.BaseDirectory, "Data", "notifications.json")));
+      builder.Services.AddScoped<INotificationRepository, NotificationRepository>();
+      builder.Services.AddScoped<INotificationService, NotificationService>();
+
+  Why scoped now? The service no longer holds state in memory —
+  it delegates to the repository. Scoped is the .NET-Core default
+  for "stateless service over repository."
+
+  STEP 5 — Update LeaveService callers
+  Round 30.5 used `_notifications.Add(...)`. Update to `await
+  _notifications.AddAsync(...)` and pass a link. Example:
+
+      try
+      {
+          await _notifications.AddAsync(
+              req.EmployeeUsername,
+              "Leave approved",
+              $"Your {req.Type} leave from {req.StartDate:MMM d} to {req.EndDate:MMM d} was approved.",
+              link: "/leaves"
+          );
+      }
+      catch (Exception ex)
+      {
+          _logger.LogWarning(ex, "Failed to emit leave-approved notification");
+      }
+
+  Add similar `link: "/leaves"` to every existing notification
+  call in LeaveService (approve, reject, rollback-request,
+  rollback-approve, rollback-reject).
+
+  STEP 6 — Emit from DocumentService
+  In DocumentService.UploadAsync, after the doc is persisted:
+
+      try
+      {
+          // Notify all admins. Lookup admins via the employee repo.
+          var admins = (await _employees.GetAllAsync())
+              .Where(e => string.Equals(e.Role, "Admin",
+                                        StringComparison.OrdinalIgnoreCase)
+                          && !string.IsNullOrEmpty(e.Username))
+              .Select(e => e.Username!);
+          await _notifications.BroadcastAsync(
+              admins,
+              excludeUsername: username,
+              title: "Document uploaded",
+              message: $"{username} uploaded '{doc.FileName}'.",
+              link: "/admin/documents");
+      }
+      catch (Exception ex)
+      {
+          _logger.LogWarning(ex, "Failed to broadcast upload notification");
+      }
+
+  Inject `IEmployeeRepository _employees` and
+  `INotificationService _notifications` into DocumentService's
+  constructor.
+
+  STEP 7 — Controller polish
+  Update NotificationsController.cs:
+
+      using EmployeeManager.Application.Services;
+      using Microsoft.AspNetCore.Authorization;
+      using Microsoft.AspNetCore.Mvc;
+
+      namespace EmployeeManager.API.Controllers;
+
+      [ApiController]
+      [Route("api/notifications")]
+      [Authorize]
+      public class NotificationsController : ControllerBase
+      {
+          private readonly INotificationService _notifications;
+
+          public NotificationsController(INotificationService notifications)
+          {
+              _notifications = notifications;
+          }
+
+          [HttpGet("mine")]
+          public async Task<IActionResult> GetMine()
+          {
+              var username = User.Identity?.Name;
+              if (string.IsNullOrEmpty(username)) return Unauthorized();
+              return Ok(await _notifications.GetForUserAsync(username));
+          }
+
+          [HttpPost("{id:guid}/read")]
+          public async Task<IActionResult> MarkRead(Guid id)
+          {
+              var username = User.Identity?.Name;
+              if (string.IsNullOrEmpty(username)) return Unauthorized();
+              var ok = await _notifications.MarkReadAsync(username, id);
+              return ok ? NoContent() : NotFound();
+          }
+
+          [HttpPost("mark-all-read")]
+          public async Task<IActionResult> MarkAllRead()
+          {
+              var username = User.Identity?.Name;
+              if (string.IsNullOrEmpty(username)) return Unauthorized();
+              await _notifications.MarkAllReadAsync(username);
+              return NoContent();
+          }
+      }
+
+  Test:
+   - Restart backend. notifications.json gets created on first
+     write.
+   - Approve a leave → notification appears for the requester
+     AND persists across restart.
+   - Upload a document as a non-admin → all admins (excluding the
+     uploader) get notified.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - `BroadcastAsync` filters out the actor. Always exclude.
+  - Use `await` consistently. The async signature change in
+    INotificationService propagates — fix the call sites or the
+    compiler will catch each.
+  - Links are relative paths (`/leaves`). The client decides how
+    to navigate them; don't include the origin.
+  - Defensive: wrap notification emits in try/catch with a log.
+    A failure here must NEVER block the main action.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Promoting in-memory storage to JSON-backed without changing
+    callers (interface stable, implementation swapped).
+  - Service-to-service composition via injected interfaces.
+  - Broadcast with actor exclusion.
+  - Notification links as the "click-through" pattern.
 
 
-CHALLENGE 32.2 — useNotifications hook (with polling)        Target: 25 min
+CHALLENGE 32.2 — Polling hook + read mutations              Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - React Query `refetchInterval`: a useQuery option that auto-refetches
-    every N ms. Cheap real-time approximation.
-       useQuery({ queryKey, queryFn, refetchInterval: 30_000 });
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Round 30.5 wired a basic useMyNotifications hook with
+  refetchInterval. This challenge extends it: derived unread count
+  via selector, plus mark-read and mark-all-read mutations with
+  OPTIMISTIC updates. The mark-read mutation is the perfect
+  candidate for optimistic UX — instant feedback, low downside on
+  error (worst case the badge reverts).
 
-  TASK:
-  1. notificationKeys.ts + useNotifications hook with refetchInterval 30s.
-  2. useUnreadCount = derive from notifications data length where !read.
-  3. useMarkRead + useMarkAllRead mutations with optimistic update.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Disable polling when user is on the notifications page (they
-    interact with it directly).
-  - 30s feels live without hammering the server.
+  1) `select` in useQuery — derived data without re-fetch
+     - `useQuery({ ..., select: (data) => data.filter(n => !n.read).length })`
+       returns the COMPUTED value (a number) instead of the raw
+       array.
+     - Use it when components only need a derived view.
+     - The component subscribes to the SELECTED value; it
+       re-renders only when the selected value changes.
 
-  WHAT YOU JUST LEARNED:
-  Polling as a first-pass for "real-time." Trade-off: simple, but the
-  delay is visible. Replaced with SignalR in Round 46.
+  2) Disabling polling when the user is on the notifications page
+     - The page handles updates directly. No need to poll.
+     - `refetchInterval` accepts a function:
+         `refetchInterval: pathnameOnNotificationsPage ? false : 30_000`
+     - Or pass an option from the hook caller.
+
+  3) Optimistic mark-read with rollback
+     - Same recipe as Round 25.3's optimistic delete:
+       cancel-in-flight → snapshot → write optimistic → rollback
+       on error → invalidate in onSettled.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/services/api.ts                       (markNotificationRead, markAllRead)
+    src/Queries/notificationKeys.ts           (NEW)
+    src/Queries/useMyNotifications.ts         (rewrite — selector + opt-out polling)
+    src/Queries/useUnreadCount.ts             (NEW — selector hook)
+    src/Queries/useMarkNotificationRead.ts    (NEW)
+    src/Queries/useMarkAllNotificationsRead.ts (NEW)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Query keys
+  NEW FILE: src/Queries/notificationKeys.ts
+
+      export const notificationKeys = {
+          all: ['notifications'] as const,
+          mine: () => [...notificationKeys.all, 'mine'] as const,
+      };
+
+  STEP 2 — API methods
+  Append to src/services/api.ts:
+
+      export const markNotificationRead = (id: string) =>
+          api.post(`/notifications/${id}/read`);
+
+      export const markAllNotificationsRead = () =>
+          api.post('/notifications/mark-all-read');
+
+  STEP 3 — Polishing useMyNotifications
+  Rewrite src/Queries/useMyNotifications.ts:
+
+      import { useQuery } from '@tanstack/react-query';
+      import { fetchMyNotifications } from '../services/api';
+      import { notificationKeys } from './notificationKeys';
+
+      interface Options {
+          poll?: boolean;     // disable polling on the notifications page
+      }
+
+      export const useMyNotifications = ({ poll = true }: Options = {}) =>
+          useQuery({
+              queryKey: notificationKeys.mine(),
+              queryFn: async () => (await fetchMyNotifications()).data,
+              refetchInterval: poll ? 30_000 : false,
+              staleTime: 0,
+          });
+
+  STEP 4 — Unread count via selector
+  NEW FILE: src/Queries/useUnreadCount.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { fetchMyNotifications } from '../services/api';
+      import { notificationKeys } from './notificationKeys';
+      import type { Notification } from '../Types/Notification';
+
+      export const useUnreadCount = () =>
+          useQuery({
+              queryKey: notificationKeys.mine(),
+              queryFn: async () => (await fetchMyNotifications()).data,
+              refetchInterval: 30_000,
+              staleTime: 0,
+              select: (notifications: Notification[]) =>
+                  notifications.filter(n => !n.read).length,
+          });
+
+  NEW HERE: `select` returning a primitive
+  - The component using useUnreadCount() gets a number, not an
+    array.
+  - Multiple components can share the underlying query cache
+    (same queryKey) but receive different SELECTED views.
+  - React Query memoises the select result — the component only
+    re-renders when the selected value changes.
+
+  STEP 5 — Mark-one-read mutation (optimistic)
+  NEW FILE: src/Queries/useMarkNotificationRead.ts
+
+      import { useMutation, useQueryClient } from '@tanstack/react-query';
+      import { markNotificationRead } from '../services/api';
+      import { notificationKeys } from './notificationKeys';
+      import type { Notification } from '../Types/Notification';
+
+      export const useMarkNotificationRead = () => {
+          const queryClient = useQueryClient();
+
+          return useMutation({
+              mutationFn: (id: string) => markNotificationRead(id),
+
+              onMutate: async (id) => {
+                  await queryClient.cancelQueries({ queryKey: notificationKeys.mine() });
+                  const previous = queryClient.getQueryData<Notification[]>(
+                      notificationKeys.mine());
+
+                  queryClient.setQueryData<Notification[]>(
+                      notificationKeys.mine(),
+                      (old) => old?.map(n => n.id === id ? { ...n, read: true } : n) ?? []);
+
+                  return { previous };
+              },
+
+              onError: (_err, _id, context) => {
+                  if (context?.previous) {
+                      queryClient.setQueryData(notificationKeys.mine(), context.previous);
+                  }
+              },
+
+              onSettled: () => {
+                  queryClient.invalidateQueries({ queryKey: notificationKeys.mine() });
+              },
+          });
+      };
+
+  STEP 6 — Mark-all-read mutation (optimistic)
+  NEW FILE: src/Queries/useMarkAllNotificationsRead.ts
+
+      import { useMutation, useQueryClient } from '@tanstack/react-query';
+      import { toast } from 'react-toastify';
+      import { markAllNotificationsRead } from '../services/api';
+      import { notificationKeys } from './notificationKeys';
+      import type { Notification } from '../Types/Notification';
+
+      export const useMarkAllNotificationsRead = () => {
+          const queryClient = useQueryClient();
+
+          return useMutation({
+              mutationFn: () => markAllNotificationsRead(),
+
+              onMutate: async () => {
+                  await queryClient.cancelQueries({ queryKey: notificationKeys.mine() });
+                  const previous = queryClient.getQueryData<Notification[]>(
+                      notificationKeys.mine());
+
+                  queryClient.setQueryData<Notification[]>(
+                      notificationKeys.mine(),
+                      (old) => old?.map(n => ({ ...n, read: true })) ?? []);
+
+                  return { previous };
+              },
+
+              onError: (_err, _vars, context) => {
+                  if (context?.previous) {
+                      queryClient.setQueryData(notificationKeys.mine(), context.previous);
+                  }
+                  toast.error('Failed to mark all as read.');
+              },
+
+              onSettled: () => {
+                  queryClient.invalidateQueries({ queryKey: notificationKeys.mine() });
+              },
+          });
+      };
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - `select` is the right tool for derived views. Don't useMemo
+    over useQuery().data — React Query already does that for you.
+  - Mark-read mutation is a textbook optimistic case: tiny diff,
+    instant feedback, easy rollback.
+  - Cancel in-flight queries in onMutate. Otherwise a 30-second
+    poll could overwrite the optimistic update mid-flight.
+  - Pass `poll: false` to useMyNotifications when used on the
+    notifications page itself — the user is looking at the data,
+    no need to refetch behind their back.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - `select` for derived views from cached data.
+  - Optional polling via options-bag-with-default.
+  - Optimistic mutation pattern reapplied to a new mutation type.
+  - When optimistic IS the right call (this) vs when refetch is
+    (state-machine transitions in 30.4).
 
 
-CHALLENGE 32.3 — Bell + badge in header                      Target: 30 min
+CHALLENGE 32.3 — Bell + dropdown in the header              Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Bell icon in AuthLayout header.
-  2. Badge with unread count (hidden if 0).
-  3. Click → dropdown panel showing last 10 notifications.
-  4. Each notification: title, body, time-ago, link.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Every modern app has the bell. This challenge builds the
+  pattern from scratch: a button with a count badge, a dropdown
+  panel that opens on click, the last 10 notifications inside
+  with read/unread styling, and the click-outside / Escape-to-close
+  behaviour every dropdown needs.
 
-  RULES:
-  - Use a simple time-ago helper (no library): "5m ago", "2h ago",
-    "3d ago".
-  - Close dropdown on outside click + on Esc.
+  The outside-click pattern is reused for: user menu, filter
+  popovers, color pickers, search suggestions. Worth getting
+  right here.
 
-  WHAT YOU JUST LEARNED:
-  Dropdown with outside-click. Pattern reused for user menu, filters.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) The outside-click hook pattern
+     - Attach a document-level click listener.
+     - On click, check if the target is INSIDE the panel — if
+       not, close.
+     - Cleanup the listener on unmount.
+     - Extract into a reusable hook: `useOutsideClick(ref, onOutside)`.
+
+  2) The Escape-key shortcut
+     - Same shape with `keydown` listener on document.
+     - Helps keyboard users.
+
+  3) "X minutes ago" formatting
+     - date-fns ships `formatDistanceToNow(date, { addSuffix: true })`:
+       "5 minutes ago", "in 3 hours."
+     - Pretty out of the box.
+
+  4) Headless dropdown — no library
+     - We could reach for headlessUI or radix-ui. For our scale,
+       a small custom dropdown does the job.
+     - Build it; understand it. Round 58 introduces design-system
+       primitives where you'd revisit this.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/hooks/useOutsideClick.ts             (NEW)
+    src/components/NotificationBell.tsx      (NEW)
+    src/Context/AuthLayout.tsx               (mount the bell)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Outside-click hook
+  NEW FILE: src/hooks/useOutsideClick.ts
+
+      import { useEffect, type RefObject } from 'react';
+
+      // Calls `handler` whenever a mousedown OR touchstart happens
+      // outside the given ref. Also handles Esc to close.
+      export const useOutsideClick = (
+          ref: RefObject<HTMLElement | null>,
+          handler: () => void,
+          enabled = true,
+      ) => {
+          useEffect(() => {
+              if (!enabled) return;
+
+              const handleClick = (event: MouseEvent | TouchEvent) => {
+                  const target = event.target;
+                  if (!ref.current || !(target instanceof Node)) return;
+                  if (!ref.current.contains(target)) handler();
+              };
+
+              const handleKey = (event: KeyboardEvent) => {
+                  if (event.key === 'Escape') handler();
+              };
+
+              document.addEventListener('mousedown', handleClick);
+              document.addEventListener('touchstart', handleClick);
+              document.addEventListener('keydown', handleKey);
+
+              return () => {
+                  document.removeEventListener('mousedown', handleClick);
+                  document.removeEventListener('touchstart', handleClick);
+                  document.removeEventListener('keydown', handleKey);
+              };
+          }, [ref, handler, enabled]);
+      };
+
+  NEW HERE: `RefObject<HTMLElement | null>`
+  - The type that `useRef<HTMLElement>(null)` produces.
+  - The `| null` is because the ref is null until the element
+    mounts.
+  - Always guard with `ref.current` checks.
+
+  STEP 2 — The bell + dropdown
+  NEW FILE: src/components/NotificationBell.tsx
+
+      import { useRef, useState } from 'react';
+      import { Link } from 'react-router-dom';
+      import { formatDistanceToNow } from 'date-fns';
+      import clsx from 'clsx';
+      import { useMyNotifications } from '../Queries/useMyNotifications';
+      import { useUnreadCount } from '../Queries/useUnreadCount';
+      import { useMarkNotificationRead } from '../Queries/useMarkNotificationRead';
+      import { useMarkAllNotificationsRead } from '../Queries/useMarkAllNotificationsRead';
+      import { useOutsideClick } from '../hooks/useOutsideClick';
+
+      const NotificationBell = () => {
+          const [open, setOpen] = useState(false);
+          const containerRef = useRef<HTMLDivElement>(null);
+
+          const { data: notifications } = useMyNotifications();
+          const { data: unreadCount = 0 } = useUnreadCount();
+          const markReadMutation = useMarkNotificationRead();
+          const markAllReadMutation = useMarkAllNotificationsRead();
+
+          useOutsideClick(containerRef, () => setOpen(false), open);
+
+          // Show only the last 10 in the dropdown.
+          const recent = notifications?.slice(0, 10) ?? [];
+
+          const handleItemClick = (id: string) => {
+              markReadMutation.mutate(id);
+              setOpen(false);
+          };
+
+          return (
+              <div ref={containerRef} className="relative">
+                  <button
+                      onClick={() => setOpen(o => !o)}
+                      aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
+                      className="relative px-2 py-1 rounded
+                                 hover:bg-gray-100 dark:hover:bg-gray-700"
+                  >
+                      <span aria-hidden>🔔</span>
+                      {unreadCount > 0 && (
+                          <span className="absolute -top-1 -right-1 inline-flex items-center
+                                           justify-center min-w-[18px] h-[18px] px-1
+                                           text-[10px] font-semibold rounded-full
+                                           bg-red-600 text-white">
+                              {unreadCount > 99 ? '99+' : unreadCount}
+                          </span>
+                      )}
+                  </button>
+
+                  {open && (
+                      <div className="absolute right-0 mt-2 w-80 rounded-lg shadow-lg
+                                      bg-white dark:bg-gray-800 border border-gray-200
+                                      dark:border-gray-700 z-50">
+                          <div className="flex justify-between items-center px-3 py-2
+                                          border-b border-gray-200 dark:border-gray-700">
+                              <span className="text-sm font-medium">Notifications</span>
+                              {unreadCount > 0 && (
+                                  <button
+                                      onClick={() => markAllReadMutation.mutate()}
+                                      className="text-xs text-brand-600 hover:text-brand-800">
+                                      Mark all read
+                                  </button>
+                              )}
+                          </div>
+
+                          {recent.length === 0 ? (
+                              <p className="p-4 text-sm text-gray-500 text-center">
+                                  Nothing here yet.
+                              </p>
+                          ) : (
+                              <ul className="max-h-96 overflow-y-auto">
+                                  {recent.map(n => {
+                                      const Inner = (
+                                          <div className={clsx(
+                                              'px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700',
+                                              !n.read && 'bg-blue-50 dark:bg-blue-900/30',
+                                          )}>
+                                              <p className="text-sm font-medium">{n.title}</p>
+                                              <p className="text-xs text-gray-500 mt-0.5">
+                                                  {n.message}
+                                              </p>
+                                              <p className="text-[11px] text-gray-400 mt-1">
+                                                  {formatDistanceToNow(new Date(n.createdAt),
+                                                      { addSuffix: true })}
+                                              </p>
+                                          </div>
+                                      );
+
+                                      return (
+                                          <li key={n.id}>
+                                              {n.link
+                                                  ? <Link to={n.link}
+                                                          onClick={() => handleItemClick(n.id)}>
+                                                        {Inner}
+                                                    </Link>
+                                                  : <button onClick={() => handleItemClick(n.id)}
+                                                            className="w-full text-left">
+                                                        {Inner}
+                                                    </button>
+                                              }
+                                          </li>
+                                      );
+                                  })}
+                              </ul>
+                          )}
+
+                          <div className="border-t border-gray-200 dark:border-gray-700 px-3 py-2 text-center">
+                              <Link to="/notifications"
+                                    onClick={() => setOpen(false)}
+                                    className="text-sm text-brand-600 hover:text-brand-800">
+                                  See all
+                              </Link>
+                          </div>
+                      </div>
+                  )}
+              </div>
+          );
+      };
+
+      export default NotificationBell;
+
+  STEP 3 — Mount in AuthLayout
+  In src/Context/AuthLayout.tsx, replace the placeholder bell
+  with:
+
+      import NotificationBell from '../components/NotificationBell';
+      // ...
+      <NotificationBell />
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - The outside-click hook ONLY mounts the listener when `enabled`
+    is true. Otherwise every dropdown component leaks a listener.
+  - `z-50` on the dropdown — it must float above tables, cards,
+    and modals.
+  - Always include an `aria-label` on icon-only buttons. Screen
+    readers depend on it.
+  - `formatDistanceToNow` is locale-aware. Use the project locale
+    (en for now); date-fns has a `/locale` subpath for others.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - The outside-click + Esc pattern as a reusable hook.
+  - Conditional rendering of a Link vs button (linked
+    notifications vs non-linked).
+  - `formatDistanceToNow` for "X ago" text.
+  - Composing the bell from useMyNotifications, useUnreadCount,
+    and two mutation hooks.
 
 
-CHALLENGE 32.4 — Notifications page (full history)           Target: 30 min
+CHALLENGE 32.4 — Full notifications page                    Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. /notifications route.
-  2. Full list with filters: all / unread / by date range.
-  3. Mark-read on hover / click. Mark-all-read button.
-  4. Empty state.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  The dropdown is preview-only (last 10). Users need a full
+  history view with filtering. By now this should feel mechanical
+  — same archetype as the documents list, the leaves list, the
+  admin documents page. URL-driven filters, table rows, empty
+  state.
 
-  RULES:
-  - Reuse Tailwind table patterns + searchParams filter pattern.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet (mostly review)
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Same archetype as documents/leaves list. By now the page assembly
-  is rote.
+  1) Filter state in URL search params
+     - `?filter=unread` toggles the unread-only view.
+     - Search params survive refresh; clean URL is the default.
+
+  2) Pass `poll: false` when the user is on this page
+     - The page actively manages state. Background polling can
+       fight the user's click-to-mark-read.
+
+  3) Inline mark-read button per row
+     - Click the row title (which links to the relevant page) AND
+       a sister "Mark read" link for keyboard users.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/routes.ts                              (notifications())
+    src/components/NotificationsPage.tsx       (NEW)
+    src/App.tsx                                (route)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Route
+  src/routes.ts:
+
+      notifications: () => '/notifications' as const,
+
+  STEP 2 — The page
+  NEW FILE: src/components/NotificationsPage.tsx
+
+      import { useMemo } from 'react';
+      import { Link, useSearchParams } from 'react-router-dom';
+      import { formatDistanceToNow } from 'date-fns';
+      import clsx from 'clsx';
+      import { useMyNotifications } from '../Queries/useMyNotifications';
+      import { useMarkNotificationRead } from '../Queries/useMarkNotificationRead';
+      import { useMarkAllNotificationsRead } from '../Queries/useMarkAllNotificationsRead';
+
+      type Filter = 'all' | 'unread';
+
+      const NotificationsPage = () => {
+          const [searchParams, setSearchParams] = useSearchParams();
+          const filter: Filter = searchParams.get('filter') === 'unread' ? 'unread' : 'all';
+
+          // Polling off here — user is interacting with the list directly.
+          const { data: notifications, isLoading } = useMyNotifications({ poll: false });
+          const markReadMutation = useMarkNotificationRead();
+          const markAllReadMutation = useMarkAllNotificationsRead();
+
+          const visible = useMemo(() => {
+              if (!notifications) return [];
+              return filter === 'unread'
+                  ? notifications.filter(n => !n.read)
+                  : notifications;
+          }, [notifications, filter]);
+
+          const setFilter = (next: Filter) => {
+              if (next === 'all') setSearchParams({});
+              else setSearchParams({ filter: next });
+          };
+
+          const unreadCount = notifications?.filter(n => !n.read).length ?? 0;
+
+          return (
+              <div className="max-w-3xl mx-auto p-6">
+                  <div className="flex justify-between items-center mb-4">
+                      <h1 className="text-2xl font-semibold">Notifications</h1>
+                      {unreadCount > 0 && (
+                          <button
+                              onClick={() => markAllReadMutation.mutate()}
+                              className="text-sm text-brand-600 hover:text-brand-800">
+                              Mark all read
+                          </button>
+                      )}
+                  </div>
+
+                  {/* Filter tabs */}
+                  <div className="flex gap-2 mb-4 border-b border-gray-200 dark:border-gray-700">
+                      {(['all', 'unread'] as const).map(f => (
+                          <button
+                              key={f}
+                              onClick={() => setFilter(f)}
+                              className={clsx(
+                                  'px-4 py-2 text-sm font-medium border-b-2 -mb-px',
+                                  filter === f
+                                      ? 'border-brand-600 text-brand-600'
+                                      : 'border-transparent text-gray-600 hover:text-gray-900',
+                              )}>
+                              {f === 'all' ? 'All' : `Unread (${unreadCount})`}
+                          </button>
+                      ))}
+                  </div>
+
+                  {isLoading ? (
+                      <p className="text-gray-500">Loading…</p>
+                  ) : visible.length === 0 ? (
+                      <div className="card text-center text-gray-500">
+                          {filter === 'unread'
+                              ? "You're all caught up."
+                              : "No notifications yet."}
+                      </div>
+                  ) : (
+                      <ul className="divide-y divide-gray-200 dark:divide-gray-700 bg-white
+                                     dark:bg-gray-800 rounded-lg shadow">
+                          {visible.map(n => (
+                              <li key={n.id} className={clsx(
+                                  'px-4 py-3',
+                                  !n.read && 'bg-blue-50 dark:bg-blue-900/30',
+                              )}>
+                                  <div className="flex justify-between items-start gap-4">
+                                      <div className="flex-1">
+                                          <p className="text-sm font-medium">{n.title}</p>
+                                          <p className="text-sm text-gray-600 dark:text-gray-300 mt-0.5">
+                                              {n.message}
+                                          </p>
+                                          <p className="text-xs text-gray-400 mt-1">
+                                              {formatDistanceToNow(new Date(n.createdAt),
+                                                  { addSuffix: true })}
+                                          </p>
+                                      </div>
+
+                                      <div className="flex flex-col items-end gap-1 text-xs">
+                                          {n.link && (
+                                              <Link to={n.link}
+                                                    onClick={() => !n.read
+                                                        && markReadMutation.mutate(n.id)}
+                                                    className="text-brand-600 hover:text-brand-800">
+                                                  Open →
+                                              </Link>
+                                          )}
+                                          {!n.read && (
+                                              <button onClick={() => markReadMutation.mutate(n.id)}
+                                                      className="text-gray-500 hover:text-gray-800">
+                                                  Mark read
+                                              </button>
+                                          )}
+                                      </div>
+                                  </div>
+                              </li>
+                          ))}
+                      </ul>
+                  )}
+              </div>
+          );
+      };
+
+      export default NotificationsPage;
+
+  STEP 3 — Wire the route in App.tsx
+
+      { path: routes.notifications(), element: <NotificationsPage /> },
+
+  Test:
+   - /notifications shows the full list.
+   - Click "Unread" → URL becomes /notifications?filter=unread.
+   - Click "Mark read" on a row → row's read styling drops (optimistic).
+   - "Mark all read" — every row becomes read instantly.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - `useMyNotifications({ poll: false })` here. The page is in
+    control; background polling fights the user.
+  - On link click (`Open →`), also mark-read — clicking through
+    is implicit acknowledgement.
+  - The empty-state copy differs by filter — "all caught up" vs
+    "no notifications yet."
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Reapplying the URL-driven filter pattern (4th time).
+  - When to opt out of polling.
+  - Implicit mark-read on link click.
 
 
-CHALLENGE 32.5 — Notification preferences (stub)              Target: 20 min
+CHALLENGE 32.5 — Notification preferences                   Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Add a `notificationPrefs: { email: bool, inApp: bool }` field on
-     User.
-  2. /profile/notifications page with two checkboxes.
-  3. PUT /api/profile/notification-prefs.
-  4. Service-side, just store; we don't wire email yet (no SMTP).
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Real apps let users opt out of categories. We stub the EMAIL
+  channel (we have no SMTP) but persist the preference so when
+  email lands later, the data's already there. The in-app channel
+  is honoured immediately — if the user disables it, no
+  notifications get persisted for them.
 
-  RULES:
-  - Stub the email path — log it server-side. Real SMTP is a separate
-    Round (skipped here; future scope).
+  This challenge teaches the "preferences as data" pattern:
+  user-specific config stored against the Employee row, exposed
+  via /api/profile/notification-prefs, edited via a small form.
 
-  WHAT YOU JUST LEARNED:
-  Preferences-as-data. Same shape as feature flags.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Preferences embedded in the user row
+     - For ≤ 10 preferences, embed in the Employee model directly:
+         public NotificationPreferences NotificationPrefs { get; set; }
+       Sub-object serialised inline.
+     - For 100+ preferences, separate `preferences.json` keyed by
+       username. Not our scale.
+
+  2) Default values for absent preferences
+     - Existing rows in employees.json don't have the field. On
+       deserialization System.Text.Json leaves it null.
+     - In the model, default-initialise:
+         public NotificationPreferences NotificationPrefs { get; set; } = new();
+     - The `NotificationPreferences` POCO has its own defaults (
+       inApp = true, email = false).
+
+  3) Honouring the preference in NotificationService
+     - Inside AddAsync, check the recipient's preference before
+       persisting. If inApp is off, drop the notification silently.
+     - Email channel is logged for now ("would have emailed X").
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/NotificationPreferences.cs (NEW)
+    EmployeeManager.Domain/Models/Employee.cs               (add field)
+    EmployeeManager.Application/Services/NotificationService.cs (respect prefs)
+    EmployeeManager.API/Controllers/ProfileController.cs    (PUT prefs)
+    src/Types/Models.ts                                     (notificationPrefs)
+    src/schemas/notificationPrefsSchema.ts                  (NEW)
+    src/services/api.ts                                     (updateNotificationPrefs)
+    src/Queries/useUpdateNotificationPrefs.ts               (NEW)
+    src/components/NotificationPrefsPage.tsx                (NEW)
+    src/routes.ts                                           (notificationPrefs())
+    src/App.tsx                                             (route)
+    src/components/ProfilePage.tsx                          (link)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Preferences POCO + field on Employee
+  NEW FILE: EmployeeManager.Domain/Models/NotificationPreferences.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public class NotificationPreferences
+      {
+          public bool InApp { get; set; } = true;
+          public bool Email { get; set; } = false;     // stub until SMTP exists
+      }
+
+  In Employee.cs, add:
+
+      public NotificationPreferences NotificationPrefs { get; set; } = new();
+
+  STEP 2 — Honour the preference in NotificationService
+  Inject IEmployeeRepository and gate the persistence:
+
+      public class NotificationService : INotificationService
+      {
+          private readonly INotificationRepository _repo;
+          private readonly IEmployeeRepository _employees;
+          private readonly ILogger<NotificationService> _logger;
+
+          public NotificationService(INotificationRepository repo,
+                                     IEmployeeRepository employees,
+                                     ILogger<NotificationService> logger)
+          {
+              _repo = repo;
+              _employees = employees;
+              _logger = logger;
+          }
+
+          public async Task AddAsync(string username, string title,
+                                     string message, string? link = null)
+          {
+              if (string.IsNullOrWhiteSpace(username)) return;
+
+              var employee = await _employees.GetByUsernameAsync(username);
+              if (employee is null) return;
+
+              // Honour in-app preference.
+              if (employee.NotificationPrefs.InApp)
+              {
+                  await _repo.CreateAsync(new Notification
+                  {
+                      Username = username,
+                      Title = title,
+                      Message = message,
+                      Link = link,
+                  });
+              }
+
+              // Email stub — log only, until SMTP lands.
+              if (employee.NotificationPrefs.Email)
+              {
+                  _logger.LogInformation(
+                      "Would email {Username}: {Title} — {Message}",
+                      username, title, message);
+              }
+          }
+          // ... rest unchanged
+      }
+
+  STEP 3 — PUT endpoint on ProfileController
+  Append to ProfileController.cs:
+
+      public class UpdateNotificationPrefsRequest
+      {
+          public bool InApp { get; set; }
+          public bool Email { get; set; }
+      }
+
+      [HttpPut("notification-prefs")]
+      public async Task<IActionResult> UpdateNotificationPrefs(
+          [FromBody] UpdateNotificationPrefsRequest request)
+      {
+          var username = User.Identity?.Name;
+          if (string.IsNullOrEmpty(username)) return Unauthorized();
+
+          var me = await _employees.GetByUsernameAsync(username);
+          if (me is null) return NotFound();
+
+          me.NotificationPrefs.InApp = request.InApp;
+          me.NotificationPrefs.Email = request.Email;
+          await _employees.UpdateAsync(me);
+
+          me.PasswordHash = null;
+          return Ok(me);
+      }
+
+  STEP 4 — TS types
+  Add to src/Types/Models.ts:
+
+      export interface NotificationPreferences {
+          inApp: boolean;
+          email: boolean;
+      }
+
+      // In the Employee interface:
+      notificationPrefs?: NotificationPreferences;
+
+  STEP 5 — Schema + form
+  NEW FILE: src/schemas/notificationPrefsSchema.ts
+
+      import { z } from 'zod';
+
+      export const notificationPrefsSchema = z.object({
+          inApp: z.boolean(),
+          email: z.boolean(),
+      });
+
+      export type NotificationPrefsFormValues = z.infer<typeof notificationPrefsSchema>;
+
+  Append to src/services/api.ts:
+
+      export const updateNotificationPrefs = (values: NotificationPrefsFormValues) =>
+          api.put<Profile>('/profile/notification-prefs', values);
+
+  NEW FILE: src/Queries/useUpdateNotificationPrefs.ts
+
+      import { useMutation, useQueryClient } from '@tanstack/react-query';
+      import { toast } from 'react-toastify';
+      import { updateNotificationPrefs } from '../services/api';
+      import { profileKeys } from './profileKeys';
+      import type { Profile } from '../Types/Profile';
+      import type { NotificationPrefsFormValues } from '../schemas/notificationPrefsSchema';
+
+      export const useUpdateNotificationPrefs = () => {
+          const queryClient = useQueryClient();
+          return useMutation({
+              mutationFn: updateNotificationPrefs,
+              onSuccess: (response) => {
+                  queryClient.setQueryData<Profile>(profileKeys.me(), response.data);
+                  toast.success('Preferences saved.');
+              },
+          });
+      };
+
+  NEW FILE: src/components/NotificationPrefsPage.tsx
+
+      import { useEffect } from 'react';
+      import { useForm } from 'react-hook-form';
+      import { zodResolver } from '@hookform/resolvers/zod';
+      import { useNavigate } from 'react-router-dom';
+      import {
+          notificationPrefsSchema,
+          NotificationPrefsFormValues,
+      } from '../schemas/notificationPrefsSchema';
+      import { useProfile } from '../Queries/useProfile';
+      import { useUpdateNotificationPrefs } from '../Queries/useUpdateNotificationPrefs';
+      import { routes } from '../routes';
+
+      const NotificationPrefsPage = () => {
+          const navigate = useNavigate();
+          const { data: profile, isLoading } = useProfile();
+          const updateMutation = useUpdateNotificationPrefs();
+
+          const {
+              register,
+              handleSubmit,
+              reset,
+              formState: { isDirty, isSubmitting },
+          } = useForm<NotificationPrefsFormValues>({
+              resolver: zodResolver(notificationPrefsSchema),
+              defaultValues: { inApp: true, email: false },
+          });
+
+          useEffect(() => {
+              if (profile?.notificationPrefs) {
+                  reset({
+                      inApp: profile.notificationPrefs.inApp,
+                      email: profile.notificationPrefs.email,
+                  });
+              }
+          }, [profile, reset]);
+
+          if (isLoading) return <p className="p-6 text-gray-500">Loading…</p>;
+
+          const onSubmit = (values: NotificationPrefsFormValues) => {
+              updateMutation.mutate(values);
+          };
+
+          return (
+              <div className="max-w-md mx-auto p-6">
+                  <h1 className="text-2xl font-semibold mb-4">Notification Preferences</h1>
+                  <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 card">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" {...register('inApp')}
+                                 className="rounded text-brand-600 focus:ring-brand-500" />
+                          <span className="text-sm">
+                              In-app notifications (the bell)
+                          </span>
+                      </label>
+
+                      <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" {...register('email')}
+                                 className="rounded text-brand-600 focus:ring-brand-500" />
+                          <span className="text-sm">
+                              Email notifications
+                              <span className="ml-1 text-xs text-gray-400">
+                                  (planned — currently logged only)
+                              </span>
+                          </span>
+                      </label>
+
+                      <div className="flex gap-2 justify-end">
+                          <button type="button" className="btn-secondary"
+                                  onClick={() => navigate(routes.profile())}>
+                              Cancel
+                          </button>
+                          <button type="submit"
+                                  disabled={!isDirty || isSubmitting || updateMutation.isPending}
+                                  className="btn-primary">
+                              {updateMutation.isPending ? 'Saving…' : 'Save'}
+                          </button>
+                      </div>
+                  </form>
+              </div>
+          );
+      };
+
+      export default NotificationPrefsPage;
+
+  STEP 6 — Route + profile link
+  src/routes.ts:
+
+      notificationPrefs: () => '/profile/notifications' as const,
+
+  In App.tsx:
+
+      { path: routes.notificationPrefs(), element: <NotificationPrefsPage /> },
+
+  On ProfilePage, add a link next to "Edit" and "Change password":
+
+      <Link to={routes.notificationPrefs()} className="btn-secondary">
+          Notifications
+      </Link>
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Default-initialise `NotificationPrefs = new()` on the model
+    so legacy rows get sensible defaults on first read.
+  - Honour the InApp preference at the SERVICE level, not the
+    controller. The service decides whether to persist; the
+    controller is just a transport.
+  - Log email "deliveries" — when SMTP finally lands you'll be
+    able to validate the volume/pattern without changing the
+    calling code.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Preferences-as-data, embedded in the user row.
+  - Honouring preferences at the SERVICE level (single point of
+    enforcement).
+  - The "log instead of send" stub pattern for future channels.
+  - Round 32 capstone: full notification stack — persisted store,
+    polling + selectors, bell with outside-click, full history
+    page, per-user preferences. SignalR push (Round 41) will slot
+    in without changing any of this.
 
 
 ================================================================================
@@ -6314,112 +17881,1277 @@ Pacing: One challenge per day. Every state-changing action is recorded,
 filterable, exportable. Foundation for compliance + debugging.
 
 
-CHALLENGE 33.1 — Audit model + middleware                   Target: 40 min
+CHALLENGE 33.1 — Audit model + service + middleware          Target: 60 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - AuditEntry: id, actorUserId, actorName, action (string enum),
-    entityType (string), entityId (string), before? (JSON), after?
-    (JSON), at (DateTime).
-  - Capture strategy: an ASP.NET Core action filter that intercepts
-    POST/PUT/DELETE on controllers, captures the before-state if
-    available, records on success.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Up to now, audit-worthy actions (admin deletes, leave decisions)
+  have been logged via `_logger.LogInformation(...)`. Useful for
+  debugging, useless for compliance. Real audit needs:
 
-  TASK:
-  1. Domain/Models/AuditEntry.cs.
-  2. IAuditRepository / AuditRepository.
-  3. AuditService.Record(...).
-  4. AuditActionFilter : IAsyncActionFilter — captures actor (from
-     JWT), action name, entity from route. Calls AuditService.
-  5. Register in Program.cs as a global filter.
+  - A structured store (not free-text logs).
+  - Actor identity captured every time.
+  - The BEFORE and AFTER state of the entity that changed.
+  - Tamper-resistant ordering and timestamps.
 
-  RULES:
-  - Sensitive fields (passwords, tokens) NEVER stored in before/after.
-  - JSON-serialize the entity for human readability.
+  This challenge stands up the audit pipeline as a cross-cutting
+  concern via an ASP.NET Core action filter. The filter
+  intercepts state-changing requests, captures actor + entity,
+  and after the action succeeds, records the entry.
 
-  WHAT YOU JUST LEARNED:
-  Cross-cutting via filters. Same shape as ASP.NET filters you've
-  used before, applied to audit.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) ASP.NET Core Action Filters
+     - `IAsyncActionFilter` — intercepts the request before AND
+       after the controller action runs.
+     - The `OnActionExecutionAsync(context, next)` method calls
+       `await next()` to run the action and capture the result.
+     - Perfect for cross-cutting concerns: logging, auditing,
+       authorization, response shaping.
+
+  2) Cross-cutting via filter vs explicit calls
+     - You COULD audit by calling `auditService.RecordAsync(...)`
+       in every controller action. That's explicit but easy to
+       forget.
+     - A FILTER captures every state-changing request
+       automatically. You can't forget to add the audit line
+       because the filter runs unconditionally.
+     - The tradeoff: filters are less discoverable. A new dev
+       has to know they exist.
+
+  3) Capturing the actor
+     - `context.HttpContext.User.Identity?.Name` reads the JWT-
+       derived username inside the filter.
+     - Filters run INSIDE the request pipeline — full access to
+       the authenticated user.
+
+  4) Selective auditing
+     - Don't audit GET requests (no state change).
+     - Don't audit /api/notifications (high volume, low value).
+     - Whitelist or blacklist routes based on need.
+
+  5) Sensitive-field redaction
+     - Before/after blobs MUST NOT contain PasswordHash, tokens,
+       PII.
+     - The audit service redacts known sensitive fields before
+       serializing.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/AuditEntry.cs              (NEW)
+    EmployeeManager.Domain/Repositories/IAuditRepository.cs  (NEW)
+    EmployeeManager.Infrastructure/Repositories/AuditRepository.cs (NEW)
+    EmployeeManager.Application/Services/IAuditService.cs    (NEW)
+    EmployeeManager.Application/Services/AuditService.cs     (NEW)
+    EmployeeManager.API/Filters/AuditActionFilter.cs         (NEW)
+    EmployeeManager.API/Program.cs                            (DI + global filter)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Audit entry model
+  NEW FILE: EmployeeManager.Domain/Models/AuditEntry.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public class AuditEntry
+      {
+          public Guid Id { get; set; } = Guid.NewGuid();
+          public string ActorUsername { get; set; } = string.Empty;
+          public string Action { get; set; } = string.Empty;      // "POST", "PUT", "DELETE"
+          public string Route { get; set; } = string.Empty;       // e.g. "/api/leave/{id}/approve"
+          public string EntityType { get; set; } = string.Empty;  // "Leave", "Document", "Employee"
+          public string? EntityId { get; set; }
+          public string? Before { get; set; }                     // JSON snapshot
+          public string? After { get; set; }                      // JSON snapshot
+          public int StatusCode { get; set; }                     // result of the action
+          public DateTime At { get; set; } = DateTime.UtcNow;
+      }
+
+  STEP 2 — Repository
+  NEW FILE: EmployeeManager.Domain/Repositories/IAuditRepository.cs
+
+      using EmployeeManager.Domain.Models;
+      namespace EmployeeManager.Domain.Repositories;
+
+      public interface IAuditRepository
+      {
+          Task<List<AuditEntry>> GetAllAsync();
+          Task<AuditEntry> CreateAsync(AuditEntry entry);
+      }
+
+  NEW FILE: EmployeeManager.Infrastructure/Repositories/AuditRepository.cs
+
+      using EmployeeManager.Domain.Models;
+      using EmployeeManager.Domain.Repositories;
+      using EmployeeManager.Infrastructure.Storage;
+
+      namespace EmployeeManager.Infrastructure.Repositories;
+
+      public class AuditRepository : IAuditRepository
+      {
+          private readonly JsonDataStore<List<AuditEntry>> _store;
+
+          public AuditRepository(JsonDataStore<List<AuditEntry>> store)
+          {
+              _store = store;
+          }
+
+          public async Task<List<AuditEntry>> GetAllAsync()
+              => await _store.ReadAsync() ?? new();
+
+          public async Task<AuditEntry> CreateAsync(AuditEntry entry)
+          {
+              await _store.ReadModifyWriteAsync(list =>
+              {
+                  list ??= new();
+                  list.Add(entry);
+                  return list;
+              });
+              return entry;
+          }
+      }
+
+  STEP 3 — Audit service
+  NEW FILE: EmployeeManager.Application/Services/IAuditService.cs
+
+      using EmployeeManager.Domain.Models;
+      namespace EmployeeManager.Application.Services;
+
+      public interface IAuditService
+      {
+          Task RecordAsync(AuditEntry entry);
+          string? SerializeAndRedact(object? entity);
+      }
+
+  NEW FILE: EmployeeManager.Application/Services/AuditService.cs
+
+      using System.Text.Json;
+      using EmployeeManager.Domain.Models;
+      using EmployeeManager.Domain.Repositories;
+      using Microsoft.Extensions.Logging;
+
+      namespace EmployeeManager.Application.Services;
+
+      public class AuditService : IAuditService
+      {
+          private static readonly HashSet<string> SensitiveFields =
+              new(StringComparer.OrdinalIgnoreCase)
+              {
+                  "PasswordHash",
+                  "password",
+                  "Password",
+                  "newPassword",
+                  "oldPassword",
+                  "token",
+                  "accessToken",
+                  "refreshToken",
+              };
+
+          private readonly IAuditRepository _repo;
+          private readonly ILogger<AuditService> _logger;
+
+          public AuditService(IAuditRepository repo, ILogger<AuditService> logger)
+          {
+              _repo = repo;
+              _logger = logger;
+          }
+
+          public async Task RecordAsync(AuditEntry entry)
+          {
+              try
+              {
+                  await _repo.CreateAsync(entry);
+              }
+              catch (Exception ex)
+              {
+                  // Audit failures must NEVER block the request.
+                  _logger.LogError(ex, "Failed to record audit entry for {Route}", entry.Route);
+              }
+          }
+
+          public string? SerializeAndRedact(object? entity)
+          {
+              if (entity is null) return null;
+              try
+              {
+                  var json = JsonSerializer.Serialize(entity, new JsonSerializerOptions
+                  {
+                      WriteIndented = false,
+                  });
+
+                  // Quick redact pass — parse, walk, scrub.
+                  using var doc = JsonDocument.Parse(json);
+                  var scrubbed = Scrub(doc.RootElement);
+                  return JsonSerializer.Serialize(scrubbed);
+              }
+              catch
+              {
+                  return null;
+              }
+          }
+
+          private static object? Scrub(JsonElement element)
+          {
+              switch (element.ValueKind)
+              {
+                  case JsonValueKind.Object:
+                      var dict = new Dictionary<string, object?>();
+                      foreach (var prop in element.EnumerateObject())
+                      {
+                          dict[prop.Name] = SensitiveFields.Contains(prop.Name)
+                              ? "***"
+                              : Scrub(prop.Value);
+                      }
+                      return dict;
+
+                  case JsonValueKind.Array:
+                      return element.EnumerateArray().Select(Scrub).ToList();
+
+                  case JsonValueKind.String: return element.GetString();
+                  case JsonValueKind.Number: return element.GetDouble();
+                  case JsonValueKind.True:   return true;
+                  case JsonValueKind.False:  return false;
+                  case JsonValueKind.Null:   return null;
+                  default:                   return null;
+              }
+          }
+      }
+
+  STEP 4 — Action filter
+  NEW FILE: EmployeeManager.API/Filters/AuditActionFilter.cs
+
+      using EmployeeManager.Application.Services;
+      using EmployeeManager.Domain.Models;
+      using Microsoft.AspNetCore.Mvc.Filters;
+
+      namespace EmployeeManager.API.Filters;
+
+      public class AuditActionFilter : IAsyncActionFilter
+      {
+          // Methods that change state.
+          private static readonly HashSet<string> AuditedMethods =
+              new(StringComparer.OrdinalIgnoreCase) { "POST", "PUT", "PATCH", "DELETE" };
+
+          // Routes we don't want in the audit log (too noisy).
+          private static readonly string[] ExcludedRoutePrefixes =
+          {
+              "/api/notifications",      // mark-read, mark-all-read
+              "/api/auth/refresh",       // refresh-token rotation
+          };
+
+          private readonly IAuditService _audit;
+
+          public AuditActionFilter(IAuditService audit) { _audit = audit; }
+
+          public async Task OnActionExecutionAsync(
+              ActionExecutingContext context, ActionExecutionDelegate next)
+          {
+              var request = context.HttpContext.Request;
+              var method = request.Method;
+              var path = request.Path.Value ?? string.Empty;
+
+              // Skip non-mutating methods.
+              if (!AuditedMethods.Contains(method))
+              {
+                  await next();
+                  return;
+              }
+
+              // Skip excluded routes.
+              if (ExcludedRoutePrefixes.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+              {
+                  await next();
+                  return;
+              }
+
+              // Capture actor + request body as "before."
+              var actor = context.HttpContext.User.Identity?.Name ?? "anonymous";
+              var actionBody = context.ActionArguments.Values.FirstOrDefault(v => v is not null);
+
+              // Capture the entity ID from the route (if present).
+              context.RouteData.Values.TryGetValue("id", out var entityIdObj);
+              var entityId = entityIdObj?.ToString();
+
+              // Run the action.
+              var executedContext = await next();
+
+              // Only record if the action succeeded.
+              var statusCode = executedContext.HttpContext.Response.StatusCode;
+              if (statusCode >= 400) return;
+
+              var entry = new AuditEntry
+              {
+                  ActorUsername = actor,
+                  Action = method,
+                  Route = path,
+                  EntityType = ExtractEntityType(path),
+                  EntityId = entityId,
+                  Before = _audit.SerializeAndRedact(actionBody),
+                  // After: the response body. ASP.NET buffers it only via a separate
+                  // result filter. For now we capture the result.Value on ObjectResult.
+                  After = ExtractResponse(executedContext),
+                  StatusCode = statusCode,
+              };
+
+              await _audit.RecordAsync(entry);
+          }
+
+          private static string ExtractEntityType(string path)
+          {
+              // "/api/leave/{id}/approve" -> "leave"
+              var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+              return parts.Length >= 2 ? parts[1] : "unknown";
+          }
+
+          private string? ExtractResponse(ActionExecutedContext context)
+          {
+              if (context.Result is Microsoft.AspNetCore.Mvc.ObjectResult objectResult
+                  && objectResult.Value is not null)
+              {
+                  return _audit.SerializeAndRedact(objectResult.Value);
+              }
+              return null;
+          }
+      }
+
+  STEP 5 — Wire it up
+  In Program.cs:
+
+      builder.Services.AddSingleton(new JsonDataStore<List<AuditEntry>>(
+          Path.Combine(AppContext.BaseDirectory, "Data", "audit.json")));
+      builder.Services.AddScoped<IAuditRepository, AuditRepository>();
+      builder.Services.AddScoped<IAuditService, AuditService>();
+
+      // Register the filter globally.
+      builder.Services.AddControllers(opts =>
+      {
+          opts.Filters.Add<AuditActionFilter>();
+      });
+
+  Note: if you already have `AddControllers().AddJsonOptions(...)`
+  from Round 28.1, merge the lambda — chain `.AddJsonOptions(...)`
+  off `.AddControllers(opts => ...)`.
+
+  STEP 6 — Test
+  Run the backend. Any POST/PUT/DELETE you fire (approve a leave,
+  upload a document, change a password) creates a row in
+  audit.json. Verify:
+   - PasswordHash and password fields are redacted as "***".
+   - 4xx responses don't generate audit rows (failed actions
+     aren't audited — they didn't change state).
+   - GET requests don't generate rows.
+   - /api/notifications/* doesn't generate rows.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Audit failures must NEVER throw. The try/catch in
+    RecordAsync is non-negotiable.
+  - Always redact sensitive fields. Add new field names to
+    SensitiveFields as new ones appear.
+  - 4xx/5xx requests are NOT audited — they failed, no state
+    change. Some compliance regimes want failed attempts logged
+    too; for our scale, success-only is enough.
+  - The filter is GLOBAL. Anything you don't want audited goes
+    in ExcludedRoutePrefixes.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - `IAsyncActionFilter` for cross-cutting capture.
+  - Recursive JSON walking + redaction.
+  - The success-only audit pattern.
+  - Global filter registration via AddControllers(opts).
 
 
-CHALLENGE 33.2 — Audit endpoints + role guard                Target: 25 min
+CHALLENGE 33.2 — Audit endpoints + pagination                Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. GET /api/audit — Admin only. Optional query: actorId, entityType,
-     entityId, from, to.
-  2. Server-side pagination: ?page=1&pageSize=50.
-  3. Sort by `at` desc.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Audit logs grow without bound. A page of 50 rows at a time is
+  the only sane way to consume them. This challenge introduces
+  SERVER-SIDE pagination — the API caps the response, the client
+  navigates pages with ?page=N. Plus filters: actor, entity type,
+  date range.
 
-  RULES:
-  - Admin-only. Audit is sensitive.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Pagination on the server. Same shape as the client pagination from
-  Round 12.1, but in SQL/JSON.
+  1) Paginated response shape
+     - Standard:
+         { items: [...], totalCount: 1234, page: 1, pageSize: 50 }
+     - The client uses totalCount to compute total pages.
+     - Stable shape across every paginated endpoint in the app —
+       define it once.
+
+  2) Filter parameters
+     - `actorUsername`, `entityType`, `from`, `to`.
+     - Each is OPTIONAL. The service applies whichever are
+       present.
+     - "DateTime?" parameters parse ISO date strings.
+
+  3) Date-range filter semantics
+     - `from` and `to` are INCLUSIVE.
+     - Convert to UTC at the boundary; never trust local time.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/PagedResult.cs            (NEW generic)
+    EmployeeManager.Application/Services/IAuditService.cs   (add Search)
+    EmployeeManager.Application/Services/AuditService.cs    (impl)
+    EmployeeManager.API/Controllers/AuditController.cs      (NEW)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Generic PagedResult
+  NEW FILE: EmployeeManager.Domain/Models/PagedResult.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public class PagedResult<T>
+      {
+          public List<T> Items { get; set; } = new();
+          public int TotalCount { get; set; }
+          public int Page { get; set; }
+          public int PageSize { get; set; }
+      }
+
+  Generic so it works for audit, employees (later pagination),
+  documents — any paginated list.
+
+  STEP 2 — Search method on the service
+  Update IAuditService.cs:
+
+      Task<PagedResult<AuditEntry>> SearchAsync(
+          string? actorUsername,
+          string? entityType,
+          DateTime? from,
+          DateTime? to,
+          int page,
+          int pageSize);
+
+  In AuditService.cs:
+
+      public async Task<PagedResult<AuditEntry>> SearchAsync(
+          string? actorUsername, string? entityType,
+          DateTime? from, DateTime? to, int page, int pageSize)
+      {
+          page = Math.Max(1, page);
+          pageSize = Math.Clamp(pageSize, 1, 200);
+
+          var all = await _repo.GetAllAsync();
+
+          // Filter.
+          IEnumerable<AuditEntry> filtered = all;
+          if (!string.IsNullOrWhiteSpace(actorUsername))
+              filtered = filtered.Where(e => string.Equals(e.ActorUsername,
+                  actorUsername, StringComparison.OrdinalIgnoreCase));
+          if (!string.IsNullOrWhiteSpace(entityType))
+              filtered = filtered.Where(e => string.Equals(e.EntityType,
+                  entityType, StringComparison.OrdinalIgnoreCase));
+          if (from is not null)
+              filtered = filtered.Where(e => e.At >= from.Value);
+          if (to is not null)
+              filtered = filtered.Where(e => e.At <= to.Value);
+
+          // Sort newest first.
+          var sorted = filtered.OrderByDescending(e => e.At).ToList();
+
+          var totalCount = sorted.Count;
+          var pageItems = sorted
+              .Skip((page - 1) * pageSize)
+              .Take(pageSize)
+              .ToList();
+
+          return new PagedResult<AuditEntry>
+          {
+              Items = pageItems,
+              TotalCount = totalCount,
+              Page = page,
+              PageSize = pageSize,
+          };
+      }
+
+  STEP 3 — Controller
+  NEW FILE: EmployeeManager.API/Controllers/AuditController.cs
+
+      using EmployeeManager.Application.Services;
+      using Microsoft.AspNetCore.Authorization;
+      using Microsoft.AspNetCore.Mvc;
+
+      namespace EmployeeManager.API.Controllers;
+
+      [ApiController]
+      [Route("api/audit")]
+      [Authorize(Roles = "Admin")]
+      public class AuditController : ControllerBase
+      {
+          private readonly IAuditService _audit;
+
+          public AuditController(IAuditService audit) { _audit = audit; }
+
+          [HttpGet]
+          public async Task<IActionResult> Search(
+              [FromQuery] string? actorUsername,
+              [FromQuery] string? entityType,
+              [FromQuery] DateTime? from,
+              [FromQuery] DateTime? to,
+              [FromQuery] int page = 1,
+              [FromQuery] int pageSize = 50)
+          {
+              var result = await _audit.SearchAsync(
+                  actorUsername, entityType, from, to, page, pageSize);
+              return Ok(result);
+          }
+      }
+
+  Note: the audit controller is ITSELF audited by the global
+  filter. Reading the audit log creates an audit log entry —
+  ironic but also useful (you can see who looked at what).
+  Optionally exclude `/api/audit` in AuditActionFilter's
+  ExcludedRoutePrefixes if the noise is unhelpful.
+
+  Test:
+   - GET /api/audit?pageSize=10 as admin → first 10 entries
+     newest-first.
+   - With `?entityType=leave` → only leave-related entries.
+   - With `?from=2026-05-29` → entries from May 29 onwards.
+   - As non-admin → 403.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - `Math.Clamp(pageSize, 1, 200)` — caps the page size. Prevents
+    accidental "?pageSize=1000000" from blowing memory.
+  - The filter pipeline is `IEnumerable<...>` deferred — no
+    evaluation until `.ToList()` materialises. Combined filters
+    stay efficient.
+  - Sort ASC vs DESC matters. Audit is "newest first."
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Generic PagedResult<T> for stable response shapes.
+  - Server-side filtering with optional parameters.
+  - Page-size capping as defensive coding.
 
 
-CHALLENGE 33.3 — useAuditLog hook + page                     Target: 35 min
+CHALLENGE 33.3 — Audit page with paginated query             Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - React Query `keepPreviousData: true`: while fetching a new page,
-    keep the previous page's data visible. No "loading…" flicker
-    between pages.
-  - Page state in URL: ?page=2 — survives reload, shareable.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Audit list page with all the trimmings: filters that drive
+  the URL, prev/next pagination, `keepPreviousData` to avoid the
+  loading-flicker between pages. This is the canonical "data
+  table" pattern you'll reuse in every admin-facing list.
 
-  TASK:
-  1. useAuditLog(filters): useQuery with the filters in the queryKey.
-  2. /admin/audit route.
-  3. Filter bar: actor dropdown, entityType dropdown, date range.
-  4. Table with prev/next pagination.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Pagination + filter combine into the queryKey — every combo gets
-    its own cache slot.
+  1) `keepPreviousData` (now `placeholderData: keepPreviousData`)
+     - TanStack Query option that keeps showing the LAST data
+       while a new fetch is in flight.
+     - Without it: clicking "Next" shows "Loading…" briefly.
+     - With it: the page stays visible, just with a subtle
+       "fetching" indicator. Much smoother.
+     - In TanStack Query 5+: `placeholderData: keepPreviousData`
+       from `@tanstack/react-query`.
 
-  WHAT YOU JUST LEARNED:
-  Server-side paginated list with filters. Same pattern in any
-  enterprise admin tool.
+  2) Pagination math
+     - Total pages = `Math.ceil(totalCount / pageSize)`.
+     - Disable Next when current page >= totalPages.
+     - Disable Prev when current page <= 1.
+
+  3) Filter + page state in URL
+     - Reapply the search-params-as-state pattern (5th time).
+     - Changing a filter resets the page to 1 (otherwise you're
+       on page 5 of a filter that only has 2 pages).
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/Types/Audit.ts                       (NEW)
+    src/Queries/auditKeys.ts                 (NEW)
+    src/services/api.ts                      (fetchAuditLog)
+    src/Queries/useAuditLog.ts               (NEW)
+    src/routes.ts                            (audit())
+    src/components/AuditLogPage.tsx          (NEW)
+    src/App.tsx                              (admin-guarded route)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Types
+  NEW FILE: src/Types/Audit.ts
+
+      export interface AuditEntry {
+          id: string;
+          actorUsername: string;
+          action: string;            // 'POST', 'PUT', 'DELETE'
+          route: string;
+          entityType: string;
+          entityId?: string;
+          before?: string;           // JSON string
+          after?: string;            // JSON string
+          statusCode: number;
+          at: string;                // ISO date
+      }
+
+      export interface PagedResult<T> {
+          items: T[];
+          totalCount: number;
+          page: number;
+          pageSize: number;
+      }
+
+      export interface AuditFilters {
+          actorUsername?: string;
+          entityType?: string;
+          from?: string;
+          to?: string;
+          page: number;
+          pageSize: number;
+      }
+
+  STEP 2 — Query keys
+  NEW FILE: src/Queries/auditKeys.ts
+
+      import type { AuditFilters } from '../Types/Audit';
+
+      export const auditKeys = {
+          all: ['audit'] as const,
+          list: (filters: AuditFilters) =>
+              [...auditKeys.all, 'list', filters] as const,
+      };
+
+  Note: the filters object goes IN the key. Different filter
+  combos → different cache entries. React Query handles object
+  equality so changing one filter doesn't invalidate unrelated
+  combos.
+
+  STEP 3 — API method
+  Append to src/services/api.ts:
+
+      import type { AuditEntry, PagedResult, AuditFilters } from '../Types/Audit';
+
+      export const fetchAuditLog = (filters: AuditFilters) =>
+          api.get<PagedResult<AuditEntry>>('/audit', {
+              params: {
+                  ...(filters.actorUsername ? { actorUsername: filters.actorUsername } : {}),
+                  ...(filters.entityType ? { entityType: filters.entityType } : {}),
+                  ...(filters.from ? { from: filters.from } : {}),
+                  ...(filters.to ? { to: filters.to } : {}),
+                  page: filters.page,
+                  pageSize: filters.pageSize,
+              },
+          });
+
+  STEP 4 — Hook
+  NEW FILE: src/Queries/useAuditLog.ts
+
+      import { useQuery, keepPreviousData } from '@tanstack/react-query';
+      import { fetchAuditLog } from '../services/api';
+      import { auditKeys } from './auditKeys';
+      import type { AuditFilters } from '../Types/Audit';
+
+      export const useAuditLog = (filters: AuditFilters) =>
+          useQuery({
+              queryKey: auditKeys.list(filters),
+              queryFn: async () => (await fetchAuditLog(filters)).data,
+              placeholderData: keepPreviousData,    // ← smooth pagination
+              staleTime: 30 * 1000,
+          });
+
+  STEP 5 — Route
+  src/routes.ts:
+
+      audit: () => '/admin/audit' as const,
+
+  STEP 6 — The page
+  NEW FILE: src/components/AuditLogPage.tsx
+
+      import { useState } from 'react';
+      import { useSearchParams } from 'react-router-dom';
+      import { format } from 'date-fns';
+      import { useAuditLog } from '../Queries/useAuditLog';
+      import type { AuditEntry, AuditFilters } from '../Types/Audit';
+
+      const PAGE_SIZE = 50;
+
+      const AuditLogPage = () => {
+          const [searchParams, setSearchParams] = useSearchParams();
+
+          // Parse filters from URL.
+          const page = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
+          const actorUsername = searchParams.get('actor') ?? '';
+          const entityType = searchParams.get('entity') ?? '';
+          const from = searchParams.get('from') ?? '';
+          const to = searchParams.get('to') ?? '';
+
+          const filters: AuditFilters = {
+              page,
+              pageSize: PAGE_SIZE,
+              actorUsername: actorUsername || undefined,
+              entityType: entityType || undefined,
+              from: from || undefined,
+              to: to || undefined,
+          };
+
+          const { data, isLoading, isFetching, isError } = useAuditLog(filters);
+
+          const setParam = (key: string, value: string) => {
+              const next = new URLSearchParams(searchParams);
+              if (value) next.set(key, value);
+              else next.delete(key);
+              // Changing a filter resets page to 1.
+              if (key !== 'page') next.delete('page');
+              setSearchParams(next);
+          };
+
+          const totalPages = data ? Math.max(1, Math.ceil(data.totalCount / PAGE_SIZE)) : 1;
+
+          if (isLoading) return <p className="p-6 text-gray-500">Loading audit log…</p>;
+          if (isError)   return <p className="p-6 text-red-600">Failed to load audit log.</p>;
+
+          return (
+              <div className="max-w-6xl mx-auto p-6">
+                  <h1 className="text-2xl font-semibold mb-4">Audit Log</h1>
+
+                  {/* ── Filters ──────────────────────────────────── */}
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                      <input
+                          type="text" placeholder="Actor username"
+                          value={actorUsername}
+                          onChange={e => setParam('actor', e.target.value)}
+                          className="rounded border-gray-300 text-sm"
+                      />
+                      <input
+                          type="text" placeholder="Entity (leave, document, ...)"
+                          value={entityType}
+                          onChange={e => setParam('entity', e.target.value)}
+                          className="rounded border-gray-300 text-sm"
+                      />
+                      <input
+                          type="date" value={from}
+                          onChange={e => setParam('from', e.target.value)}
+                          className="rounded border-gray-300 text-sm"
+                      />
+                      <input
+                          type="date" value={to}
+                          onChange={e => setParam('to', e.target.value)}
+                          className="rounded border-gray-300 text-sm"
+                      />
+                  </div>
+
+                  {/* ── Table ────────────────────────────────────── */}
+                  <div className={`bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden
+                                  ${isFetching ? 'opacity-70' : ''}`}>
+                      {data && data.items.length > 0 ? (
+                          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+                              <thead className="bg-gray-50 dark:bg-gray-900">
+                                  <tr>
+                                      <th className="px-4 py-2 text-left text-xs uppercase tracking-wider text-gray-500">When</th>
+                                      <th className="px-4 py-2 text-left text-xs uppercase tracking-wider text-gray-500">Actor</th>
+                                      <th className="px-4 py-2 text-left text-xs uppercase tracking-wider text-gray-500">Action</th>
+                                      <th className="px-4 py-2 text-left text-xs uppercase tracking-wider text-gray-500">Entity</th>
+                                      <th className="px-4 py-2 text-left text-xs uppercase tracking-wider text-gray-500">Route</th>
+                                      <th className="px-4 py-2 text-left text-xs uppercase tracking-wider text-gray-500">Status</th>
+                                  </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                                  {data.items.map(entry => (
+                                      <tr key={entry.id}>
+                                          <td className="px-4 py-2 whitespace-nowrap text-gray-500">
+                                              {format(new Date(entry.at), 'MMM d HH:mm:ss')}
+                                          </td>
+                                          <td className="px-4 py-2 whitespace-nowrap">{entry.actorUsername}</td>
+                                          <td className="px-4 py-2 whitespace-nowrap">{entry.action}</td>
+                                          <td className="px-4 py-2 whitespace-nowrap">{entry.entityType}</td>
+                                          <td className="px-4 py-2 whitespace-nowrap font-mono text-xs">
+                                              {entry.route}
+                                          </td>
+                                          <td className="px-4 py-2 whitespace-nowrap">{entry.statusCode}</td>
+                                      </tr>
+                                  ))}
+                              </tbody>
+                          </table>
+                      ) : (
+                          <p className="p-6 text-center text-gray-500">
+                              No entries match these filters.
+                          </p>
+                      )}
+                  </div>
+
+                  {/* ── Pagination ───────────────────────────────── */}
+                  {data && data.totalCount > 0 && (
+                      <div className="flex justify-between items-center mt-4">
+                          <span className="text-sm text-gray-500">
+                              Page {page} of {totalPages} · {data.totalCount} entries
+                          </span>
+                          <div className="flex gap-2">
+                              <button
+                                  onClick={() => setParam('page', String(page - 1))}
+                                  disabled={page <= 1}
+                                  className="btn-secondary disabled:opacity-50">
+                                  Previous
+                              </button>
+                              <button
+                                  onClick={() => setParam('page', String(page + 1))}
+                                  disabled={page >= totalPages}
+                                  className="btn-secondary disabled:opacity-50">
+                                  Next
+                              </button>
+                          </div>
+                      </div>
+                  )}
+              </div>
+          );
+      };
+
+      export default AuditLogPage;
+
+  STEP 7 — Admin-guarded route
+  In App.tsx, under the admin role-protected branch:
+
+      { path: routes.audit(), element: <AuditLogPage /> },
+
+  Add an admin nav link in AuthLayout.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - The `opacity-70` while `isFetching` is the visual cue that
+    new data is loading. Subtle, but the user knows something is
+    happening.
+  - Changing ANY filter resets page to 1. Otherwise stale page
+    numbers haunt the user.
+  - Object filters in queryKey work — React Query does structural
+    equality. As long as you produce the same object shape per
+    URL state, the cache hits correctly.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - `placeholderData: keepPreviousData` for smooth pagination.
+  - URL-driven filters + page state combined.
+  - Filter-changes-reset-page pattern.
+  - Stable PagedResult<T> shape across endpoints.
 
 
-CHALLENGE 33.4 — Diff viewer (before/after)                  Target: 30 min
+CHALLENGE 33.4 — Diff viewer (before/after JSON)            Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Click an audit row → side-drawer or modal showing before/after
-     JSON.
-  2. Simple diff highlighting: bold/colored keys that changed.
-     (No need for a full diff library; loop the keys, compare.)
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Audit rows show "what happened" at the high level. To see WHAT
+  CHANGED inside the entity, click into a row and see the before
+  and after snapshots side-by-side, with changed keys highlighted.
 
-  RULES:
-  - Pretty-print JSON.
-  - Show "(unchanged)" rather than empty for no-change views.
+  This is a small but high-value UX feature. Most enterprise
+  audit tools have it.
 
-  WHAT YOU JUST LEARNED:
-  Object diff rendering. Useful in any "before/after" surface.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Side-drawer pattern
+     - Modal but on the right edge of the screen.
+     - Standard for "show details without leaving the list."
+     - Same outside-click behaviour as the dropdown from 32.3.
+
+  2) Computing a key-level diff
+     - Compare two objects' keys. Mark:
+         - ADDED (in after, not in before)
+         - REMOVED (in before, not in after)
+         - CHANGED (in both, different values)
+         - UNCHANGED (in both, equal values)
+     - Render each category with distinct styling.
+
+  3) Pretty-printing JSON
+     - `JSON.stringify(obj, null, 2)` produces nicely-indented
+       JSON.
+     - Render in a <pre> tag with monospace font.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/utils/diffObjects.ts                  (NEW)
+    src/components/AuditDiffDrawer.tsx        (NEW)
+    src/components/AuditLogPage.tsx           (click row to open drawer)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Diff helper
+  NEW FILE: src/utils/diffObjects.ts
+
+      // Computes a flat key-level diff between two JSON-shaped objects.
+      // Returns an array of { key, status, before, after } tuples,
+      // sorted alphabetically by key.
+
+      export type DiffStatus = 'added' | 'removed' | 'changed' | 'unchanged';
+
+      export interface DiffRow {
+          key: string;
+          status: DiffStatus;
+          before?: unknown;
+          after?: unknown;
+      }
+
+      const stringify = (v: unknown): string => {
+          if (v === undefined) return '(undefined)';
+          if (v === null) return '(null)';
+          if (typeof v === 'object') return JSON.stringify(v);
+          return String(v);
+      };
+
+      export const diffObjects = (
+          before: Record<string, unknown> | null | undefined,
+          after:  Record<string, unknown> | null | undefined,
+      ): DiffRow[] => {
+          const beforeObj = before ?? {};
+          const afterObj  = after  ?? {};
+          const keys = new Set([...Object.keys(beforeObj), ...Object.keys(afterObj)]);
+
+          const rows: DiffRow[] = [];
+          for (const key of keys) {
+              const inBefore = key in beforeObj;
+              const inAfter = key in afterObj;
+              if (inBefore && !inAfter) {
+                  rows.push({ key, status: 'removed', before: beforeObj[key] });
+              } else if (!inBefore && inAfter) {
+                  rows.push({ key, status: 'added', after: afterObj[key] });
+              } else {
+                  const beforeStr = stringify(beforeObj[key]);
+                  const afterStr  = stringify(afterObj[key]);
+                  rows.push({
+                      key,
+                      status: beforeStr === afterStr ? 'unchanged' : 'changed',
+                      before: beforeObj[key],
+                      after:  afterObj[key],
+                  });
+              }
+          }
+
+          return rows.sort((a, b) => a.key.localeCompare(b.key));
+      };
+
+  STEP 2 — Drawer component
+  NEW FILE: src/components/AuditDiffDrawer.tsx
+
+      import { useRef, useMemo } from 'react';
+      import clsx from 'clsx';
+      import { format } from 'date-fns';
+      import { useOutsideClick } from '../hooks/useOutsideClick';
+      import { diffObjects } from '../utils/diffObjects';
+      import type { AuditEntry } from '../Types/Audit';
+
+      interface Props {
+          entry: AuditEntry | null;
+          onClose: () => void;
+      }
+
+      const parseJson = (json: string | null | undefined) => {
+          if (!json) return null;
+          try { return JSON.parse(json); }
+          catch { return null; }
+      };
+
+      const stringify = (v: unknown) => {
+          if (v === undefined) return '—';
+          if (typeof v === 'object') return JSON.stringify(v, null, 2);
+          return String(v);
+      };
+
+      const AuditDiffDrawer = ({ entry, onClose }: Props) => {
+          const panelRef = useRef<HTMLDivElement>(null);
+          useOutsideClick(panelRef, onClose, !!entry);
+
+          const diff = useMemo(() => {
+              if (!entry) return [];
+              const before = parseJson(entry.before);
+              const after  = parseJson(entry.after);
+              return diffObjects(before, after);
+          }, [entry]);
+
+          if (!entry) return null;
+
+          return (
+              <div className="fixed inset-0 z-50 flex">
+                  <div className="flex-1 bg-black/30" />
+                  <div ref={panelRef}
+                       className="w-full max-w-2xl bg-white dark:bg-gray-800
+                                  h-full overflow-y-auto shadow-xl">
+                      <div className="p-4 border-b border-gray-200 dark:border-gray-700
+                                      flex justify-between items-center">
+                          <div>
+                              <h3 className="text-lg font-semibold">
+                                  {entry.action} {entry.entityType}
+                                  {entry.entityId && (
+                                      <span className="ml-2 font-mono text-xs text-gray-500">
+                                          {entry.entityId}
+                                      </span>
+                                  )}
+                              </h3>
+                              <p className="text-xs text-gray-500">
+                                  {entry.actorUsername} ·{' '}
+                                  {format(new Date(entry.at), 'MMM d yyyy HH:mm:ss')} ·{' '}
+                                  {entry.route} · HTTP {entry.statusCode}
+                              </p>
+                          </div>
+                          <button onClick={onClose}
+                                  className="text-gray-500 hover:text-gray-800">
+                              ✕
+                          </button>
+                      </div>
+
+                      <div className="p-4">
+                          {diff.length === 0 ? (
+                              <p className="text-sm text-gray-500">(no diff captured)</p>
+                          ) : (
+                              <table className="min-w-full text-sm">
+                                  <thead>
+                                      <tr className="border-b border-gray-200 dark:border-gray-700">
+                                          <th className="text-left py-2 pr-2 font-medium text-xs uppercase
+                                                         tracking-wider text-gray-500">Field</th>
+                                          <th className="text-left py-2 pr-2 font-medium text-xs uppercase
+                                                         tracking-wider text-gray-500">Before</th>
+                                          <th className="text-left py-2 font-medium text-xs uppercase
+                                                         tracking-wider text-gray-500">After</th>
+                                      </tr>
+                                  </thead>
+                                  <tbody>
+                                      {diff.map(row => (
+                                          <tr key={row.key}
+                                              className={clsx(
+                                                  'border-b border-gray-100 dark:border-gray-700',
+                                                  row.status === 'changed' && 'bg-yellow-50 dark:bg-yellow-900/20',
+                                                  row.status === 'added'   && 'bg-green-50 dark:bg-green-900/20',
+                                                  row.status === 'removed' && 'bg-red-50 dark:bg-red-900/20',
+                                              )}>
+                                              <td className="py-2 pr-2 font-mono text-xs">{row.key}</td>
+                                              <td className="py-2 pr-2 font-mono text-xs whitespace-pre-wrap">
+                                                  {row.status === 'added' ? '—' : stringify(row.before)}
+                                              </td>
+                                              <td className="py-2 font-mono text-xs whitespace-pre-wrap">
+                                                  {row.status === 'removed' ? '—' : stringify(row.after)}
+                                              </td>
+                                          </tr>
+                                      ))}
+                                  </tbody>
+                              </table>
+                          )}
+                      </div>
+                  </div>
+              </div>
+          );
+      };
+
+      export default AuditDiffDrawer;
+
+  STEP 3 — Hook it up in AuditLogPage
+  Add state + click handler:
+
+      import AuditDiffDrawer from './AuditDiffDrawer';
+      // ...
+      const [selectedEntry, setSelectedEntry] = useState<AuditEntry | null>(null);
+
+  Make rows clickable:
+
+      <tr key={entry.id}
+          onClick={() => setSelectedEntry(entry)}
+          className="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
+          {/* ...existing cells... */}
+      </tr>
+
+  Render the drawer at the bottom of the page:
+
+      <AuditDiffDrawer entry={selectedEntry} onClose={() => setSelectedEntry(null)} />
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Compare via stringification. Object reference compares would
+    flag JSON-equal objects as different.
+  - Show "(unchanged)" rows rather than hiding them — context
+    matters when scanning a diff.
+  - `whitespace-pre-wrap` on diff cells respects newlines in
+    pretty-printed JSON.
+  - The drawer is `z-50` over `bg-black/30` — same dim-overlay
+    pattern as modals, but pinned to the right edge.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Object diffing without a library — for shallow diffs it's
+    one function.
+  - Side-drawer pattern as a modal variant.
+  - Reuse of `useOutsideClick` for the third time.
 
 
-CHALLENGE 33.5 — CSV export                                  Target: 25 min
+CHALLENGE 33.5 — CSV export                                  Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. "Export CSV" button on audit page.
-  2. Build CSV client-side from currently visible filters (last 1000
-     entries server-side cap).
-  3. Reuse the blob-download helper from Round 25.4.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Compliance reviewers need spreadsheets. "Export CSV" is the
+  universal currency. This challenge builds CSV export entirely
+  client-side: fetch all the rows for the current filter (capped
+  at 1000 entries to keep memory bounded), assemble CSV strings,
+  blob → download.
 
-  RULES:
-  - Cap at 1000 client-side. Larger exports go via a server-side
-    streamed endpoint — defer.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Same blob-download pattern as document download. Reused.
+  1) CSV escaping
+     - Fields with commas, quotes, or newlines must be wrapped in
+       double quotes.
+     - Internal double quotes get doubled: `He said "hi"` →
+       `"He said ""hi"""`.
+     - Don't roll-your-own naively; one helper handles all four
+       edge cases.
+
+  2) Blob construction from strings
+     - `new Blob([csvString], { type: 'text/csv;charset=utf-8' })`.
+     - The BOM prefix (`'﻿'`) ensures Excel opens UTF-8 files
+       correctly on Windows.
+
+  3) Memory-bounded export
+     - For massive exports (>10k rows), you'd stream from the
+       server. For audit with our 1000-cap, in-memory is fine.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/utils/csv.ts                          (NEW helper)
+    src/components/AuditLogPage.tsx           (Export button)
+    src/services/api.ts                       (already has fetchAuditLog)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — CSV helper
+  NEW FILE: src/utils/csv.ts
+
+      // Builds a CSV string from a list of rows.
+      //
+      // - `headers` — array of column titles.
+      // - `rows`    — array of objects keyed by the same headers.
+      //
+      // Handles commas, quotes, and newlines in cells.
+
+      const escapeCell = (value: unknown): string => {
+          if (value === null || value === undefined) return '';
+          const str = typeof value === 'object'
+              ? JSON.stringify(value)
+              : String(value);
+          // RFC 4180: wrap in double quotes if comma, quote, or newline.
+          if (/[",\n\r]/.test(str)) {
+              return `"${str.replace(/"/g, '""')}"`;
+          }
+          return str;
+      };
+
+      export const toCsv = <T extends Record<string, unknown>>(
+          headers: string[],
+          rows: T[],
+      ): string => {
+          const headerLine = headers.map(escapeCell).join(',');
+          const dataLines = rows.map(row =>
+              headers.map(h => escapeCell(row[h])).join(','),
+          );
+          return [headerLine, ...dataLines].join('\n');
+      };
+
+      // Adds a UTF-8 BOM so Excel on Windows opens it correctly.
+      export const csvBlob = (csv: string): Blob =>
+          new Blob(['﻿', csv], { type: 'text/csv;charset=utf-8' });
+
+  STEP 2 — Export button + handler in AuditLogPage
+  Add to AuditLogPage:
+
+      import { toCsv, csvBlob } from '../utils/csv';
+      import { triggerDownload } from '../utils/triggerDownload';
+      import { fetchAuditLog } from '../services/api';
+
+      // ...inside the component:
+      const handleExport = async () => {
+          // Fetch up to 1000 entries for the current filter (defensive cap).
+          const response = await fetchAuditLog({ ...filters, page: 1, pageSize: 1000 });
+          const items = response.data.items;
+
+          const csv = toCsv(
+              ['at', 'actorUsername', 'action', 'route', 'entityType', 'entityId', 'statusCode'],
+              items,
+          );
+
+          triggerDownload(
+              csvBlob(csv),
+              `audit-${new Date().toISOString().slice(0, 10)}.csv`,
+          );
+      };
+
+  Place the button in the header:
+
+      <div className="flex justify-between items-center mb-4">
+          <h1 className="text-2xl font-semibold">Audit Log</h1>
+          <button onClick={handleExport} className="btn-secondary">
+              Export CSV
+          </button>
+      </div>
+
+  Test:
+   - Click Export. Browser downloads `audit-2026-05-29.csv`.
+   - Open in Excel. Columns line up; commas in routes don't
+     break columns; newlines (rare) stay inside cells.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Always BOM-prefix CSV for Excel-on-Windows. Without it, UTF-8
+    characters (é, ñ, etc.) render mojibake.
+  - Cap the export size. 1000 is generous for audit; the user can
+    refine filters if they need more.
+  - The CSV helper is generic — reuse it for documents export,
+    leave history, anywhere CSV is needed.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - RFC 4180 CSV escaping in 5 lines.
+  - The Excel BOM gotcha.
+  - Generic export helper that works for any feature.
+  - Round 33 capstone: full audit pipeline — global filter
+    captures every write, redacts sensitive fields, server-side
+    paginated/filtered query, before/after diff viewer, CSV
+    export. Compliance reviewer-ready.
 
 
 ================================================================================
@@ -6430,113 +19162,927 @@ Pacing: One challenge per day. Aggregated views, charts, KPI cards.
 Charts are introduced here.
 
 
-CHALLENGE 34.1 — KPI endpoints + types                       Target: 30 min
+CHALLENGE 34.1 — KPI endpoint + aggregation service          Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. GET /api/dashboard/kpis — aggregates server-side:
-     - employeeCount, activeCount
-     - pendingLeavesCount
-     - documentsThisWeek
-     - rollbackRequestsCount
-  2. Types: src/Types/Dashboard.ts (Kpis interface).
-  3. queries/useDashboardKpis.ts.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  The manager wants a one-glance summary: how many active
+  employees, how many pending leaves, how many documents this
+  week, how many rollback requests waiting. Each number is a
+  cross-cutting query — different repository, different filter,
+  different criterion.
 
-  RULES:
-  - Manager/Admin only.
-  - Aggregate server-side — don't ship the whole employee list to
-    derive a count client-side.
+  The temptation: fetch all four lists on the client, count them.
+  Don't. At 73 employees + dozens of leaves + N documents, you'd
+  burn bandwidth shipping data the user never sees. AGGREGATE
+  SERVER-SIDE. Endpoints return numbers, not lists.
 
-  WHAT YOU JUST LEARNED:
-  Aggregation endpoint vs list endpoint. Big perf difference at scale.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Aggregation endpoints
+     - Return COMPUTED data, not raw rows.
+     - Shape: `{ employeeCount: 73, activeEmployeeCount: 70, ... }`
+     - One round-trip; payload is bytes, not kilobytes.
+
+  2) Composing across repositories
+     - A KPI endpoint touches MANY repositories: employees,
+       leaves, documents.
+     - The service collects them in parallel where possible:
+         var employeeTask = _employees.GetAllAsync();
+         var leaveTask = _leaves.GetAllAsync();
+         await Task.WhenAll(employeeTask, leaveTask, ...);
+     - Round-trip stays bounded by the slowest dependency.
+
+  3) The "DTO that's a record" pattern
+     - For aggregate response shapes, a C# record is concise:
+         public record DashboardKpis(int EmployeeCount, int ActiveCount, ...);
+     - Auto-generated constructor, properties, equality. Perfect
+       for read-only response DTOs.
+
+  4) `Task.WhenAll`
+     - .NET's "run these tasks concurrently."
+     - Each task starts when `_employees.GetAllAsync()` etc. is
+       called. `Task.WhenAll` waits for them all.
+     - Useful when calls are independent — they can run in
+       parallel.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Domain/Models/DashboardKpis.cs          (NEW record)
+    EmployeeManager.Application/Services/IDashboardService.cs (NEW)
+    EmployeeManager.Application/Services/DashboardService.cs  (NEW)
+    EmployeeManager.API/Controllers/DashboardController.cs   (NEW)
+    EmployeeManager.API/Program.cs                            (DI)
+    src/Types/Dashboard.ts                                   (NEW)
+    src/Queries/useDashboardKpis.ts                          (NEW)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — DTO record
+  NEW FILE: EmployeeManager.Domain/Models/DashboardKpis.cs
+
+      namespace EmployeeManager.Domain.Models;
+
+      public record DashboardKpis(
+          int EmployeeCount,
+          int ActiveEmployeeCount,
+          int PendingLeavesCount,
+          int RollbackRequestsCount,
+          int DocumentsThisWeekCount,
+          int OpenAuditEntriesToday);
+
+  STEP 2 — Service
+  NEW FILE: EmployeeManager.Application/Services/IDashboardService.cs
+
+      using EmployeeManager.Domain.Models;
+      namespace EmployeeManager.Application.Services;
+
+      public interface IDashboardService
+      {
+          Task<DashboardKpis> GetKpisAsync();
+          Task<List<DepartmentCount>> GetEmployeesByDepartmentAsync();
+          Task<List<MonthCount>> GetHiresByMonthAsync(int year);
+      }
+
+      public record DepartmentCount(string Department, int Count);
+      public record MonthCount(int Year, int Month, int Count);
+
+  NEW FILE: EmployeeManager.Application/Services/DashboardService.cs
+
+      using EmployeeManager.Domain.Models;
+      using EmployeeManager.Domain.Repositories;
+
+      namespace EmployeeManager.Application.Services;
+
+      public class DashboardService : IDashboardService
+      {
+          private readonly IEmployeeRepository _employees;
+          private readonly ILeaveRequestRepository _leaves;
+          private readonly IDocumentRepository _documents;
+          private readonly IAuditRepository _audit;
+
+          public DashboardService(
+              IEmployeeRepository employees,
+              ILeaveRequestRepository leaves,
+              IDocumentRepository documents,
+              IAuditRepository audit)
+          {
+              _employees = employees;
+              _leaves = leaves;
+              _documents = documents;
+              _audit = audit;
+          }
+
+          public async Task<DashboardKpis> GetKpisAsync()
+          {
+              // Run reads in parallel — they're independent.
+              var employeesTask = _employees.GetAllAsync();
+              var leavesTask = _leaves.GetAllAsync();
+              var documentsTask = _documents.GetAllAsync();
+              var auditTask = _audit.GetAllAsync();
+
+              await Task.WhenAll(employeesTask, leavesTask, documentsTask, auditTask);
+
+              var employees = await employeesTask;
+              var leaves = await leavesTask;
+              var documents = await documentsTask;
+              var audit = await auditTask;
+
+              var weekStart = StartOfWeekUtc(DateTime.UtcNow);
+              var dayStart  = DateTime.UtcNow.Date;
+
+              return new DashboardKpis(
+                  EmployeeCount: employees.Count,
+                  ActiveEmployeeCount: employees.Count(e => e.IsActive),
+                  PendingLeavesCount: leaves.Count(l => l.Status == LeaveStatus.Pending),
+                  RollbackRequestsCount: leaves.Count(l => l.Status == LeaveStatus.RollbackRequested),
+                  DocumentsThisWeekCount: documents.Count(d => d.UploadedAt >= weekStart),
+                  OpenAuditEntriesToday: audit.Count(a => a.At >= dayStart));
+          }
+
+          public async Task<List<DepartmentCount>> GetEmployeesByDepartmentAsync()
+          {
+              var employees = await _employees.GetAllAsync();
+              return employees
+                  .Where(e => e.IsActive)
+                  .GroupBy(e => string.IsNullOrEmpty(e.Department) ? "(none)" : e.Department)
+                  .Select(g => new DepartmentCount(g.Key, g.Count()))
+                  .OrderByDescending(d => d.Count)
+                  .ToList();
+          }
+
+          public async Task<List<MonthCount>> GetHiresByMonthAsync(int year)
+          {
+              var employees = await _employees.GetAllAsync();
+              var byMonth = employees
+                  .Where(e => e.DateOfJoining.Year == year)
+                  .GroupBy(e => e.DateOfJoining.Month)
+                  .ToDictionary(g => g.Key, g => g.Count());
+
+              // Fill all 12 months — empty months get 0, not "missing."
+              return Enumerable.Range(1, 12)
+                  .Select(m => new MonthCount(year, m, byMonth.GetValueOrDefault(m, 0)))
+                  .ToList();
+          }
+
+          private static DateTime StartOfWeekUtc(DateTime now)
+          {
+              var diff = (7 + (int)now.DayOfWeek - (int)DayOfWeek.Monday) % 7;
+              return now.Date.AddDays(-diff);
+          }
+      }
+
+  Notice the `GetHiresByMonthAsync` returns ALL 12 months even
+  if some are empty. Charts that skip empty buckets look broken
+  ("why does Feb show no bar?") — explicit zero values keep them
+  honest.
+
+  STEP 3 — Controller
+  NEW FILE: EmployeeManager.API/Controllers/DashboardController.cs
+
+      using EmployeeManager.Application.Services;
+      using Microsoft.AspNetCore.Authorization;
+      using Microsoft.AspNetCore.Mvc;
+
+      namespace EmployeeManager.API.Controllers;
+
+      [ApiController]
+      [Route("api/dashboard")]
+      [Authorize(Roles = "Manager,Admin")]
+      public class DashboardController : ControllerBase
+      {
+          private readonly IDashboardService _dashboard;
+
+          public DashboardController(IDashboardService dashboard)
+          {
+              _dashboard = dashboard;
+          }
+
+          [HttpGet("kpis")]
+          public async Task<IActionResult> GetKpis()
+              => Ok(await _dashboard.GetKpisAsync());
+
+          [HttpGet("employees-by-department")]
+          public async Task<IActionResult> GetEmployeesByDepartment()
+              => Ok(await _dashboard.GetEmployeesByDepartmentAsync());
+
+          [HttpGet("hires-by-month")]
+          public async Task<IActionResult> GetHiresByMonth([FromQuery] int? year)
+              => Ok(await _dashboard.GetHiresByMonthAsync(year ?? DateTime.UtcNow.Year));
+      }
+
+  STEP 4 — DI
+  Program.cs:
+
+      builder.Services.AddScoped<IDashboardService, DashboardService>();
+
+  STEP 5 — Client types
+  NEW FILE: src/Types/Dashboard.ts
+
+      export interface DashboardKpis {
+          employeeCount: number;
+          activeEmployeeCount: number;
+          pendingLeavesCount: number;
+          rollbackRequestsCount: number;
+          documentsThisWeekCount: number;
+          openAuditEntriesToday: number;
+      }
+
+      export interface DepartmentCount {
+          department: string;
+          count: number;
+      }
+
+      export interface MonthCount {
+          year: number;
+          month: number;
+          count: number;
+      }
+
+  STEP 6 — API + hook
+  Append to src/services/api.ts:
+
+      import type { DashboardKpis, DepartmentCount, MonthCount } from '../Types/Dashboard';
+
+      export const fetchDashboardKpis = () =>
+          api.get<DashboardKpis>('/dashboard/kpis');
+
+      export const fetchEmployeesByDepartment = () =>
+          api.get<DepartmentCount[]>('/dashboard/employees-by-department');
+
+      export const fetchHiresByMonth = (year?: number) =>
+          api.get<MonthCount[]>('/dashboard/hires-by-month',
+              { params: year !== undefined ? { year } : {} });
+
+  NEW FILE: src/Queries/useDashboardKpis.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { fetchDashboardKpis } from '../services/api';
+      import { useAuth } from '../Context/AuthContext';
+
+      export const useDashboardKpis = () => {
+          const { user } = useAuth();
+          return useQuery({
+              queryKey: ['dashboard', 'kpis'],
+              queryFn: async () => (await fetchDashboardKpis()).data,
+              enabled: user?.role === 'Manager' || user?.role === 'Admin',
+              staleTime: 30 * 1000,
+          });
+      };
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Aggregate server-side. Numbers ship in 200 bytes; raw lists
+    ship in kilobytes.
+  - Parallel reads via Task.WhenAll. Synchronous awaits would
+    multiply latency for nothing.
+  - Fill empty buckets with 0 — charts depend on it.
+  - Use C# records for response DTOs. Less code, clearer intent.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - The aggregation-endpoint pattern.
+  - `Task.WhenAll` for parallel I/O.
+  - C# records for read-only DTOs.
+  - Time-bucket filling for chart-friendly data.
 
 
-CHALLENGE 34.2 — KPI cards UI                                 Target: 30 min
+CHALLENGE 34.2 — KPI cards UI                                Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - "Card" component: a reusable styled container (title, big number,
-    subtitle). Extract once, use everywhere.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Round 27.5 introduced StatCard for the documents admin. This
+  challenge promotes it into a small reusable "Dashboard Card"
+  primitive — with an optional link, an optional icon, an optional
+  trend indicator. The same primitive serves every later
+  dashboard widget (Round 35).
 
-  TASK:
-  1. components/Card.tsx — title, value, optional trend (% change),
-     optional link.
-  2. /dashboard route.
-  3. Dashboard renders 4-6 cards in a grid.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Tailwind grid: `grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4`.
-  - Cards link to the relevant page (pendingLeavesCount → manager
-    leaves).
+  1) Optional polymorphic root element
+     - A Card that's ALSO a Link when given a `to` prop.
+     - Pattern: render `<Link>` if `to` is set, otherwise `<div>`.
+     - For more complex cases use the `as` polymorphism pattern;
+       a binary switch is fine here.
 
-  WHAT YOU JUST LEARNED:
-  Composable cards from a typed KPI object. Same shape in any admin
-  dashboard.
+  2) Iconography without an icon library
+     - For 4-6 dashboard cards, emoji icons are sufficient.
+     - 🧑‍💼 employees, 📋 leaves, 📂 documents, 🗒️ audit.
+     - When you reach Round 51's design-system polish, swap to
+       react-icons or heroicons.
+
+  3) Tailwind responsive grid
+     - `grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4`
+     - One column on phones, two on tablets, three on small
+       desktops, four on wide displays.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/DashboardCard.tsx          (NEW)
+    src/routes.ts                              (dashboard())
+    src/components/DashboardPage.tsx          (NEW)
+    src/App.tsx                                (route)
+    src/Context/AuthLayout.tsx                 (link for managers/admins)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Reusable card
+  NEW FILE: src/components/DashboardCard.tsx
+
+      import { Link } from 'react-router-dom';
+
+      interface DashboardCardProps {
+          label: string;
+          value: number | string;
+          icon?: string;          // emoji or short text
+          sublabel?: string;
+          to?: string;            // when present, the card becomes a link
+      }
+
+      const DashboardCard = ({ label, value, icon, sublabel, to }: DashboardCardProps) => {
+          const Inner = (
+              <div className="card hover:shadow-md transition-shadow">
+                  <div className="flex items-start justify-between">
+                      <div>
+                          <p className="text-xs uppercase tracking-wider text-gray-500
+                                        dark:text-gray-400">
+                              {label}
+                          </p>
+                          <p className="text-3xl font-semibold mt-2">{value}</p>
+                          {sublabel && (
+                              <p className="text-xs text-gray-400 mt-1">{sublabel}</p>
+                          )}
+                      </div>
+                      {icon && (
+                          <span className="text-2xl opacity-70" aria-hidden>{icon}</span>
+                      )}
+                  </div>
+              </div>
+          );
+
+          return to ? <Link to={to}>{Inner}</Link> : Inner;
+      };
+
+      export default DashboardCard;
+
+  STEP 2 — Route
+  src/routes.ts:
+
+      dashboard: () => '/dashboard' as const,
+
+  STEP 3 — Dashboard page
+  NEW FILE: src/components/DashboardPage.tsx
+
+      import { useDashboardKpis } from '../Queries/useDashboardKpis';
+      import DashboardCard from './DashboardCard';
+      import { routes } from '../routes';
+
+      const DashboardPage = () => {
+          const { data: kpis, isLoading } = useDashboardKpis();
+
+          if (isLoading || !kpis) {
+              return <p className="p-6 text-gray-500">Loading dashboard…</p>;
+          }
+
+          return (
+              <div className="max-w-6xl mx-auto p-6 space-y-6">
+                  <h1 className="text-2xl font-semibold">Manager Dashboard</h1>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <DashboardCard
+                          label="Employees"
+                          value={kpis.employeeCount}
+                          sublabel={`${kpis.activeEmployeeCount} active`}
+                          icon="🧑‍💼"
+                          to={routes.employees()}
+                      />
+                      <DashboardCard
+                          label="Pending leaves"
+                          value={kpis.pendingLeavesCount}
+                          icon="📋"
+                          to={routes.pendingLeaves()}
+                      />
+                      <DashboardCard
+                          label="Rollback requests"
+                          value={kpis.rollbackRequestsCount}
+                          icon="↩️"
+                          to={routes.pendingLeaves()}
+                      />
+                      <DashboardCard
+                          label="Docs this week"
+                          value={kpis.documentsThisWeekCount}
+                          icon="📂"
+                          to={routes.adminDocuments()}
+                      />
+                      <DashboardCard
+                          label="Audit events today"
+                          value={kpis.openAuditEntriesToday}
+                          icon="🗒️"
+                          to={routes.audit()}
+                      />
+                  </div>
+
+                  {/* Charts (34.3 + 34.4) land below here */}
+              </div>
+          );
+      };
+
+      export default DashboardPage;
+
+  STEP 4 — Wire the route
+  In App.tsx, under the Manager/Admin guard:
+
+      { path: routes.dashboard(), element: <DashboardPage /> },
+
+  AuthLayout — nav link visible to managers + admins:
+
+      {(user?.role === 'Manager' || user?.role === 'Admin') && (
+          <NavLink to={routes.dashboard()}>Dashboard</NavLink>
+      )}
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - `aria-hidden` on the emoji span — screen readers shouldn't
+    read it as part of the label. The text label already carries
+    semantics.
+  - The card-as-link pattern (the binary `to ? Link : div`)
+    keeps prop API simple. Don't over-engineer with `as` polymorphism
+    until you actually need 5+ root types.
+  - The card-link wraps the WHOLE card — clicking anywhere on the
+    surface navigates. Standard UX.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Card primitive with optional Link wrapping.
+  - Responsive grid with Tailwind breakpoint prefixes.
+  - Cross-feature navigation via cached typed routes.
 
 
-CHALLENGE 34.3 — Install Recharts + first chart              Target: 25 min
+CHALLENGE 34.3 — Install Recharts + first bar chart          Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - Recharts: declarative React charts wrapping D3.
-    `<BarChart><Bar dataKey="count" /></BarChart>`.
-  - Data shape: an array of objects, one per X-axis tick. Each Bar
-    references a key on those objects.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Charts turn KPI numbers into visual context. Recharts is the
+  pragmatic React charting library: declarative composition, sane
+  defaults, easy to skin with Tailwind. This challenge installs it
+  and builds the first chart — employees by department.
 
-  TASK:
-  1. npm install recharts
-  2. GET /api/dashboard/employees-by-department.
-  3. BarChart on dashboard for the result.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  RULES:
-  - Data must be sorted and complete (zero rows for empty buckets).
+  1) Recharts composition model
+     - Each chart is a tree: <BarChart><CartesianGrid /><XAxis />
+       <YAxis /><Tooltip /><Bar /></BarChart>.
+     - You pick which axes, grids, and decorations you want.
+     - The <Bar> reads from a `data` array via `dataKey`.
 
-  WHAT YOU JUST LEARNED:
-  Charts as components. The library is small; the data prep is the
-  work.
+  2) Data shape: array of plain objects
+     - One object per X-axis tick.
+     - Each value the chart needs is a property on that object.
+     - Example: `[{ department: 'Eng', count: 42 }, ...]`.
+     - The chart references `dataKey="count"` for the bar values
+       and `dataKey="department"` for the X-axis labels.
+
+  3) `ResponsiveContainer`
+     - Wraps a chart, gives it parent width/height.
+     - Chart redraws on resize.
+     - Always wrap charts in this; raw <BarChart width={...}>
+       breaks responsive layouts.
+
+  4) Tooltip + accessibility
+     - Recharts ships a default <Tooltip />. Pass custom content
+       via `content` for nice formatting.
+     - Charts are SVG. Screen readers see nothing. We'll add a
+       data table fallback in 34.5.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    package.json                                (recharts)
+    src/Queries/useEmployeesByDepartment.ts     (NEW)
+    src/components/EmployeesByDepartmentChart.tsx (NEW)
+    src/components/DashboardPage.tsx            (mount the chart)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Install
+
+      npm install recharts
+
+  STEP 2 — Hook
+  NEW FILE: src/Queries/useEmployeesByDepartment.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { fetchEmployeesByDepartment } from '../services/api';
+
+      export const useEmployeesByDepartment = () =>
+          useQuery({
+              queryKey: ['dashboard', 'employees-by-department'],
+              queryFn: async () => (await fetchEmployeesByDepartment()).data,
+              staleTime: 60 * 1000,
+          });
+
+  STEP 3 — Chart component
+  NEW FILE: src/components/EmployeesByDepartmentChart.tsx
+
+      import {
+          BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer,
+      } from 'recharts';
+      import { useEmployeesByDepartment } from '../Queries/useEmployeesByDepartment';
+
+      const EmployeesByDepartmentChart = () => {
+          const { data, isLoading } = useEmployeesByDepartment();
+
+          if (isLoading) {
+              return <p className="text-sm text-gray-500">Loading chart…</p>;
+          }
+          if (!data || data.length === 0) {
+              return <p className="text-sm text-gray-500">No data.</p>;
+          }
+
+          return (
+              <div className="card">
+                  <h2 className="text-sm font-medium mb-3">
+                      Active employees by department
+                  </h2>
+
+                  <ResponsiveContainer width="100%" height={300}>
+                      <BarChart data={data}
+                                margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="currentColor"
+                                          className="opacity-10" />
+                          <XAxis dataKey="department"
+                                  className="text-xs"
+                                  stroke="currentColor" />
+                          <YAxis allowDecimals={false}
+                                  className="text-xs"
+                                  stroke="currentColor" />
+                          <Tooltip />
+                          <Bar dataKey="count" fill="#2563eb" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                  </ResponsiveContainer>
+              </div>
+          );
+      };
+
+      export default EmployeesByDepartmentChart;
+
+  Anatomy:
+   - `CartesianGrid strokeDasharray="3 3"` — dotted grid. The
+     `currentColor` + `className="opacity-10"` trick lets it
+     adapt to dark mode (`currentColor` inherits from the
+     element's text color).
+   - `allowDecimals={false}` keeps the Y-axis as whole numbers.
+   - `radius={[4, 4, 0, 0]}` — rounds the top of each bar.
+   - `fill="#2563eb"` — same as bg-brand-600. Hardcoded here
+     because Recharts doesn't understand Tailwind utility classes.
+
+  STEP 4 — Mount on the dashboard
+  In DashboardPage, below the KPI grid:
+
+      import EmployeesByDepartmentChart from './EmployeesByDepartmentChart';
+      // ...
+      <EmployeesByDepartmentChart />
+
+  Test:
+   - Seed a couple of employees into different departments.
+   - Refresh /dashboard. The bar chart shows counts by
+     department, sorted descending.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - ALWAYS wrap charts in ResponsiveContainer with explicit
+    height. Without height, the chart renders at 0px tall.
+  - The chart fills its container's width — the parent's
+    width determines render size.
+  - Recharts color props are raw CSS values, not Tailwind
+    classes. Pick from your palette manually.
+  - `currentColor` for grids/axes — inherits text color, dark
+    mode "just works."
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Recharts composition model.
+  - The "currentColor + opacity" pattern for theme-aware chart
+    chrome.
+  - When Tailwind doesn't apply (SVG attrs) — work around with
+    raw hex.
 
 
-CHALLENGE 34.4 — Time-series chart (hires by month)          Target: 30 min
+CHALLENGE 34.4 — Line chart (hires by month)                 Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. GET /api/dashboard/hires-by-month?year=2026.
-  2. LineChart with monotone curve.
-  3. Empty months show 0, not missing.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Bar = category compare. Line = trend over time. Hires-by-month
+  is the textbook line chart case: 12 months on the X axis,
+  hire count on the Y, a smooth curve showing the trend.
 
-  RULES:
-  - X-axis labels formatted: "Jan", "Feb" (3-char month).
-  - Tooltip with full date + count.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Line vs bar. Use line for trends over time; bar for category compare.
+  1) `LineChart` vs `BarChart`
+     - Same composition model, swap the inner shape:
+         <LineChart><Line dataKey="count" /></LineChart>
+     - Lines need a `type` — "monotone" curves smoothly,
+       "linear" sharp-elbowed, "step" stair-stepped.
+
+  2) Formatting axis ticks
+     - X-axis values are numbers (1-12 for months). Format with
+       a tickFormatter:
+         <XAxis dataKey="month" tickFormatter={n => MONTH_NAMES[n - 1]} />
+
+  3) Custom Tooltip content
+     - Default tooltip shows the data key + value.
+     - For richer tooltips, pass a `content` prop with a
+       function that receives `{ active, payload, label }`.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/Queries/useHiresByMonth.ts            (NEW)
+    src/components/HiresByMonthChart.tsx      (NEW)
+    src/components/DashboardPage.tsx          (mount)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Hook
+  NEW FILE: src/Queries/useHiresByMonth.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { fetchHiresByMonth } from '../services/api';
+
+      export const useHiresByMonth = (year?: number) =>
+          useQuery({
+              queryKey: ['dashboard', 'hires-by-month', year ?? 'current'],
+              queryFn: async () => (await fetchHiresByMonth(year)).data,
+              staleTime: 5 * 60 * 1000,
+          });
+
+  STEP 2 — Chart
+  NEW FILE: src/components/HiresByMonthChart.tsx
+
+      import {
+          LineChart, Line, XAxis, YAxis, Tooltip,
+          CartesianGrid, ResponsiveContainer,
+      } from 'recharts';
+      import { useHiresByMonth } from '../Queries/useHiresByMonth';
+
+      const MONTH_NAMES = [
+          'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      ];
+
+      const HiresByMonthChart = ({ year }: { year?: number }) => {
+          const { data, isLoading } = useHiresByMonth(year);
+          const effectiveYear = year ?? new Date().getFullYear();
+
+          if (isLoading || !data) {
+              return <p className="text-sm text-gray-500">Loading chart…</p>;
+          }
+
+          return (
+              <div className="card">
+                  <h2 className="text-sm font-medium mb-3">
+                      New hires by month — {effectiveYear}
+                  </h2>
+
+                  <ResponsiveContainer width="100%" height={300}>
+                      <LineChart data={data}
+                                 margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="currentColor"
+                                          className="opacity-10" />
+                          <XAxis
+                              dataKey="month"
+                              tickFormatter={(m: number) => MONTH_NAMES[m - 1]}
+                              stroke="currentColor"
+                              className="text-xs"
+                          />
+                          <YAxis allowDecimals={false}
+                                 stroke="currentColor"
+                                 className="text-xs" />
+                          <Tooltip
+                              labelFormatter={(m: number) =>
+                                  `${MONTH_NAMES[m - 1]} ${effectiveYear}`}
+                              formatter={(value: number) => [`${value} hire${value === 1 ? '' : 's'}`, '']}
+                          />
+                          <Line
+                              type="monotone"
+                              dataKey="count"
+                              stroke="#2563eb"
+                              strokeWidth={2}
+                              dot={{ r: 3 }}
+                              activeDot={{ r: 5 }}
+                          />
+                      </LineChart>
+                  </ResponsiveContainer>
+              </div>
+          );
+      };
+
+      export default HiresByMonthChart;
+
+  Anatomy:
+   - `tickFormatter` transforms the raw X-axis value before
+     display.
+   - `labelFormatter` on Tooltip transforms the tooltip header.
+   - `formatter` on Tooltip transforms each VALUE. Returns
+     [displayValue, displayName] tuple.
+   - `dot={{ r: 3 }}` — draw a dot at each data point.
+   - `activeDot={{ r: 5 }}` — larger dot on hover.
+
+  STEP 3 — Mount on the dashboard
+  In DashboardPage:
+
+      import HiresByMonthChart from './HiresByMonthChart';
+      // ...
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <EmployeesByDepartmentChart />
+          <HiresByMonthChart />
+      </div>
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - `type="monotone"` makes the curve smooth. `type="linear"` for
+    sharp connections. Don't overthink — monotone is the default
+    for most trends.
+  - Empty months render as 0 (from server's bucket-filling). The
+    line dips to zero rather than disconnecting — visually
+    accurate.
+  - Always test with a sparse dataset (e.g., only 2 hires in the
+    whole year). The chart should still look reasonable.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - LineChart vs BarChart — when each fits.
+  - Tick formatters for axis customisation.
+  - Tooltip customisation via labelFormatter + formatter.
+  - The dot + activeDot pattern.
 
 
-CHALLENGE 34.5 — Responsive container + a11y                 Target: 25 min
+CHALLENGE 34.5 — Responsive + accessible charts              Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  NEW HERE — read this before TASK:
-  - `<ResponsiveContainer>` wraps a chart and gives it parent
-    width/height — chart reflows on resize.
-  - Charts are SVG → invisible to screen readers. Provide an
-    aria-label + an accessible data table somewhere.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  SVG charts are invisible to screen readers. A user with
+  vision-assist technology sees "graphic" and nothing else. The
+  WCAG-compliant fix: pair every chart with a data TABLE that
+  screen readers can navigate. The table is hidden behind a
+  `<details>` so sighted users aren't distracted, but it's there
+  for everyone who needs it.
 
-  TASK:
-  1. Wrap every chart in <ResponsiveContainer width="100%" height={300}>.
-  2. Add aria-label describing each chart.
-  3. Below each chart, render a <details><summary>Show data</summary>
-     <table>...</table></details>.
+  Plus the same pass adds aria-labels to the charts themselves
+  and confirms ResponsiveContainer behaves on mobile.
 
-  RULES:
-  - <details>/<summary> is native disclosure — accessible by default.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Responsive + accessible charts. Necessary, not optional.
+  1) `role="img"` + `aria-label` on charts
+     - Recharts renders SVG. Add these on the wrapping div so
+       assistive tech announces "image: <label>" rather than
+       skipping the chart entirely.
+
+  2) `<details>`/`<summary>` for the data table fallback
+     - Native disclosure. Free keyboard. Free announcement.
+     - Inside, a real `<table>` of the chart data.
+     - Sighted users get the chart; screen readers get the
+       table. Best of both.
+
+  3) Mobile testing
+     - Open the dashboard at 375px wide (Chrome devtools mobile).
+     - The 2-column chart layout should collapse to 1 column.
+     - Cards stack. Charts shrink but stay readable.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/EmployeesByDepartmentChart.tsx   (add a11y)
+    src/components/HiresByMonthChart.tsx            (add a11y)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  Update EmployeesByDepartmentChart with the data table + ARIA:
+
+      const EmployeesByDepartmentChart = () => {
+          const { data, isLoading } = useEmployeesByDepartment();
+          // ...existing loading/empty branches...
+
+          const totalCount = data!.reduce((sum, d) => sum + d.count, 0);
+
+          return (
+              <div className="card">
+                  <h2 className="text-sm font-medium mb-3">
+                      Active employees by department
+                  </h2>
+
+                  <div role="img"
+                       aria-label={`Bar chart of active employees by department. Total ${totalCount} employees across ${data!.length} departments.`}>
+                      <ResponsiveContainer width="100%" height={300}>
+                          {/* unchanged chart */}
+                      </ResponsiveContainer>
+                  </div>
+
+                  <details className="mt-3 text-xs">
+                      <summary className="cursor-pointer text-gray-500 hover:text-gray-800">
+                          Show data table
+                      </summary>
+                      <table className="mt-2 min-w-full text-left">
+                          <thead>
+                              <tr className="border-b border-gray-200 dark:border-gray-700">
+                                  <th className="py-1 pr-3 font-medium">Department</th>
+                                  <th className="py-1 font-medium">Count</th>
+                              </tr>
+                          </thead>
+                          <tbody>
+                              {data!.map(row => (
+                                  <tr key={row.department}
+                                      className="border-b border-gray-100 dark:border-gray-700">
+                                      <td className="py-1 pr-3">{row.department}</td>
+                                      <td className="py-1">{row.count}</td>
+                                  </tr>
+                              ))}
+                          </tbody>
+                      </table>
+                  </details>
+              </div>
+          );
+      };
+
+  Same shape for HiresByMonthChart — wrap the chart in
+  `<div role="img" aria-label="...">`, then a `<details>` table
+  below with Month + Count columns.
+
+  Test:
+   - Resize the browser to ~375px. Charts shrink but remain
+     readable.
+   - Open the data table via the summary toggle. Verify the
+     numbers match the chart bars.
+   - Use a screen reader (Windows: NVDA; macOS: VoiceOver) and
+     navigate the dashboard. The chart announces its
+     aria-label; the data table is fully navigable.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - `role="img"` + aria-label is the canonical "this is a graphic"
+    treatment. Don't omit it; charts otherwise vanish for
+    screen-reader users.
+  - The data table belongs INSIDE `<details>`. Always-on tables
+    duplicate information for sighted users.
+  - Compute the aria-label dynamically — include the data summary
+    ("total 73 employees across 4 departments") so screen reader
+    users get the gist immediately.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Accessible chart pattern: `role="img"` + dynamic aria-label
+    + hidden data table.
+  - Mobile-first responsive check via Tailwind breakpoints.
+  - Round 34 capstone: a dashboard that's READABLE — KPI cards,
+    two charts, screen-reader-accessible, mobile-friendly. Round
+    35 layers on dashboard polish (widgets, filters, exports).
 
 
 ================================================================================
@@ -6547,90 +20093,938 @@ Pacing: One challenge per day. Pending-approvals quick view + team
 list + date range filter.
 
 
-CHALLENGE 35.1 — Pending approvals widget                    Target: 30 min
+CHALLENGE 35.1 — Pending approvals widget                    Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Dashboard widget: list of 5 most-recent pending leave requests
-     with quick Approve/Reject buttons.
-  2. Reuse the mutations from Round 30.4.
-  3. After action: invalidate.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Managers shouldn't have to click into the Pending Leaves page
+  to see "are there things waiting for me?" The dashboard answers
+  that with a small inline widget: 5 most-recent pending requests,
+  approve/reject inline. Same data, different UI shell. Same
+  mutations from Round 30.4 — DO NOT duplicate them.
 
-  RULES:
-  - Don't duplicate the manager-leaves page logic. Reuse hooks +
-    mutations. Different UI shell only.
+  This challenge teaches the "composition" principle: hooks +
+  mutations are the reusable units. Pages are just compositions
+  of them. A new page = new layout, not new logic.
 
-  WHAT YOU JUST LEARNED:
-  Composition: the same mutations driving two different UIs.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Slicing existing data on the client
+     - `usePendingLeaves()` returns the FULL pending list.
+     - The widget shows only the first 5: `pending.data?.slice(0, 5)`.
+     - One server endpoint, two consumers — no new API needed.
+
+  2) "View all" deep link
+     - When the list is truncated, show a "View all (N)" link to
+       the full page.
+     - Standard pattern for any preview widget.
+
+  3) Hook reuse in two locations
+     - `useApproveLeave` and `useRejectLeave` from 30.4 work
+       here unchanged. They invalidate `leaveKeys.all`, so the
+       widget AND the full page refresh together.
+     - This is why we invalidate the domain root, not just one
+       specific key — composition becomes free.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/PendingApprovalsWidget.tsx       (NEW)
+    src/components/DashboardPage.tsx                (mount)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  NEW FILE: src/components/PendingApprovalsWidget.tsx
+
+      import { useState } from 'react';
+      import { Link } from 'react-router-dom';
+      import { format } from 'date-fns';
+      import { usePendingLeaves } from '../Queries/usePendingLeaves';
+      import { useEmployees } from '../Queries/useEmployees';
+      import { useApproveLeave } from '../Queries/useApproveLeave';
+      import { useRejectLeave } from '../Queries/useRejectLeave';
+      import ConfirmWithReasonModal from './ConfirmWithReasonModal';
+      import { routes } from '../routes';
+
+      const PREVIEW_LIMIT = 5;
+
+      const PendingApprovalsWidget = () => {
+          const { data: pending, isLoading } = usePendingLeaves();
+          const { data: employees } = useEmployees();
+          const approveMutation = useApproveLeave();
+          const rejectMutation = useRejectLeave();
+
+          const [pendingApprove, setPendingApprove] = useState<string | null>(null);
+          const [pendingReject,  setPendingReject]  = useState<string | null>(null);
+
+          // Same name lookup pattern as PendingLeavesPage.
+          const nameByUsername = new Map<string, string>();
+          employees?.forEach(e => {
+              if (e.username) nameByUsername.set(e.username, `${e.firstName} ${e.lastName}`);
+          });
+
+          if (isLoading || !pending) {
+              return (
+                  <div className="card">
+                      <h2 className="text-sm font-medium mb-3">Pending approvals</h2>
+                      <p className="text-sm text-gray-500">Loading…</p>
+                  </div>
+              );
+          }
+
+          const visible = pending.slice(0, PREVIEW_LIMIT);
+          const hidden = Math.max(0, pending.length - PREVIEW_LIMIT);
+
+          return (
+              <div className="card">
+                  <div className="flex justify-between items-center mb-3">
+                      <h2 className="text-sm font-medium">Pending approvals</h2>
+                      <Link to={routes.pendingLeaves()}
+                            className="text-xs text-brand-600 hover:text-brand-800">
+                          View all ({pending.length}) →
+                      </Link>
+                  </div>
+
+                  {visible.length === 0 ? (
+                      <p className="text-sm text-gray-500">Nothing pending.</p>
+                  ) : (
+                      <ul className="space-y-2">
+                          {visible.map(req => (
+                              <li key={req.id} className="border-b border-gray-100
+                                                          dark:border-gray-700 last:border-b-0 pb-2 last:pb-0">
+                                  <div className="flex justify-between items-start gap-3">
+                                      <div className="flex-1 min-w-0">
+                                          <p className="text-sm font-medium">
+                                              {nameByUsername.get(req.employeeUsername) ?? req.employeeUsername}
+                                          </p>
+                                          <p className="text-xs text-gray-500">
+                                              {req.type} · {req.days}d ·{' '}
+                                              {format(new Date(req.startDate), 'MMM d')}–
+                                              {format(new Date(req.endDate), 'MMM d')}
+                                          </p>
+                                      </div>
+                                      <div className="flex gap-2 text-xs whitespace-nowrap">
+                                          <button onClick={() => setPendingApprove(req.id)}
+                                                  className="text-brand-600 hover:text-brand-800">
+                                              Approve
+                                          </button>
+                                          <button onClick={() => setPendingReject(req.id)}
+                                                  className="text-red-600 hover:text-red-800">
+                                              Reject
+                                          </button>
+                                      </div>
+                                  </div>
+                              </li>
+                          ))}
+                      </ul>
+                  )}
+
+                  {hidden > 0 && (
+                      <p className="text-xs text-gray-400 mt-3">
+                          {hidden} more in the full queue.
+                      </p>
+                  )}
+
+                  <ConfirmWithReasonModal
+                      open={!!pendingApprove}
+                      title="Approve leave?"
+                      message="Optional note for the requester."
+                      minReasonLength={0}
+                      onConfirm={(note) => {
+                          if (pendingApprove) {
+                              approveMutation.mutate({ id: pendingApprove, note: note || undefined });
+                              setPendingApprove(null);
+                          }
+                      }}
+                      onCancel={() => setPendingApprove(null)}
+                  />
+                  <ConfirmWithReasonModal
+                      open={!!pendingReject}
+                      title="Reject leave?"
+                      message="Please share a reason."
+                      minReasonLength={5}
+                      onConfirm={(note) => {
+                          if (pendingReject) {
+                              rejectMutation.mutate({ id: pendingReject, note });
+                              setPendingReject(null);
+                          }
+                      }}
+                      onCancel={() => setPendingReject(null)}
+                  />
+              </div>
+          );
+      };
+
+      export default PendingApprovalsWidget;
+
+  Mount it on DashboardPage in a 2-column grid alongside the
+  charts:
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <PendingApprovalsWidget />
+          <EmployeesByDepartmentChart />
+      </div>
+      <HiresByMonthChart />
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Reuse, don't rewrite. Approve/reject mutations from 30.4 work
+    here as-is.
+  - Always show the "View all" link when more rows exist than the
+    preview limit. Otherwise users wonder if they're seeing
+    everything.
+  - `truncate` + `min-w-0` on flex children to handle long
+    employee names gracefully.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Page-as-composition: same hooks + mutations driving two UIs.
+  - "Preview + view all" widget pattern.
+  - The composition payoff of invalidating the domain root.
 
 
-CHALLENGE 35.2 — Team list widget                            Target: 25 min
+CHALLENGE 35.2 — Team-status widget (cross-domain join)      Target: 40 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Widget: list of direct reports (placeholder: all employees if
-     no team relationship modeled — simplify).
-  2. Each card: name, position, current leave status (On Leave /
-     Working / On Sick).
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  "Who's on leave today?" is a recurring manager question.
+  Answering it requires JOINING data from two domains: the
+  employee list AND today's leave requests. This challenge
+  builds the join client-side, since the .NET service layer
+  doesn't expose a dedicated endpoint yet.
 
-  RULES:
-  - Compute "currently on leave" client-side from leave list.
+  Bonus pattern: rendering derived status per employee — "On
+  leave (Annual)", "On sick leave", or "Working" — with
+  appropriate styling.
 
-  WHAT YOU JUST LEARNED:
-  Cross-data derivation. Pull from multiple queries, render one view.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Cross-domain derived data
+     - Each employee gets an effective status:
+         - "On leave" if an approved leave covers today's date.
+         - "Working" otherwise.
+     - Computed by walking the leave list per employee.
+
+  2) Date overlap with today
+     - `today >= leave.startDate && today <= leave.endDate`.
+     - All comparisons in the same TZ. Use UTC date strings or
+       Date objects pinned to midnight.
+
+  3) `useMemo` over the join
+     - The join produces an array. Without useMemo, every render
+       recomputes it.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/TeamStatusWidget.tsx       (NEW)
+    src/components/DashboardPage.tsx          (mount)
+    src/Queries/useLeaves.ts                  (NEW — full leave list)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Fetch all leaves (manager scope)
+  Manager/admin already has access to the pending queue. For the
+  "who's on leave" widget we need the full active leave set.
+  Reuse the rollback queue's pattern: a manager-only endpoint
+  that returns all current/upcoming leaves.
+
+  For learning simplicity, we filter client-side from the
+  /api/leave/pending and /api/leave/mine endpoints… but that
+  misses "approved" leaves. Add a small new endpoint.
+
+  Append to ILeaveService.cs / LeaveService.cs:
+
+      Task<List<LeaveRequest>> GetActiveAsync();
+      // ...
+      public async Task<List<LeaveRequest>> GetActiveAsync()
+      {
+          var all = await _repo.GetAllAsync();
+          return all
+              .Where(r => r.Status == LeaveStatus.Approved
+                          || r.Status == LeaveStatus.Pending
+                          || r.Status == LeaveStatus.RollbackRequested)
+              .ToList();
+      }
+
+  And LeaveController:
+
+      [HttpGet("active")]
+      [Authorize(Roles = "Manager,Admin")]
+      public async Task<IActionResult> GetActive()
+          => Ok(await _leave.GetActiveAsync());
+
+  STEP 2 — Hook
+  NEW FILE: src/Queries/useActiveLeaves.ts
+
+      import { useQuery } from '@tanstack/react-query';
+      import { api } from '../services/api';
+      import { leaveKeys } from './leaveKeys';
+      import { useAuth } from '../Context/AuthContext';
+      import type { LeaveRequest } from '../Types/Leave';
+
+      export const useActiveLeaves = () => {
+          const { user } = useAuth();
+          return useQuery({
+              queryKey: [...leaveKeys.all, 'active'] as const,
+              queryFn: async () => (await api.get<LeaveRequest[]>('/leave/active')).data,
+              enabled: user?.role === 'Manager' || user?.role === 'Admin',
+              staleTime: 60 * 1000,
+          });
+      };
+
+  STEP 3 — Widget
+  NEW FILE: src/components/TeamStatusWidget.tsx
+
+      import { useMemo } from 'react';
+      import clsx from 'clsx';
+      import { useEmployees } from '../Queries/useEmployees';
+      import { useActiveLeaves } from '../Queries/useActiveLeaves';
+      import type { LeaveRequest } from '../Types/Leave';
+
+      type EmployeeStatus =
+          | { kind: 'working' }
+          | { kind: 'on-leave'; type: LeaveRequest['type'] };
+
+      const TeamStatusWidget = () => {
+          const { data: employees } = useEmployees();
+          const { data: activeLeaves } = useActiveLeaves();
+
+          const rows = useMemo(() => {
+              if (!employees) return [];
+              const today = new Date().toISOString().slice(0, 10);     // 'yyyy-mm-dd'
+
+              const approvedToday = (activeLeaves ?? []).filter(l =>
+                  l.status === 'Approved'
+                  && l.startDate.slice(0, 10) <= today
+                  && l.endDate.slice(0, 10) >= today,
+              );
+
+              const onLeaveByUsername = new Map<string, LeaveRequest>();
+              approvedToday.forEach(l => onLeaveByUsername.set(l.employeeUsername, l));
+
+              return employees
+                  .filter(e => e.isActive && e.username)
+                  .map(e => {
+                      const leave = onLeaveByUsername.get(e.username!);
+                      const status: EmployeeStatus = leave
+                          ? { kind: 'on-leave', type: leave.type }
+                          : { kind: 'working' };
+                      return { employee: e, status };
+                  });
+          }, [employees, activeLeaves]);
+
+          const onLeaveCount = rows.filter(r => r.status.kind === 'on-leave').length;
+
+          return (
+              <div className="card">
+                  <div className="flex justify-between items-center mb-3">
+                      <h2 className="text-sm font-medium">Team status</h2>
+                      <span className="text-xs text-gray-500">
+                          {onLeaveCount} on leave today
+                      </span>
+                  </div>
+
+                  <ul className="space-y-1 max-h-64 overflow-y-auto">
+                      {rows.map(({ employee, status }) => (
+                          <li key={employee.id}
+                              className="flex justify-between items-center py-1 text-sm">
+                              <span>
+                                  {employee.firstName} {employee.lastName}
+                                  <span className="text-xs text-gray-400 ml-2">
+                                      {employee.position}
+                                  </span>
+                              </span>
+                              <span className={clsx(
+                                  'text-xs px-2 py-0.5 rounded',
+                                  status.kind === 'on-leave'
+                                      ? 'bg-orange-100 text-orange-800'
+                                      : 'bg-green-100 text-green-800',
+                              )}>
+                                  {status.kind === 'on-leave'
+                                      ? `On ${status.type.toLowerCase()} leave`
+                                      : 'Working'}
+                              </span>
+                          </li>
+                      ))}
+                  </ul>
+              </div>
+          );
+      };
+
+      export default TeamStatusWidget;
+
+  NEW HERE: discriminated union for status
+  - `type EmployeeStatus = { kind: 'working' } | { kind: 'on-leave'; type: ... }`
+  - The `kind` discriminator lets TS narrow inside each branch.
+  - `status.type` is only accessible when `status.kind === 'on-leave'`.
+
+  STEP 4 — Mount
+  In DashboardPage:
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <PendingApprovalsWidget />
+          <TeamStatusWidget />
+      </div>
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Pin date comparison to `slice(0, 10)` — drops the time
+    component, compares dates as strings. Avoids timezone
+    surprises.
+  - Discriminated unions over boolean flags. `{ onLeave: true,
+    leaveType: 'Annual' }` works but the union version reads
+    better and TS narrows more precisely.
+  - `max-h-64 overflow-y-auto` — list scrolls if it grows beyond
+    16rem. Keeps the dashboard tidy.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Client-side joins across domains.
+  - Discriminated unions for status structures.
+  - String-based date comparison for timezone safety.
 
 
-CHALLENGE 35.3 — Date range filter                           Target: 30 min
+CHALLENGE 35.3 — Date-range filter (global dashboard)        Target: 50 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Date-range picker at the top of dashboard (this week, this month,
-     this quarter, custom).
-  2. searchParams: from, to (ISO).
-  3. All KPI endpoints accept ?from&to; re-query when range changes.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  KPIs are time-sensitive. "Docs this week" implies a week
+  boundary; what if the manager wants "this month" or "this
+  quarter"? A global date-range picker at the top of the
+  dashboard rewrites every KPI and chart's data scope in one go.
 
-  RULES:
-  - Default to "this month."
-  - Server applies the range to all aggregations.
+  This challenge introduces the SERVER-SIDE preset-range pattern
+  ("week"/"month"/"quarter"/"custom") and threads it through every
+  aggregation endpoint.
 
-  WHAT YOU JUST LEARNED:
-  Global filter binding. Affects multiple widgets uniformly.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Preset ranges as enum values
+     - 'this-week', 'this-month', 'this-quarter', 'custom'.
+     - The server computes start/end from the preset name AND
+       the server clock — never trust the client clock.
+     - 'custom' takes explicit from/to.
+
+  2) URL params for the range
+     - `?range=this-month` or `?from=2026-01-01&to=2026-01-31`.
+     - Defaults to `this-month` if absent.
+
+  3) Threading the range through multiple endpoints
+     - Every aggregation endpoint accepts the same range
+       parameters.
+     - The DashboardService applies them consistently.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    EmployeeManager.Application/Services/DashboardService.cs (range-aware)
+    EmployeeManager.API/Controllers/DashboardController.cs  (query params)
+    src/Types/Dashboard.ts                                   (range types)
+    src/services/api.ts                                      (range params)
+    src/Queries/useDashboardKpis.ts                          (range arg)
+    src/components/DateRangeFilter.tsx                       (NEW)
+    src/components/DashboardPage.tsx                         (mount + thread)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Range computation on the server
+  In DashboardService.cs, add a private helper:
+
+      private record DateRange(DateTime From, DateTime To);
+
+      private static DateRange Resolve(string? preset, DateTime? from, DateTime? to)
+      {
+          var now = DateTime.UtcNow.Date;
+
+          if (preset == "custom" && from is not null && to is not null)
+              return new(from.Value.Date, to.Value.Date.AddDays(1).AddTicks(-1));
+
+          var start = preset switch
+          {
+              "this-week" => now.AddDays(-(int)now.DayOfWeek + (int)DayOfWeek.Monday),
+              "this-quarter" => new DateTime(now.Year, ((now.Month - 1) / 3) * 3 + 1, 1),
+              _ /* this-month */ => new DateTime(now.Year, now.Month, 1),
+          };
+
+          return new(start, now.AddDays(1).AddTicks(-1));
+      }
+
+  Update GetKpisAsync to accept the range and apply it:
+
+      public async Task<DashboardKpis> GetKpisAsync(
+              string? preset, DateTime? from, DateTime? to)
+      {
+          var range = Resolve(preset, from, to);
+
+          // ...same parallel fetches as before...
+
+          return new DashboardKpis(
+              EmployeeCount: employees.Count,
+              ActiveEmployeeCount: employees.Count(e => e.IsActive),
+              PendingLeavesCount: leaves.Count(l =>
+                  l.Status == LeaveStatus.Pending
+                  && l.CreatedAt >= range.From && l.CreatedAt <= range.To),
+              RollbackRequestsCount: leaves.Count(l =>
+                  l.Status == LeaveStatus.RollbackRequested
+                  && l.CreatedAt >= range.From && l.CreatedAt <= range.To),
+              DocumentsThisWeekCount: documents.Count(d =>
+                  d.UploadedAt >= range.From && d.UploadedAt <= range.To),
+              OpenAuditEntriesToday: audit.Count(a =>
+                  a.At >= range.From && a.At <= range.To));
+      }
+
+  Total employees and active count don't change with the range
+  (they're not time-bound). The OTHER counters use the range.
+
+  STEP 2 — Controller
+  Update the GetKpis action:
+
+      [HttpGet("kpis")]
+      public async Task<IActionResult> GetKpis(
+          [FromQuery] string? range,
+          [FromQuery] DateTime? from,
+          [FromQuery] DateTime? to)
+          => Ok(await _dashboard.GetKpisAsync(range, from, to));
+
+  STEP 3 — Client types
+  Update src/Types/Dashboard.ts:
+
+      export type DateRangePreset =
+          | 'this-week' | 'this-month' | 'this-quarter' | 'custom';
+
+      export interface DateRangeParams {
+          range?: DateRangePreset;
+          from?: string;
+          to?: string;
+      }
+
+  STEP 4 — API + hook
+  Update fetchDashboardKpis:
+
+      export const fetchDashboardKpis = (params: DateRangeParams = {}) =>
+          api.get<DashboardKpis>('/dashboard/kpis', {
+              params: {
+                  ...(params.range ? { range: params.range } : {}),
+                  ...(params.from ? { from: params.from } : {}),
+                  ...(params.to ? { to: params.to } : {}),
+              },
+          });
+
+  Update useDashboardKpis:
+
+      export const useDashboardKpis = (params: DateRangeParams = {}) => {
+          const { user } = useAuth();
+          return useQuery({
+              queryKey: ['dashboard', 'kpis', params],
+              queryFn: async () => (await fetchDashboardKpis(params)).data,
+              enabled: user?.role === 'Manager' || user?.role === 'Admin',
+              staleTime: 30 * 1000,
+          });
+      };
+
+  STEP 5 — Filter component
+  NEW FILE: src/components/DateRangeFilter.tsx
+
+      import type { DateRangePreset, DateRangeParams } from '../Types/Dashboard';
+
+      const PRESETS: { value: DateRangePreset; label: string }[] = [
+          { value: 'this-week',    label: 'This week' },
+          { value: 'this-month',   label: 'This month' },
+          { value: 'this-quarter', label: 'This quarter' },
+      ];
+
+      interface Props {
+          value: DateRangeParams;
+          onChange: (next: DateRangeParams) => void;
+      }
+
+      const DateRangeFilter = ({ value, onChange }: Props) => {
+          const active = value.range ?? 'this-month';
+
+          return (
+              <div className="flex gap-2 flex-wrap items-center">
+                  {PRESETS.map(p => (
+                      <button
+                          key={p.value}
+                          onClick={() => onChange({ range: p.value })}
+                          className={`px-3 py-1 text-sm rounded
+                              ${active === p.value
+                                  ? 'bg-brand-600 text-white'
+                                  : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'}`}>
+                          {p.label}
+                      </button>
+                  ))}
+              </div>
+          );
+      };
+
+      export default DateRangeFilter;
+
+  STEP 6 — Wire into DashboardPage
+  Replace the hook call:
+
+      import { useSearchParams } from 'react-router-dom';
+      import DateRangeFilter from './DateRangeFilter';
+      // ...
+
+      const [searchParams, setSearchParams] = useSearchParams();
+      const rangeFromUrl = (searchParams.get('range') as DateRangePreset | null) ?? 'this-month';
+      const rangeParams: DateRangeParams = { range: rangeFromUrl };
+      const { data: kpis } = useDashboardKpis(rangeParams);
+
+      const handleRangeChange = (next: DateRangeParams) => {
+          if (next.range && next.range !== 'this-month') {
+              setSearchParams({ range: next.range });
+          } else {
+              setSearchParams({});
+          }
+      };
+
+      // In JSX, above the cards:
+      <div className="flex justify-between items-center mb-4">
+          <h1 className="text-2xl font-semibold">Manager Dashboard</h1>
+          <DateRangeFilter value={rangeParams} onChange={handleRangeChange} />
+      </div>
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Server computes the actual dates from the preset. Never let
+    the client send "this-month" AS dates — clock skew bites you.
+  - The query key INCLUDES the range params. Switching presets
+    navigates between cached slots.
+  - Default range = `this-month`. Keep the URL clean.
+  - Time-INVARIANT KPIs (total employee count) shouldn't change
+    with the range. Be explicit about which KPIs are
+    time-bounded.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Preset-range pattern on the server side.
+  - Wiring a single filter to multiple queries.
+  - Tab-style filter UI without a library.
 
 
-CHALLENGE 35.4 — Export dashboard as CSV (each chart)        Target: 25 min
+CHALLENGE 35.4 — Export chart data as CSV                    Target: 35 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Each chart gets an Export button → CSV of its underlying data.
-  2. Reuse blob-download helper.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Round 33.5 built the CSV helpers (`toCsv` + `csvBlob` +
+  `triggerDownload`). Each dashboard chart now gets an Export
+  button that produces a CSV of its underlying DATA — not a
+  screenshot. Data is the asset; the chart is one rendering.
 
-  RULES:
-  - Don't export the rendered chart image — export the data. Easier,
-    more useful.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet (review)
+  ─────────────────────────────────────────────────────────────────────
 
-  WHAT YOU JUST LEARNED:
-  Data is the asset; the chart is one rendering of it. Export the
-  asset.
+  1) Reusing the CSV pipeline
+     - The helpers from Round 33.5 don't care about the data
+       source. Drop in any array of objects.
+
+  2) Sensible filenames
+     - `<chart-name>-<yyyy-mm-dd>.csv` — sortable, distinct.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/components/EmployeesByDepartmentChart.tsx  (Export button)
+    src/components/HiresByMonthChart.tsx           (Export button)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  In EmployeesByDepartmentChart, add a header bar with the Export
+  button:
+
+      import { toCsv, csvBlob } from '../utils/csv';
+      import { triggerDownload } from '../utils/triggerDownload';
+      // ...
+
+      const handleExport = () => {
+          if (!data) return;
+          const csv = toCsv(['department', 'count'], data);
+          triggerDownload(
+              csvBlob(csv),
+              `employees-by-department-${new Date().toISOString().slice(0, 10)}.csv`,
+          );
+      };
+
+      // In JSX, change the header to:
+      <div className="flex justify-between items-center mb-3">
+          <h2 className="text-sm font-medium">
+              Active employees by department
+          </h2>
+          <button onClick={handleExport}
+                  disabled={!data}
+                  className="text-xs text-brand-600 hover:text-brand-800">
+              Export CSV
+          </button>
+      </div>
+
+  Same shape in HiresByMonthChart:
+
+      const handleExport = () => {
+          if (!data) return;
+          const rows = data.map(d => ({
+              month: MONTH_NAMES[d.month - 1],
+              year: d.year,
+              count: d.count,
+          }));
+          const csv = toCsv(['month', 'year', 'count'], rows);
+          triggerDownload(
+              csvBlob(csv),
+              `hires-by-month-${effectiveYear}-${new Date().toISOString().slice(0, 10)}.csv`,
+          );
+      };
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Map raw data to nicer column names BEFORE passing to toCsv.
+    "month: 1" reads worse than "month: Jan" in Excel.
+  - Disable the button until `data` arrives. Avoids exporting an
+    empty CSV.
+  - Reuse the helpers — don't write CSV logic twice.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Generic CSV pipeline reapplied (third time: audit, dashboard
+    charts, eventually leaves history).
+  - Data transformation BEFORE export — labels, not raw values.
 
 
-CHALLENGE 35.5 — Dashboard preferences (saved layout)        Target: 30 min
+CHALLENGE 35.5 — Saved dashboard layout (Zustand + persist) Target: 45 min
 --------------------------------------------------------------------------
 YOUR TIME:
 
-  TASK:
-  1. Add a Zustand store `dashboardPrefs` (persist middleware).
-  2. Let user toggle widgets on/off via a "Customize" menu.
-  3. State survives reload.
+  ─────────────────────────────────────────────────────────────────────
+  WHY THIS CHALLENGE EXISTS
+  ─────────────────────────────────────────────────────────────────────
+  Different managers care about different widgets. Some want
+  pending approvals front and centre; some live on the charts.
+  Let users toggle widgets on/off, persist their choice in
+  Zustand's localStorage so it survives reload.
 
-  RULES:
-  - Default: all widgets on.
+  This challenge reuses Round 22.4's persist middleware in a new
+  context, AND introduces the "customise menu" UI pattern.
 
-  WHAT YOU JUST LEARNED:
-  User customization as state. Same shape as collapsed-sidebar pref.
+  ─────────────────────────────────────────────────────────────────────
+  NEW HERE — concepts you'll meet
+  ─────────────────────────────────────────────────────────────────────
+
+  1) Per-widget visibility state in Zustand
+     - Single store, keyed by widget id:
+         { pendingApprovals: true, teamStatus: true, byDept: true, hires: true }
+     - One toggle method.
+
+  2) Customise dropdown
+     - Reuse the outside-click hook from 32.3.
+     - Checkboxes per widget.
+
+  3) Persistence under a namespaced key
+     - `name: 'employee-manager:dashboard-prefs'` — same naming
+       convention as themeStore and recentActivityStore.
+
+  ─────────────────────────────────────────────────────────────────────
+  FILES YOU'LL TOUCH
+  ─────────────────────────────────────────────────────────────────────
+    src/stores/dashboardPrefsStore.ts        (NEW)
+    src/components/DashboardCustomiseMenu.tsx (NEW)
+    src/components/DashboardPage.tsx         (gate widgets)
+
+  ─────────────────────────────────────────────────────────────────────
+  TASK — concrete steps with code
+  ─────────────────────────────────────────────────────────────────────
+
+  STEP 1 — Store
+  NEW FILE: src/stores/dashboardPrefsStore.ts
+
+      import { create } from 'zustand';
+      import { persist } from 'zustand/middleware';
+
+      // The four widgets — keyed by short identifiers.
+      export type WidgetId =
+          | 'pendingApprovals'
+          | 'teamStatus'
+          | 'employeesByDepartment'
+          | 'hiresByMonth';
+
+      interface DashboardPrefsState {
+          visible: Record<WidgetId, boolean>;
+          toggle: (id: WidgetId) => void;
+          showAll: () => void;
+      }
+
+      const ALL_VISIBLE: Record<WidgetId, boolean> = {
+          pendingApprovals: true,
+          teamStatus: true,
+          employeesByDepartment: true,
+          hiresByMonth: true,
+      };
+
+      export const useDashboardPrefsStore = create<DashboardPrefsState>()(
+          persist(
+              (set) => ({
+                  visible: ALL_VISIBLE,
+                  toggle: (id) => set((s) => ({
+                      visible: { ...s.visible, [id]: !s.visible[id] },
+                  })),
+                  showAll: () => set({ visible: ALL_VISIBLE }),
+              }),
+              {
+                  name: 'employee-manager:dashboard-prefs',
+                  partialize: (s) => ({ visible: s.visible }),
+              },
+          ),
+      );
+
+  STEP 2 — Customise menu
+  NEW FILE: src/components/DashboardCustomiseMenu.tsx
+
+      import { useRef, useState } from 'react';
+      import { useOutsideClick } from '../hooks/useOutsideClick';
+      import { useDashboardPrefsStore, type WidgetId } from '../stores/dashboardPrefsStore';
+
+      const WIDGET_LABELS: Record<WidgetId, string> = {
+          pendingApprovals: 'Pending approvals',
+          teamStatus: 'Team status',
+          employeesByDepartment: 'Employees by department',
+          hiresByMonth: 'Hires by month',
+      };
+
+      const DashboardCustomiseMenu = () => {
+          const [open, setOpen] = useState(false);
+          const containerRef = useRef<HTMLDivElement>(null);
+          useOutsideClick(containerRef, () => setOpen(false), open);
+
+          const visible = useDashboardPrefsStore(s => s.visible);
+          const toggle = useDashboardPrefsStore(s => s.toggle);
+          const showAll = useDashboardPrefsStore(s => s.showAll);
+
+          return (
+              <div ref={containerRef} className="relative">
+                  <button onClick={() => setOpen(o => !o)}
+                          className="btn-secondary text-sm">
+                      Customise
+                  </button>
+
+                  {open && (
+                      <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-gray-800
+                                      rounded-lg shadow border border-gray-200 dark:border-gray-700 z-40 p-3">
+                          <p className="text-xs uppercase tracking-wider text-gray-500 mb-2">
+                              Show widgets
+                          </p>
+                          <ul className="space-y-2">
+                              {(Object.keys(WIDGET_LABELS) as WidgetId[]).map(id => (
+                                  <li key={id}>
+                                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                                          <input type="checkbox"
+                                                 checked={visible[id]}
+                                                 onChange={() => toggle(id)}
+                                                 className="rounded text-brand-600" />
+                                          {WIDGET_LABELS[id]}
+                                      </label>
+                                  </li>
+                              ))}
+                          </ul>
+                          <button onClick={showAll}
+                                  className="mt-3 text-xs text-brand-600 hover:text-brand-800">
+                              Show all
+                          </button>
+                      </div>
+                  )}
+              </div>
+          );
+      };
+
+      export default DashboardCustomiseMenu;
+
+  STEP 3 — Gate widgets in DashboardPage
+  Wrap each widget render with a visibility check:
+
+      import { useDashboardPrefsStore } from '../stores/dashboardPrefsStore';
+      import DashboardCustomiseMenu from './DashboardCustomiseMenu';
+      // ...
+
+      const visible = useDashboardPrefsStore(s => s.visible);
+
+      // In JSX, in the page header row:
+      <div className="flex justify-between items-center mb-4">
+          <h1 className="text-2xl font-semibold">Manager Dashboard</h1>
+          <div className="flex gap-2 items-center">
+              <DateRangeFilter ... />
+              <DashboardCustomiseMenu />
+          </div>
+      </div>
+
+      {/* Wrap each widget render */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {visible.pendingApprovals && <PendingApprovalsWidget />}
+          {visible.teamStatus && <TeamStatusWidget />}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {visible.employeesByDepartment && <EmployeesByDepartmentChart />}
+          {visible.hiresByMonth && <HiresByMonthChart />}
+      </div>
+
+  Test:
+   - Toggle "Hires by month" off → chart disappears.
+   - Reload — preference persists.
+   - Open in a second tab → same state.
+
+  ─────────────────────────────────────────────────────────────────────
+  RULES / GOTCHAS
+  ─────────────────────────────────────────────────────────────────────
+  - Persist ONLY the visibility map (`partialize`). The toggle
+    and showAll functions don't serialise.
+  - Always include a "Show all" reset. Users disable widgets and
+    forget where the menu lives.
+  - When you ADD a widget later, append it to BOTH the
+    `WidgetId` union AND `ALL_VISIBLE` — TS will catch you in
+    the type checker.
+
+  ─────────────────────────────────────────────────────────────────────
+  WHAT YOU JUST LEARNED
+  ─────────────────────────────────────────────────────────────────────
+  - Zustand persist applied to a UI preference (not just theme).
+  - Customise-menu UX pattern with outside-click.
+  - Visibility-driven layout — declarative, no manual array
+    manipulation.
+  - Round 35 capstone: dashboard is now customisable, time-
+    scoped, data-exportable. Manager experience is complete.
 
 
 ================================================================================

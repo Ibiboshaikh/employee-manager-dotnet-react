@@ -10,6 +10,7 @@ export interface Employee {
     salary: number;
     dateOfJoining: string;
     isActive: boolean;
+    mustChangePassword: boolean;
 }
 
 export interface User {

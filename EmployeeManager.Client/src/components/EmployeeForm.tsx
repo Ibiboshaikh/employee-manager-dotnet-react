@@ -125,6 +125,7 @@ const EmployeeForm = () => {
       salary: 0,
       dateOfJoining: "",
       isActive: true,
+      mustChangePassword: false,
     }
   });
 
@@ -156,6 +157,7 @@ const EmployeeForm = () => {
           ? new Date(employeeData.dateOfJoining).toISOString().split("T")[0]
           : "",
         isActive: employeeData.isActive,
+        mustChangePassword: employeeData.mustChangePassword || false,
       });
     }
   }, [employeeData, reset]); // Triggers automatically the exact millisecond data arrives
@@ -246,6 +248,7 @@ const EmployeeForm = () => {
     else {
       const payload: Omit<Employee, 'id'> = {
         ...data,
+        mustChangePassword: true,
         salary: data.salary
       };
       createMutation.mutate(payload);

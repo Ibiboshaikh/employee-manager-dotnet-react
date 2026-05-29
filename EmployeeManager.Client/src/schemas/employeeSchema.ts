@@ -16,6 +16,7 @@ export const employeeSchema = z.object({
   salary: z.number({ message: "Salary must be a valid number" }).positive("Salary must be greater than zero"),
   dateOfJoining: z.string().min(1, "Date of Joining is required"),
   isActive: z.boolean(),
+  mustChangePassword: z.boolean(),
 });
 
 // z.infer derives the type FROM the schema. Don't hand-write a parallel

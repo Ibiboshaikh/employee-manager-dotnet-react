@@ -70,7 +70,9 @@ const [searchParams, setSearchParams] = useSearchParams();
         result = (a.isActive ? 1 : 0) - (b.isActive ? 1 : 0);
         break;
       default:
-        result = a[sort.field].localeCompare(b[sort.field]);
+        const fieldA = a[sort.field] as string;
+        const fieldB = b[sort.field] as string;
+        result = fieldA.localeCompare(fieldB);
     }
     return sort.order === 'asc' ? result : -result;
   });
