@@ -1,4 +1,7 @@
 import { EmployeeId, UserId } from "./Ids";
+
+export type Role = 'Admin' | 'User';
+
 export interface Employee {
     id: EmployeeId;
     firstName: string;
@@ -17,7 +20,7 @@ export interface User {
     id: UserId;
     username: string;
     fullName: string;
-    role: 'Admin' | 'User';
+    role: Role;
 }
 
 export interface LoginRequest {
@@ -29,5 +32,6 @@ export interface LoginResponse {
     accessToken: string;
     expiresIn: number; // Token lifetime in seconds
     fullName: string;
-    role: User['role'];
+    role: Role;
+    mustChangePassword: boolean;
 }

@@ -18,8 +18,8 @@ function ConfirmModal({ open, message, onConfirm, onCancel }: ConfirmModalProps)
     <div className="modal-overlay">
       <div className="modal">
         <p>Are you sure you want to delete {message}?</p>
-        <button onClick={onConfirm}>Yes, Delete</button>
-        <button onClick={onCancel}>Cancel</button>
+        <button className="btn-danger" onClick={onConfirm}>Yes, Delete</button>
+        <button className="btn-secondary" onClick={onCancel}>Cancel</button>
       </div>
     </div>
   );

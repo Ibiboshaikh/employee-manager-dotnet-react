@@ -4805,7 +4805,12 @@ access pattern (auth vs. HR) rather than the real-world identity.
 
 CHALLENGE 20.4 — First-login forced password change         Target: 60 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 31 May 26 — 2 hours, no help from Gemini or anything, did it
+  myself. Claude's approach was wrong — needed
+  `new Claim(JwtRegisteredClaimNames.Sub, user.Username!)` (Subject: who
+  the token is for) and a `ClaimsPrincipalExtensions` class (took Gemini
+  help to understand where to place it + code structure). There were more
+  wrong bits in the suggested syntax that I've forgotten. Tested it too.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -5229,7 +5234,9 @@ YOUR TIME:
 
 CHALLENGE 20.5 — Role-based route guards                    Target: 45 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 31 May 26 — 20 minutes, same, no help from Gemini, only
+  reference from the challenges file, tested it too. Starting to do a few
+  things independently now.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -5474,7 +5481,9 @@ YOUR TIME:
 
 CHALLENGE 20.6 — useAuth narrowing + Round 20 capstone      Target: 40 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 31 May 26 — 10 minutes, did everything but step 2 is not
+  complete — couldn't find `auth?` anywhere in the project. Took Gemini
+  help too but still not found. (FOLLOW-UP: revisit step 2.)
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -5585,7 +5594,7 @@ YOUR TIME:
      hidden, /employees/new redirects to /forbidden.
    - Narrowing (20.6): no `tsc` errors anywhere. `npm run build`
      succeeds with zero warnings.
-
+x
   ─────────────────────────────────────────────────────────────────────
   RULES / GOTCHAS
   ─────────────────────────────────────────────────────────────────────
@@ -5619,7 +5628,8 @@ Tailwind muscle memory builds through this round + every future feature.
 
 CHALLENGE 21.1 — Install + config                           Target: 30 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 31 May 26 — 7 minutes, installed and checked it is working,
+  commented the code again.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -5784,7 +5794,8 @@ YOUR TIME:
 
 CHALLENGE 21.2 — Refactor StatusBadge + EmployeeRow         Target: 45 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 31 May 26 — 6 minutes, did it; changed the style to test it.
+  It is working.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -5868,9 +5879,7 @@ YOUR TIME:
           <span
               className={clsx(
                   'inline-block px-2 py-0.5 rounded text-xs font-semibold',
-                  isActive
-                      ? 'bg-green-100 text-green-800'
-                      : 'bg-gray-200 text-gray-700',
+                  isActive ? 'bg-green-100 text-green-800' : 'bg-gray-200 text-gray-700',
               )}
           >
               {isActive ? 'Active' : 'Inactive'}
@@ -5906,8 +5915,7 @@ YOUR TIME:
       <tr
           onClick={() => onSelect(id)}
           className={clsx(
-              'cursor-pointer',
-              isSelected ? 'bg-blue-50' : 'hover:bg-gray-50',
+              'cursor-pointer', isSelected ? 'bg-blue-50' : 'hover:bg-gray-50',
           )}
       >
 
@@ -5942,7 +5950,10 @@ YOUR TIME:
 
 CHALLENGE 21.3 — Refactor EmployeeList + EmployeeForm       Target: 60 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 31 May 26 — 35 minutes, removed `max-w-md` from the form, added
+  some of my own styles from VS Code recommendations (didn't use the
+  recommended style because it looked bad). Took a bit of Gemini help —
+  all content was coming on different lines, used flex to fix that.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -5985,8 +5996,7 @@ YOUR TIME:
            </thead>
            <tbody className="bg-white divide-y divide-gray-200">
                <tr>
-                   <td className="px-6 py-4 whitespace-nowrap text-sm
-                                  text-gray-900">
+                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                        Alice
                    </td>
                    ...
@@ -6115,7 +6125,8 @@ YOUR TIME:
 
 CHALLENGE 21.4 — Design tokens + dark mode                  Target: 45 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 31 May 26 — 40 minutes, was stuck for a while and didn't want
+  to change everything, but ended up changing it and it worked fine.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -6310,7 +6321,9 @@ YOUR TIME:
 
 CHALLENGE 21.5 — @apply for repeated patterns               Target: 30 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 31 May 26 — 35 minutes, applied to almost all buttons (will be
+  helpful in future), also added a success button. Button created with
+  Gemini.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -6443,7 +6456,11 @@ activity, notifications, draft form state, etc.
 
 CHALLENGE 22.1 — Install + first store                      Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 31 May 26 — 20 minutes. Used Gemini to understand exactly WHEN
+  to use Zustand. I understood HOW to use it, but needed Gemini for WHERE.
+  It's for global variables like Auth — when that changes, only the
+  specific component that needs it re-renders. Also reduces complexity and
+  prop drilling.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -24056,3 +24073,43 @@ After you finish all challenges, you will understand:
   - How to extract reusable logic into custom hooks
   - How to build production-quality forms with validation
   - How to manage advanced UI patterns (pagination, modals, undo)
+
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- ADDED 2026-06-01 — forward-looking notes (logged from 31 May 26 work). -->
+<!-- Not yet scheduled into rounds. Mirrored in ROADMAP.md.                 -->
+<!-- ════════════════════════════════════════════════════════════════════ -->
+
+══════════════════════════════════════════════════════════════════════════
+FORWARD-LOOKING NOTES                                          (2026-06-01)
+══════════════════════════════════════════════════════════════════════════
+
+  1. AUTHZ EVOLUTION — RBAC → PBAC.
+     Move from role-based to permission-based access control. Recommended
+     shape (agreed 2026-06-01): keep the ROLE (+ sub/userId) in the JWT,
+     NOT individual permissions. Resolve role→permissions per-request via
+     a cache (IMemoryCache now; swap to Redis behind an IPermissionCache
+     interface only when multi-instance). Enforce with ASP.NET policy-based
+     auth: a PermissionAuthorizationPolicyProvider + handler so actions
+     read `[Authorize("Employee.Edit")]`. Gives instant revocation without
+     forcing token refresh; avoids JWT bloat.
+
+  2. INACTIVE EMPLOYEE CANNOT LOG IN.
+     Once an employee is marked inactive, login must be rejected (check
+     IsActive in AuthService before issuing a token; existing sessions
+     should fail on refresh too).
+
+  3. EMPLOYEE SELF-SERVICE SCOPE (non-admin).
+     A user logging in with the Employee role currently sees the full
+     employee grid — they should see ONLY their own record. They may edit
+     ONLY email and contact number; everything else is read-only. (Refines
+     the "My Profile" module in ROADMAP.md.)
+
+  4. GOOGLE / GMAIL LOGIN.
+     Allow sign-in with Gmail, but ONLY for users whose account already
+     exists (no self-registration). Gmail-authenticated users skip the
+     forced first-login password change.
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- END ADDED 2026-06-01                                                   -->
+<!-- ════════════════════════════════════════════════════════════════════ -->

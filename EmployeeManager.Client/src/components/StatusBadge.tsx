@@ -8,6 +8,7 @@
 //   employee (Employee) — The employee object containing the isActive status
 // ============================================================================
 import { Employee } from "../Types/Models";
+import clsx from "clsx";
 
 export interface StatusBadgeProps {
     employee: Employee;
@@ -15,22 +16,10 @@ export interface StatusBadgeProps {
 // Spreads shared badge styles, then overrides backgroundColor per status.
 // JS equivalent of: class="badge active" or class="badge inactive"
 const StatusBadge = ({ employee }: StatusBadgeProps) => (
-    <span style={{
-        ...styles.badge,
-        backgroundColor: employee.isActive ? "#4caf50" : "#f44336",
-    }}>
+    <span className={clsx('inline-block px-2 py-0.5 rounded text-xs font-semibold',
+        employee.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-200 text-gray-700 dark:text-gray-300',
+    )}>
         {employee.isActive ? "Active" : "Inactive"}
     </span>
 );
-
-const styles = {
-    badge: {
-        padding: "4px 10px",
-        borderRadius: "12px",  // Pill shape
-        color: "white",
-        fontSize: "12px",
-        fontWeight: "600",
-    },
-};
-
 export default StatusBadge;

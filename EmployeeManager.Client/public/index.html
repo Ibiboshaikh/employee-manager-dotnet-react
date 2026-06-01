@@ -15,6 +15,16 @@
 -->
 <html lang="en">
   <head>
+    <script>
+    (function () {
+      try {
+        if (localStorage.getItem('theme') === 'dark') {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    })();
+  </script>
+
     <!-- Character encoding — UTF-8 supports all languages and special characters -->
     <meta charset="utf-8" />
 
