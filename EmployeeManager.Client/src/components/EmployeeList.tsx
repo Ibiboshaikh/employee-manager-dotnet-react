@@ -23,7 +23,8 @@ import { Employee } from "../Types/Models";
 import { EmployeeId } from "../Types/Ids";
 import { useSearchParams } from "react-router-dom";
 import { routes } from "../routes";
-
+import { useAuth } from "../Context/AuthContext";
+//import clsx from "clsx";
 const EmployeeList = () => {
   // ── HOOKS ──────────────────────────────────────────────────────────────
   // Data + delete handling
@@ -54,6 +55,7 @@ const [searchParams, setSearchParams] = useSearchParams();
   // Pagination state. totalPages and paginated below are derived, not state.
   const [page, setPage] = useState(1);
   const pageSize = 10;
+  const { user } = useAuth();
 
   // ── DERIVED VALUES (do NOT store in state) ─────────────────────────────
   // Sort runs on the filtered slice every render — cheap and always fresh.
@@ -108,16 +110,16 @@ const [searchParams, setSearchParams] = useSearchParams();
   const onDelete = useCallback((id: EmployeeId, name: string) => handleDelete(id, name), [handleDelete]);
 
   // ── RENDER ─────────────────────────────────────────────────────────────
-  if (loading) return <div style={styles.loading}>Loading employees...</div>;
+  if (loading) return <div className="text-center p-12 text-gray-500 dark:text-gray-400">Loading employees...</div>;
 
   return (
-    <div style={styles.container}>
+    <div className="max-w-6xl max-auto p-6">
 
       {/* NAVBAR — title left, user info + logout right */}
-      {/* <div style={styles.navbar}>
-        <h2 style={styles.navTitle}>Employee Manager</h2>
-        <div style={styles.navRight}>
-          <span style={styles.userName}>Hello, {user?.fullName}</span>
+      {/* <div className="flex justify-between items-center p-4 bg-gray-800 text-white rounded mb-4">
+        <h2 className="text-lg font-semibold">Employee Manager</h2>
+        <div className="flex items-center gap-4">
+          <span className="text-sm">Hello, {user?.fullName}</span>
           <button onClick={handleLogout} style={styles.logoutBtn}>
             Logout
           </button>
@@ -125,21 +127,20 @@ const [searchParams, setSearchParams] = useSearchParams();
       </div> */}
 
       {/* HEADER — fetch timestamp, count, stats, add button */}
-      <div style={styles.header}>
+      <div className="bg-white dark:bg-gray-900 rounded-lg shadow p-6">
         {fetchedAt && <p>Last Fetched at: {fetchedAt}</p>}
         <h3>Employees ({filtered.length})</h3>
         <StatsBar filtered={filtered} />
-        <button
-          onClick={() => navigate(routes.newEmployee())}
-          style={styles.addBtn}
-        >
-          + Add Employee
-        </button>
+        {user?.role === "Admin" && (
+          <button className="btn-primary" onClick={() => navigate(routes.newEmployee())}>
+            + Add Employee
+          </button>
+        )}
       </div>
 
       {/* TABLE — or empty state if no employees exist at all */}
       {employees.length === 0 ? (
-        <div style={styles.empty}>
+        <div className="text-center p-12 text-gray-500 dark:text-gray-400">
           No employees found. Click "Add Employee" to create one.
         </div>
       ) : (
@@ -158,38 +159,46 @@ const [searchParams, setSearchParams] = useSearchParams();
             }}
           />
 
-          <table style={styles.table}>
-            <thead>
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50 dark:bg-gray-800 dark:bg-gray-800">
               <tr>
-                <th style={styles.th} onClick={() => handleSort('firstName')}>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" 
+                  onClick={() => handleSort('firstName')}>
                   Name {sort.field === 'firstName' ? (sort.order === 'asc' ? '▲' : '▼') : ''}
                 </th>
-                <th style={styles.th} onClick={() => handleSort('email')}>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" 
+                  onClick={() => handleSort('email')}>
                   Email {sort.field === 'email' ? (sort.order === 'asc' ? '▲' : '▼') : ''}
                 </th>
-                <th style={styles.th} onClick={() => handleSort('department')}>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" 
+                  onClick={() => handleSort('department')}>
                   Department {sort.field === 'department' ? (sort.order === 'asc' ? '▲' : '▼') : ''}
                 </th>
-                <th style={styles.th} onClick={() => handleSort('position')}>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" 
+                  onClick={() => handleSort('position')}>
                   Position {sort.field === 'position' ? (sort.order === 'asc' ? '▲' : '▼') : ''}
                 </th>
-                <th style={styles.th} onClick={() => handleSort('phoneNumber')}>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" 
+                  onClick={() => handleSort('phoneNumber')}>
                   Phone {sort.field === 'phoneNumber' ? (sort.order === 'asc' ? '▲' : '▼') : ''}
                 </th>
-                <th style={styles.th} onClick={() => handleSort('salary')}>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" 
+                  onClick={() => handleSort('salary')}>
                   Salary {sort.field === 'salary' ? (sort.order === 'asc' ? '▲' : '▼') : ''}
                 </th>
-                <th style={styles.th} onClick={() => handleSort('dateOfJoining')}>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" 
+                  onClick={() => handleSort('dateOfJoining')}>
                   Joined {sort.field === 'dateOfJoining' ? (sort.order === 'asc' ? '▲' : '▼') : ''}
                 </th>
-                <th style={styles.th} onClick={() => handleSort('isActive')}>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" 
+                  onClick={() => handleSort('isActive')}>
                   Status {sort.field === 'isActive' ? (sort.order === 'asc' ? '▲' : '▼') : ''}
                 </th>
-                <th style={styles.th}>Actions</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
 
-            <tbody>
+            <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200">
               {paginated.map((emp) => (
                 <EmployeeRow
                   key={emp.id}
@@ -204,12 +213,12 @@ const [searchParams, setSearchParams] = useSearchParams();
           </table>
 
           {/* PAGINATION — Prev / Page X of Y / Next */}
-          <div style={styles.pagination}>
-            <button disabled={page === 1} onClick={() => setPage((p) => p - 1)}>
+          <div className="flex items-center gap-4 mt-4">
+            <button disabled={page === 1} className="btn-secondary" onClick={() => setPage((p) => p - 1)}>
               Prev
             </button>
             <span> Page {page} of {totalPages} </span>
-            <button disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+            <button className="btn-secondary" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
               Next
             </button>
           </div>
@@ -224,121 +233,20 @@ const [searchParams, setSearchParams] = useSearchParams();
             onConfirm={onConfirm}
             onCancel={onCancel}
           />
-          <button onClick={() => setRecentActivityOpen(true)}>View Recent Activities</button>
+          <button className="btn-success" onClick={() => setRecentActivityOpen(true)}>View Recent Activities</button>
           {/* RECENT ACTIVITY MODAL — state lives in RecentActivityContext; rendered here */}
           <RecentActivityModal
             open={recentActivityOpen}
             onClose={() => setRecentActivityOpen(false)}
           />
+          {/* <h1 className="text-3xl font-bold text-red-600">Tailwind works!</h1> */}
+
+          {/* <div className="p-4 bg-white dark:bg-black text-black dark:text-white">
+  If I am black in dark mode, the config works!
+</div> */}
         </Fragment>
       )}
     </div>
   );
 };
-
-// ── INLINE STYLES ──────────────────────────────────────────────────────────
-const styles = {
-  container: { maxWidth: "1100px", margin: "0 auto", padding: "20px" },
-
-  navbar: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: "15px 20px",
-    backgroundColor: "#1a1a2e",
-    color: "white",
-    borderRadius: "8px",
-    marginBottom: "20px",
-  },
-  navTitle: { margin: 0 },
-  navRight: { display: "flex", alignItems: "center", gap: "15px" },
-  userName: { fontSize: "14px" },
-  logoutBtn: {
-    padding: "8px 16px",
-    backgroundColor: "transparent",
-    color: "white",
-    border: "1px solid white",
-    borderRadius: "4px",
-    cursor: "pointer",
-  },
-
-  header: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: "20px",
-  },
-  addBtn: {
-    padding: "10px 20px",
-    backgroundColor: "#4caf50",
-    color: "white",
-    border: "none",
-    borderRadius: "4px",
-    cursor: "pointer",
-    fontWeight: "600",
-  },
-
-  table: {
-    width: "100%",
-    borderCollapse: "collapse" as const,
-    backgroundColor: "white",
-    borderRadius: "8px",
-    overflow: "hidden",
-    boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
-  },
-  th: {
-    padding: "12px 15px",
-    textAlign: "left" as const,
-    backgroundColor: "#f5f5f5",
-    fontWeight: "600",
-    color: "#333",
-    borderBottom: "2px solid #ddd",
-  },
-  tr: { borderBottom: "1px solid #eee" },
-  td: { padding: "12px 15px", color: "#555" },
-
-  badge: {
-    padding: "4px 10px",
-    borderRadius: "12px",
-    color: "white",
-    fontSize: "12px",
-    fontWeight: "600",
-  },
-
-  editBtn: {
-    padding: "6px 12px",
-    backgroundColor: "#2196f3",
-    color: "white",
-    border: "none",
-    borderRadius: "4px",
-    cursor: "pointer",
-    marginRight: "8px",
-  },
-  deleteBtn: {
-    padding: "6px 12px",
-    backgroundColor: "#f44336",
-    color: "white",
-    border: "none",
-    borderRadius: "4px",
-    cursor: "pointer",
-  },
-
-  pagination: {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    padding: "12px 0",
-  },
-
-  loading: { textAlign: "center" as const, padding: "50px", color: "#666" },
-  empty: {
-    textAlign: "center" as const,
-    padding: "50px",
-    color: "#999",
-    backgroundColor: "white",
-    borderRadius: "8px",
-    boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
-  },
-};
-
 export default EmployeeList;

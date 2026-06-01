@@ -2,6 +2,7 @@ import { Outlet, useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import { useAuth } from "./AuthContext";
 import { routes } from "../routes";
+import DarkModeToggle from "../components/DarkModeToggle";
 const AuthLayout = () =>{
     const navigate = useNavigate();
     const { logout, user } = useAuth();
@@ -19,6 +20,7 @@ const AuthLayout = () =>{
                     Employee Management Portal
                 </div>
                 <nav style={styles.navMenu}>
+                    <DarkModeToggle />
                     <span style={styles.userBadge}> 👤 {user?.fullName}</span>
                     <button style={styles.logoutBtn} onClick={handleLogout}>Logout</button>
                 </nav>

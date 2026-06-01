@@ -170,7 +170,7 @@ function useEmployees(): UseEmployeesReturn {
       const toastId = toast.success(
         <span>
           {deletedEmployee.firstName} {deletedEmployee.lastName} deleted. {" "}
-          <button onClick={() => {
+          <button className="btn-success" onClick={() => {
             handleUndo(deletedEmployee);
             toast.dismiss(toastId);
           }}>Undo</button>

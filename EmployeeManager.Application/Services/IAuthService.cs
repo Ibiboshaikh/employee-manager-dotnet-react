@@ -11,6 +11,7 @@
 // Called by AuthController (API) and Program.cs (for seeding).
 // ============================================================================
 
+using System.Security.Claims;
 using EmployeeManager.Domain.Models;
 
 namespace EmployeeManager.Application.Services;
@@ -34,4 +35,5 @@ public interface IAuthService
     Task SeedDefaultUserAsync();
     Task<RefreshResult?> RefreshAsync(string refreshToken);
     Task LogoutAsync(string refreshToken);
+    Task<bool> ChangePasswordAsync(string userName, ChangePasswordRequest request);
 }

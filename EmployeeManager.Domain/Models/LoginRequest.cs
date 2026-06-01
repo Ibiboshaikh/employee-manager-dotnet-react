@@ -78,4 +78,9 @@ public class LoginResponse
     /// The React app can use this to automatically log out the user when the token expires.
     /// </summary>
     public int ExpiresIn { get; set; }
+
+    /// <summary>
+    /// Indicates whether the user must change their password on next login.
+    /// </summary>
+    public bool MustChangePassword { get; set; }
 }

@@ -66,14 +66,24 @@ import EmployeeForm from "./components/EmployeeForm"; // Create/Edit form
 import ProtectedRoute from "./components/ProtectedRoute"; // Auth guard
 import ErrorBoundary from "./components/ErrorBoundary";
 import  AuthLayout  from "./Context/AuthLayout";
+import ForceChangePassword from "./components/ForceChangePassword";
+import Forbidden from "./components/Forbidden";
 const router = createBrowserRouter([
   {
     path: routes.login(),
     element: <Login />,
   },
   {
+    path: routes.forbidden(),
+    element: <Forbidden />,
+  },
+  {
     element: <ProtectedRoute />, // This layout wraps all protected routes
     children: [
+      {
+        path: routes.forceChangePassword(),
+        element: <ForceChangePassword />,
+      },
       {
         element: <AuthLayout />, // This layout wraps all employee-related routes
         children: [
@@ -82,15 +92,25 @@ const router = createBrowserRouter([
             element: <EmployeeList />,
           },
           {
-            path: routes.newEmployee(),
-            element: <EmployeeForm />,
-          },
-          {
             path: "/employees/:id/edit",
             element: <EmployeeForm />,
           },
         ],
       },
+    ],
+  },
+  {
+    element: <ProtectedRoute roles={['Admin']} />, // Only Admins can access these routes
+    children: [
+      {
+        element: <AuthLayout />, // This layout wraps all employee-related routes
+        children:[
+          {
+            path: routes.newEmployee(),
+            element: <EmployeeForm />,
+          }
+        ],
+      }
     ],
   },
   {

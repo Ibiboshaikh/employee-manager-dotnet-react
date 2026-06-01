@@ -15,6 +15,8 @@ import { memo } from "react";
 import StatusBadge from "./StatusBadge";
 import { Employee } from "../Types/Models";
 import { EmployeeId } from "../Types/Ids";
+import clsx from "clsx";
+
 export interface EmployeeRowProps {
     employee: Employee;
     onEdit: (id: EmployeeId) => void;
@@ -26,22 +28,18 @@ export interface EmployeeRowProps {
 const EmployeeRow = ({ employee, onEdit, onDelete, onSelect, selected }: EmployeeRowProps) => (
   <tr
     onClick={() => onSelect(employee.id)}
-    style={{
-      cursor: "pointer",
-      backgroundColor: employee.id === selected ? "#e8f4fd" : "transparent",
-    }}
-  >
-    <td>{employee.firstName} {employee.lastName}</td>
-    <td>{employee.email}</td>
-    <td>{employee.department}</td>
-    <td>{employee.position}</td>
-    <td>{employee.phoneNumber}</td>
-    <td>{employee.salary.toLocaleString("en-US", { style: "currency", currency: "USD" })}</td>
-    <td>{new Date(employee.dateOfJoining).toLocaleDateString()}</td>
-    <td><StatusBadge employee={employee} /></td>
-    <td>
-      <button onClick={() => onEdit(employee.id)}>Edit</button>
-      <button onClick={() => onDelete(employee.id, `${employee.firstName} ${employee.lastName}`)}>
+    className={clsx('cursor-pointer', employee.id === selected ? 'bg-blue-50 dark:bg-blue-900' : 'hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-800')}>
+    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">{employee.firstName} {employee.lastName}</td>
+    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">{employee.email}</td>
+    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">{employee.department}</td>
+    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">{employee.position}</td>
+    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">{employee.phoneNumber}</td>
+    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">{employee.salary.toLocaleString("en-US", { style: "currency", currency: "USD" })}</td>
+    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">{new Date(employee.dateOfJoining).toLocaleDateString()}</td>
+    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100"><StatusBadge employee={employee} /></td>
+    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+      <button className="btn-secondary" onClick={() => onEdit(employee.id)}>Edit</button>
+      <button className="btn-danger ml-2" onClick={() => onDelete(employee.id, `${employee.firstName} ${employee.lastName}`)}>
         Delete
       </button>
     </td>

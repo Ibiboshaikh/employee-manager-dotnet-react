@@ -5,8 +5,9 @@ interface AuthContextType {
     user: LoginResponse | null;
     login: (userData: LoginResponse, token: string) => void;
     logout: () => void;
+    clearMustChangePassword: () => void;
 }
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<LoginResponse | null>(() => {
@@ -31,17 +32,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null);
     }
 
+    const clearMustChangePassword = () => {
+        setUser(prev => {
+            if(!prev) return prev; // No user, nothing to update
+            const updated = {...prev, mustChangePassword: false };
+            localStorage.setItem('user', JSON.stringify(updated)); // Sync to localStorage
+            return updated;
+        });
+    }
+
     return(
-        <AuthContext.Provider value={{ user, login, logout }}>
+        <AuthContext.Provider value={{ user, login, logout, clearMustChangePassword }}>
             {children}
         </AuthContext.Provider>
     )
 }
 
 export function useAuth() {
-    const context = useContext(AuthContext);
-    if (context === undefined) {
-        throw new Error("useAuth must be used within an AuthProvider");
-    }
-    return context;
+    const ctx = useContext(AuthContext);
+    if (!ctx) throw new Error("useAuth must be used within an AuthProvider");
+    return ctx;
 }

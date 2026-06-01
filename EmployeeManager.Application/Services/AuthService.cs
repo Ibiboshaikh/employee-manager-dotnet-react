@@ -119,7 +119,8 @@ public class AuthService : IAuthService
             AccessToken = token,            // The JWT token string
             FullName = $"{user.FirstName} {user.LastName}", // Display name for the UI
             Role = user.Role,          // Role for conditional UI rendering
-            ExpiresIn = 900       // Token expiration time in seconds (15 minutes)
+            ExpiresIn = 900,       // Token expiration time in seconds (15 minutes)
+            MustChangePassword = user.MustChangePassword
         };
     }
 
@@ -256,5 +257,35 @@ public class AuthService : IAuthService
         // Convert the hash bytes to a Base64 string for storage.
         // Base64 encodes binary data as readable ASCII characters.
         return Convert.ToBase64String(hash);
+    }
+
+    public async Task<bool> ChangePasswordAsync(string userName, ChangePasswordRequest request)
+    {
+        var user = await _employeeRepository.GetByUsernameAsync(userName);
+        if (user == null) return false; // User not found
+        var oldHash = HashPassword(request.OldPassword);
+        if (user.PasswordHash != oldHash)
+        {
+            _logger.LogWarning("Change password failed — invalid old password for user: {Username}", userName);
+            return false; // Old password is incorrect
+        }
+
+        if(string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 8)
+        {
+            _logger.LogWarning("Change password failed — new password does not meet complexity requirements for user: {Username}", userName);
+            return false; // New password doesn't meet complexity requirements
+        }
+
+        if(request.NewPassword == request.OldPassword)
+        {
+            _logger.LogWarning("Change password failed — new password is the same as the old password for user: {Username}", userName);
+            return false; // New password is the same as the old password
+        }
+
+        user.PasswordHash = HashPassword(request.NewPassword);
+        user.MustChangePassword = false; // Clear the flag after successful password change
+        await _employeeRepository.UpdateAsync(user);
+        _logger.LogInformation("Password changed successfully for user: {Username}", userName);
+        return true;
     }
 }

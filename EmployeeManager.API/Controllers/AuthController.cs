@@ -29,8 +29,9 @@
 
 using EmployeeManager.Application.Services;  // IAuthService
 using EmployeeManager.Domain.Models;         // LoginRequest
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;              // ControllerBase, [ApiController], etc.
-
+using EmployeeManager.Extensions;
 namespace EmployeeManager.Controllers;
 
 /// <summary>
@@ -125,6 +126,23 @@ public class AuthController : ControllerBase
             DeleteRefreshCookie();
         }
         return NoContent();
+    }
+
+    [Authorize]
+    [HttpPost("change-password")]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        var userName = User.GetUsername();
+        if (string.IsNullOrEmpty(userName))
+        {
+            return Unauthorized();
+        }
+        var ok = await _authService.ChangePasswordAsync(userName, request);
+        if (!ok)
+        {
+            return BadRequest(new {message ="Invalid old password or new password does not meet requirements" });
+        }
+        return Ok(new { message = "Password changed." });
     }
 
     private void SetRefreshCookie(string token)

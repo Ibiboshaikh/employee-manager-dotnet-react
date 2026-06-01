@@ -220,3 +220,6 @@ export const deleteEmployee = (id: EmployeeId): Promise<AxiosResponse<void>> => 
 
 // Export the axios instance as default (in case someone needs direct access)
 export default api;
+
+export const changePassword = (oldPassword: string, newPassword: string): Promise<AxiosResponse<void>> => 
+  api.post('/Auth/change-password', { oldPassword, newPassword });

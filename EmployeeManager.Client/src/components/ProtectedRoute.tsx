@@ -27,14 +27,22 @@
 // Import React (needed for JSX)
 // Navigate: component that redirects to another URL (like RedirectToAction)
 // Outlet: special component that renders the matching child route
-import { Navigate, Outlet } from "react-router-dom";
+import { Navigate, Outlet, useLocation } from "react-router-dom";
+import { useAuth } from "../Context/AuthContext";
 import { routes } from "../routes";
+import { Role } from "../Types/Models";
+
+interface ProtectedRouteProps {
+  roles?: Role[];
+}
+
 // ── THE PROTECTEDROUTE COMPONENT ───────────────────────────────────────────
-const ProtectedRoute = () => {
+const ProtectedRoute = ({roles}: ProtectedRouteProps) => {
   // Check if a JWT token exists in localStorage.
   // localStorage.getItem() returns the token string, or null if not found.
   const token = localStorage.getItem("token");
-
+  const { user } = useAuth();
+  const location = useLocation();
   // ── DECISION: Allow or Redirect? ──────────────────────────────────────
 
   // If NO token found → user is not logged in → redirect to login page.
@@ -51,6 +59,14 @@ const ProtectedRoute = () => {
     //   whatever page was before /employees (no loop).
     return <Navigate to={routes.login()} replace />;
   }
+
+    if(user?.mustChangePassword && location.pathname !== routes.forceChangePassword()){
+        return <Navigate to={routes.forceChangePassword()} replace />;
+    }
+
+    if(roles && user && !roles.includes(user.role)){
+        return <Navigate to={routes.forbidden()} replace />;
+    }
 
   // If token EXISTS → user is logged in → render the child route.
   //

@@ -23,7 +23,7 @@ function RecentActivityModal({ open, onClose }: RecentActivityModalProps) {
                         ))
                     )}
                 </ul>
-                <button onClick={onClose}>Close</button>
+                <button className="btn-danger" onClick={onClose}>Close</button>
             </div>
         </div>
     );

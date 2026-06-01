@@ -19,10 +19,12 @@ The application is composed of:
 - A JSON-backed data store (development); designed to be swapped for a
   relational database without changes above the Infrastructure layer.
 
-Authentication is JWT-based with refresh tokens. Authorization is
-role-based (employee, manager, admin). All write operations against the
-data store are routed through an atomic read-modify-write helper to
-prevent race conditions under concurrent requests.
+Authentication is JWT-based with refresh tokens, with Google (Gmail)
+sign-in planned for pre-provisioned accounts. Authorization is currently
+role-based (employee, manager, admin); a migration to permission-based
+access control (PBAC) is planned (see Phase 2). All write operations
+against the data store are routed through an atomic read-modify-write
+helper to prevent race conditions under concurrent requests.
 
 ---
 
@@ -71,8 +73,8 @@ exclusively over HTTP/JSON.
 | HTTP client    | axios 1.14                                | In use         |
 | Notifications  | react-toastify                            | In use         |
 | Forms          | React Hook Form + Zod                     | In use         |
-| Styling        | Tailwind CSS                              | Planned        |
-| Client state   | Zustand                                   | Planned        |
+| Styling        | Tailwind CSS                              | In use         |
+| Client state   | Zustand                                   | In use         |
 | Build tooling  | react-scripts → Vite                      | Migration planned |
 | Testing        | React Testing Library, Playwright         | Planned        |
 | Real-time      | SignalR client                            | Planned        |
@@ -111,11 +113,20 @@ was chosen over the alternatives.
 | `react-hook-form`                | 7.76    | Round 19   | Form state management. Chosen for uncontrolled-input performance and minimal re-renders.|
 | `zod`                            | 4.4     | Round 19   | Runtime schema validation. Drives both validation rules and inferred TypeScript types.  |
 | `@hookform/resolvers`            | 5.4     | Round 19   | Bridges Zod schemas into React Hook Form via `zodResolver(schema)`.                     |
+| `zustand`                        | 5.0     | Round 22   | Lightweight global-state store. Used for theme (dark mode) with selective subscriptions; reduces prop drilling without Context re-render fan-out. |
 | `@testing-library/react`         | 16.3    | (CRA default) | Component testing library. Active use begins Round 42.                              |
 | `@testing-library/jest-dom`      | 6.9     | (CRA default) | Custom Jest matchers for DOM assertions (`toBeInTheDocument`, etc.).                |
 | `@testing-library/user-event`    | 13.5    | (CRA default) | User-interaction simulation for tests.                                              |
 | `@testing-library/dom`           | 10.4    | (CRA default) | Core querying primitives used by React Testing Library.                             |
 | `web-vitals`                     | 2.1     | (CRA default) | Browser performance metric collection. Reactivated during Round 45 perf pass.       |
+
+> **Action item (Tailwind, Round 21):** Tailwind is in active use —
+> `src/index.css` carries the `@tailwind base/components/utilities`
+> directives and `tailwind.config.js` / `postcss.config.js` are present —
+> but `tailwindcss`, `postcss`, and `autoprefixer` are **not declared in
+> `package.json`**. A clean `npm install` would not restore them. These
+> should be added to `devDependencies` (with `clsx` to `dependencies` if
+> adopted) before the build is considered reproducible.
 
 ### Frontend dependencies (planned)
 
@@ -124,10 +135,8 @@ before installation, not retrofitted afterwards.
 
 | Package                  | Planned round | Why                                                                                  |
 | ------------------------ | ------------- | ------------------------------------------------------------------------------------ |
-| `tailwindcss`, `postcss`, `autoprefixer` | Round 21 | Utility-first CSS. Replaces inline `style={{ }}` objects; supports dark mode + design tokens. |
-| `clsx`                   | Round 21.2    | Conditional `className` composition. Standard companion to Tailwind.                  |
+| `clsx`                   | Round 21.2    | Conditional `className` composition. Standard companion to Tailwind. (Not yet installed — see Tailwind action item above.) |
 | `date-fns`               | Round 23.3    | Deterministic date formatting. Avoids `toLocaleDateString` locale drift.              |
-| `zustand`                | Round 22      | Lightweight global-state library. Replaces Context for theme + recent activity with selective subscriptions. |
 | `react-day-picker`       | Round 29.4    | Date-range picker for leave-request form.                                             |
 | `recharts`               | Round 34.3    | Chart library for manager dashboard KPIs.                                             |
 | `@microsoft/signalr`     | Round 41      | Real-time client for SignalR hub (live notifications, presence).                      |
@@ -146,34 +155,42 @@ packages have been added yet. References used:
 | `Microsoft.IdentityModel.Tokens` / `System.IdentityModel.Tokens.Jwt` | JWT token generation      |
 | `Microsoft.AspNetCore.Http.Features`                    | `IFormFile` for multipart uploads (Round 25) |
 
-Planned: `BCrypt.Net-Next` when the password hashing is upgraded from
-HMAC-SHA256 (security review, Round 56).
+Planned:
+- `BCrypt.Net-Next` when password hashing is upgraded from HMAC-SHA256
+  (security review, Round 56).
+- `Microsoft.AspNetCore.Authentication.Google` for Gmail sign-in.
+- `StackExchange.Redis` if/when the PBAC permission cache moves off
+  `IMemoryCache` to a shared store (multi-instance only).
 
 ---
 
 ## Current state
 
-As of 2026-05-29, the foundation work is approximately 88% complete.
+As of 2026-06-01, the foundation work is approximately 95% complete.
 Feature modules begin once the foundation closes.
 
-| Area                                   | State       |
-| -------------------------------------- | ----------- |
-| Backend API, JSON store, JWT auth      | Complete    |
-| React migration to TypeScript (strict) | Complete    |
-| Server-state layer (TanStack Query)    | Complete    |
-| Routing layer (data router, typed URLs) | Complete   |
-| Forms (RHF + Zod)                      | Complete    |
-| Auth hardening (refresh, first-login)   | In progress |
-| Styling (Tailwind)                     | Pending     |
-| Client state (Zustand)                 | Pending     |
+| Area                                   | State                    |
+| -------------------------------------- | ------------------------ |
+| Backend API, JSON store, JWT auth      | Complete                 |
+| React migration to TypeScript (strict) | Complete                 |
+| Server-state layer (TanStack Query)    | Complete                 |
+| Routing layer (data router, typed URLs) | Complete                |
+| Forms (RHF + Zod)                      | Complete                 |
+| Auth hardening (refresh, first-login, route guards) | Complete (one follow-up) |
+| Styling (Tailwind)                     | Complete                 |
+| Client state (Zustand)                 | In progress              |
 
-Auth hardening detail: refresh-token rotation (Round 20.1) and axios
-refresh interceptor (Round 20.2) are complete. User-into-Employee
-aggregate consolidation (Round 20.3) merged on 2026-05-27. Remaining
-work: forced first-login password change (20.4), role-based route
-guards (20.5), and Context narrowing capstone (20.6). After Round 20
-closes, Rounds 21 (Tailwind) and 22 (Zustand) complete the
-foundation; feature modules begin at Round 23.
+Auth hardening detail: refresh-token rotation (20.1), axios refresh
+interceptor (20.2), User-into-Employee aggregate consolidation (20.3,
+merged 2026-05-27), forced first-login password change (20.4), and
+role-based route guards (20.5) are complete. The useAuth narrowing
+capstone (20.6) is done except for one open step (an `auth?` reference
+that could not be located — tracked in `CHALLENGES.md`).
+
+Styling: Round 21 — Tailwind refactor, design tokens, dark mode, and
+`@apply` button patterns — is complete (note the package.json action
+item above). Client state: Round 22 has begun; the theme store (22.1)
+is in place. Feature modules begin at Round 23.
 
 Detailed per-task history is tracked in [`CHALLENGES.md`](./CHALLENGES.md).
 
@@ -188,8 +205,10 @@ endpoints and the corresponding client views.
 
 | Module               | Scope                                                       |
 | -------------------- | ----------------------------------------------------------- |
-| My Profile           | Employee self-service read view of own record               |
+| My Profile           | Employee self-service: a non-admin user sees only their OWN record (not the full grid) and may edit only email and contact number; all other fields read-only |
 | Change Password      | Authenticated password change; first-login forced reset     |
+| Account lifecycle    | Inactive employees are rejected at login (and on token refresh) |
+| External sign-in     | Google (Gmail) sign-in for pre-provisioned accounts only; no self-registration; Gmail users skip the forced first-login password change |
 | Documents            | Per-employee document upload, listing, and admin review     |
 | Leave Management     | Balance accrual, request submission, approval, rollback     |
 | Notifications        | In-app inbox with read/unread state                          |
@@ -202,12 +221,22 @@ endpoints and the corresponding client views.
 
 ### Phase 2 — Platform capabilities
 
-Real-time updates (SignalR), automated testing (unit, integration, E2E),
-accessibility audit, performance pass, internationalization, offline /
-PWA support, build tooling migration to Vite, Storybook for component
-documentation, animation primitives, CI/CD pipeline, containerization,
-monorepo restructure, server-side rendering evaluation, security review,
-responsive/mobile pass, design-system primitives.
+Permission-based access control (PBAC) — migrate authorization from
+roles to permissions. Planned shape: keep the role (and user identity) in
+the JWT, resolve role→permissions per request through a cache
+(`IMemoryCache`, swappable to Redis behind an `IPermissionCache`
+interface when multi-instance), and enforce via ASP.NET policy-based
+authorization (`PermissionAuthorizationPolicyProvider` + handler, e.g.
+`[Authorize("Employee.Edit")]`). This gives instant permission revocation
+without forcing token refresh and avoids JWT bloat.
+
+Other platform work: real-time updates (SignalR), automated testing
+(unit, integration, E2E), accessibility audit, performance pass,
+internationalization, offline / PWA support, build tooling migration to
+Vite, Storybook for component documentation, animation primitives, CI/CD
+pipeline, containerization, monorepo restructure, server-side rendering
+evaluation, security review, responsive/mobile pass, design-system
+primitives.
 
 ---
 

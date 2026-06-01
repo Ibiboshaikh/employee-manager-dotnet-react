@@ -262,52 +262,52 @@ const EmployeeForm = () => {
   
   // ── JSX RETURN (the form UI) ───────────────────────────────────────────
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <h2 style={styles.title}>
+    <div className="max-w-6xl mx-auto p-6">
+      <div className="bg-white dark:bg-gray-900 rounded-lg shadow p-6">
+        <h2 className="text-3xl font-bold text-gray-700 dark:text-gray-300 mb-6">
           {isEditMode ? "Edit Employee" : "Add New Employee"}
         </h2> 
 
         {/* Bind your form submission run wrapper */}
-        <form onSubmit={handleSubmit(onValidSubmit)}>
-          {errors.root && <p style={{color: 'Red', fontSize: '14px', marginBottom: '20px'}}>{errors.root.message}</p>}
-          <div style={styles.row}>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>First Name *</label>
+        <form onSubmit={handleSubmit(onValidSubmit)} className="space-y-4 mx-auto">
+          {errors.root && <p className="text-red-600 text-sm mb-4">{errors.root.message}</p>}
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">First Name *</label>
               <input
                 type="text"
-                style={styles.input}
+                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
                 {...register("firstName")}
               />
-              {touchedFields.firstName && errors.firstName && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.firstName.message}</p>}
+              {touchedFields.firstName && errors.firstName && <p className="text-red-600 text-xs mt-1">{errors.firstName.message}</p>}
             </div>
 
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Last Name *</label>
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Last Name *</label>
               <input
                 type="text"
-                style={styles.input}
+                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
                 {...register("lastName")}
               />
-              {touchedFields.lastName && errors.lastName && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.lastName.message}</p>}
+              {touchedFields.lastName && errors.lastName && <p className="text-red-600 text-xs mt-1">{errors.lastName.message}</p>}
             </div>
           </div>
 
-          <div style={styles.formGroup}>
-            <label style={styles.label}>Email *</label>
+          <div className="flex-1">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email *</label>
             <input
               type="email"
-              style={styles.input}
+              className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
               {...register("email")}
             />
-            {touchedFields.email && errors.email && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.email.message}</p>}
+            {touchedFields.email && errors.email && <p className="text-red-600 text-xs mt-1">{errors.email.message}</p>}
           </div>
 
-          <div style={styles.row}>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Department *</label>
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Department *</label>
               <select
-                style={styles.input}
+                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
                 {...register("department")}
               >
                 <option value="">Select Department</option>
@@ -318,75 +318,76 @@ const EmployeeForm = () => {
                 <option value="Sales">Sales</option>
                 <option value="Operations">Operations</option>
               </select>
-              {touchedFields.department && errors.department && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.department.message}</p>}
+              {touchedFields.department && errors.department && <p className="text-red-600 text-xs mt-1">{errors.department.message}</p>}
             </div>
 
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Position *</label>
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Position *</label>
               <input
                 type="text"
-                style={styles.input}
+                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 {...register("position")}
               />
-              {touchedFields.position && errors.position && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.position.message}</p>}
+              {touchedFields.position && errors.position && <p className="text-red-600 text-xs mt-1">{errors.position.message}</p>}
             </div>
           </div>
 
-          <div style={styles.row}>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Salary (USD) *</label>
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Salary (USD) *</label>
               <input
                 type="number"
-                style={styles.input}
+                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
                 step="0.01"
                 // valueAsNumber: RHF coerces string→number BEFORE Zod validates.
                 // That's what lets the schema use z.number(), not z.coerce.number().
                 {...register("salary", { valueAsNumber: true })}
               />
-              {touchedFields.salary && errors.salary && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.salary.message}</p>}
+              {touchedFields.salary && errors.salary && <p className="text-red-600 text-xs mt-1">{errors.salary.message}</p>}
             </div>
 
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Date of Joining *</label>
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Date of Joining *</label>
               <input
                 type="date"
-                style={styles.input}
+                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
                 {...register("dateOfJoining")}
               />
-              {touchedFields.dateOfJoining && errors.dateOfJoining && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.dateOfJoining.message}</p>}
+              {touchedFields.dateOfJoining && errors.dateOfJoining && <p className="text-red-600 text-xs mt-1">{errors.dateOfJoining.message}</p>}
             </div>
 
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Phone Number *</label>
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone Number *</label>
               <input
                 type="tel"
-                style={styles.input}
+                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
                 {...register("phoneNumber")}
               />
-              {touchedFields.phoneNumber && errors.phoneNumber && <p style={{color: 'Red', fontSize: '12PX', margin: '4px 0 0'}}>{errors.phoneNumber.message}</p>}
+              {touchedFields.phoneNumber && errors.phoneNumber && <p className="text-red-600 text-xs mt-1">{errors.phoneNumber.message}</p>}
             </div>
           </div>
 
-          <div style={styles.checkboxGroup}>
+          <div className="flex items-center gap-2 mb-6">
             <input
               type="checkbox"
               id="isActive"
+              className="h-4 w-4 text-brand-600 focus:ring-blue-500 border-gray-300 rounded dark:bg-gray-800 dark:border-gray-600"
               {...register("isActive")}
             />
-            <label htmlFor="isActive" style={styles.checkboxLabel}>
+            <label htmlFor="isActive" className="text-gray-700 dark:text-gray-300 font-medium">
               Active Employee
             </label>
           </div>
 
-          <div style={styles.buttonRow}>
-            <button type="submit" style={styles.submitBtn} disabled={!isValid || isPending}>
+          <div className="flex gap-3">
+            <button type="submit" className="btn-secondary" disabled={!isValid || isPending}>
               {isPending ? "Saving..." : isEditMode ? "Update Employee" : "Create Employee"}
             </button>
 
             <button
               type="button"
               onClick={() => navigate(routes.employees())}
-              style={styles.cancelBtn}
+              className="bg-transparent text-gray-600 border border-gray-300 px-4 py-2 rounded dark:text-gray-300 dark:border-gray-600"
             >
               Cancel
             </button>
@@ -395,103 +396,6 @@ const EmployeeForm = () => {
       </div>
     </div>
   );
-};
-
-// ── INLINE STYLES ──────────────────────────────────────────────────────────
-
-const styles = {
-  // Outer container — centered on page with padding
-  container: {
-    maxWidth: "700px",
-    margin: "40px auto",     // 40px top/bottom, auto centers horizontally
-    padding: "20px",
-  },
-
-  // Card — white box with shadow (contains the form)
-  card: {
-    backgroundColor: "white",
-    padding: "40px",
-    borderRadius: "8px",
-    boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
-  },
-
-  // Form title
-  title: {
-    color: "#1a1a2e",
-    marginBottom: "30px",
-  },
-
-  // Row — horizontal layout for side-by-side fields
-  row: {
-    display: "flex",         // Flexbox: lay out children horizontally
-    gap: "20px",             // 20px space between the two fields
-  },
-
-  // Form group — wrapper for label + input
-  formGroup: {
-    marginBottom: "20px",
-    flex: 1,                 // Each group takes equal width within a row
-  },
-
-  // Label styles
-  label: {
-    display: "block",        // Full width (label on its own line above input)
-    marginBottom: "5px",
-    fontWeight: "600",
-    color: "#333",
-    fontSize: "14px",
-  },
-
-  // Input/select styles — shared between text, email, number, date, and select
-  input: {
-    width: "100%",
-    padding: "10px 12px",
-    border: "1px solid #ddd",
-    borderRadius: "4px",
-    fontSize: "14px",
-    boxSizing: "border-box" as const,
-  },
-
-  // Checkbox group — horizontal layout for checkbox + label
-  checkboxGroup: {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    marginBottom: "25px",
-  },
-  checkboxLabel: {
-    color: "#333",
-    fontWeight: "600",
-  },
-
-  // Button row — holds Submit and Cancel buttons side by side
-  buttonRow: {
-    display: "flex",
-    gap: "15px",
-  },
-
-  // Submit button — dark background
-  submitBtn: {
-    padding: "12px 30px",
-    backgroundColor: "#1a1a2e",
-    color: "white",
-    border: "none",
-    borderRadius: "4px",
-    fontSize: "16px",
-    cursor: "pointer",
-    fontWeight: "600",
-  },
-
-  // Cancel button — transparent with border
-  cancelBtn: {
-    padding: "12px 30px",
-    backgroundColor: "transparent",
-    color: "#666",
-    border: "1px solid #ddd",
-    borderRadius: "4px",
-    fontSize: "16px",
-    cursor: "pointer",
-  },
 };
 
 export default EmployeeForm;

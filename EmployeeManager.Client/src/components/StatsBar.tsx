@@ -26,16 +26,16 @@ const StatsBar = ({ filtered }: StatsBarProps ) => {
         : 0;
 
     return (
-        <div className="stats-bar">
-            <div className="stat">
+        <div className="flex flex-wrap items-center gap-4">
+            <div className="w-48">
                 <h3>Total Employees</h3>
                 <p>{totalEmployees}</p>
             </div>
-            <div className="stat">
+            <div className="w-48">
                 <h3>Total Salary</h3>
                 <p>{totalSalary.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</p>
             </div>
-            <div className="stat">
+            <div className="w-48">
                 <h3>Average Salary</h3>
                 <p>{averageSalary.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</p>
             </div>
