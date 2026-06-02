@@ -68,6 +68,8 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import  AuthLayout  from "./Context/AuthLayout";
 import ForceChangePassword from "./components/ForceChangePassword";
 import Forbidden from "./components/Forbidden";
+import ProfilePage from "./components/ProfilePage";
+import ProfileEditPage from "./components/ProfileEditPage";
 const router = createBrowserRouter([
   {
     path: routes.login(),
@@ -95,6 +97,14 @@ const router = createBrowserRouter([
             path: "/employees/:id/edit",
             element: <EmployeeForm />,
           },
+          {
+            path: routes.profile(),
+            element: <ProfilePage />,
+          },
+          {
+            path: routes.profileEdit(),
+            element: <ProfileEditPage />,
+          }
         ],
       },
     ],

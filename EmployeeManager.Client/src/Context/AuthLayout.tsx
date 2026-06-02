@@ -1,14 +1,22 @@
 import { Outlet, useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "./AuthContext";
 import { routes } from "../routes";
 import DarkModeToggle from "../components/DarkModeToggle";
+import { NavLink } from "react-router-dom";
+
 const AuthLayout = () =>{
     const navigate = useNavigate();
     const { logout, user } = useAuth();
+    const queryClient = useQueryClient();
 
     const handleLogout = () => {
         logout();
+        // Wipe the React Query cache so the next user can't read the previous
+        // user's cached data (e.g. profileKeys.me() is a static key — without
+        // this, staleTime would serve the prior user's profile after re-login).
+        queryClient.clear();
         toast.success("Logged out successfully");
         navigate(routes.login());
     };
@@ -19,6 +27,9 @@ const AuthLayout = () =>{
                 <div style={styles.brand} onClick={() => navigate(routes.employees())}>
                     Employee Management Portal
                 </div>
+                <NavLink to={routes.profile()} className={({ isActive }) => `px-3 py-2 text-sm ${isActive ? 'font-semibold' : ''}` }>
+                  My Profile
+                </NavLink>
                 <nav style={styles.navMenu}>
                     <DarkModeToggle />
                     <span style={styles.userBadge}> 👤 {user?.fullName}</span>

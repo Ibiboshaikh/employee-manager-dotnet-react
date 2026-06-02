@@ -28,6 +28,8 @@ import axios, { AxiosResponse } from "axios";
 import { Employee, LoginRequest, LoginResponse } from "../Types/Models";
 import { EmployeeId } from "../Types/Ids";
 import { routes } from "../routes";
+import type { Profile } from '../Types/Profile';
+import type { ProfileFormData } from '../schemas/profileSchema';
 
 // ── CREATE AXIOS INSTANCE ──────────────────────────────────────────────────
 // axios.create() creates a custom instance with pre-configured settings.
@@ -191,7 +193,7 @@ export const getEmployee = (id: EmployeeId): Promise<AxiosResponse<Employee>> =>
  * Maps to: POST http://localhost:5000/api/employee
  * .NET endpoint: EmployeeController.Create(Employee employee)
  */
-export const createEmployee = (employee: Omit<Employee, 'id'>): Promise<AxiosResponse<Employee>> => api.post<Employee>("/employee", employee);
+export const createEmployee = (employee: Omit<Employee, 'id' | 'role'>): Promise<AxiosResponse<Employee>> => api.post<Employee>("/employee", employee);
 //                                                    ^^^ URL     ^^^ request body (sent as JSON automatically)
 
 /**
@@ -223,3 +225,5 @@ export default api;
 
 export const changePassword = (oldPassword: string, newPassword: string): Promise<AxiosResponse<void>> => 
   api.post('/Auth/change-password', { oldPassword, newPassword });
+
+export const updateProfile = (values: ProfileFormData): Promise<AxiosResponse<Profile>> => api.put<Profile>('/profile', values);

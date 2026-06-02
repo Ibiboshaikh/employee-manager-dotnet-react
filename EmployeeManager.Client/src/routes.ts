@@ -8,4 +8,6 @@ export const routes = {
     editEmployee: (id: EmployeeId) => `/employees/${id}/edit` as const,
     forceChangePassword: () => "/force-change-password" as const,
     forbidden: () => "/forbidden" as const,
+    profile: () => "/profile" as const,
+    profileEdit: () => "/profile/edit" as const,
 };

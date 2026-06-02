@@ -37,7 +37,6 @@ import App from './App';
 // You can pass a function like console.log to measure render performance.
 import reportWebVitals from './reportWebVitals';
 import { AuthProvider } from './Context/AuthContext';
-import { RecentActivityProvider } from './Context/RecentActivityContext';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 
@@ -67,14 +66,12 @@ const queryClient = new QueryClient({
 // It does NOT affect the production build at all.
 root.render(
   <React.StrictMode>
-    <RecentActivityProvider>
-      <AuthProvider>
-        <QueryClientProvider client={queryClient}>
-          <App />
-          <ReactQueryDevtools initialIsOpen={false} />
-        </QueryClientProvider>
-      </AuthProvider>
-    </RecentActivityProvider>
+    <AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <App />
+        <ReactQueryDevtools initialIsOpen={false} />
+      </QueryClientProvider>
+    </AuthProvider>
   </React.StrictMode>
 );
 

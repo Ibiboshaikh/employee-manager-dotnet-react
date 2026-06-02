@@ -186,7 +186,7 @@ const EmployeeForm = () => {
   // Example: { firstName: "old", lastName: "Doe", ...rest } → { firstName: "John", lastName: "Doe", ...rest }
 
   const createMutation = useMutation({
-    mutationFn: async (employee: Omit<Employee, 'id'>) =>{
+    mutationFn: async (employee: Omit<Employee, 'id' | 'role'>) =>{
       await createEmployee(employee);
     },
     onSuccess: () =>{
@@ -238,15 +238,18 @@ const EmployeeForm = () => {
 
   const onValidSubmit = (data: EmployeeFormData) => {
     if (isEditMode) {
+      if (!employeeData) return; // role is carried from the loaded row; bail if it hasn't arrived
       const payload: Employee = {
         ...data,
         id: toEmployeeId(id!),
-        salary: data.salary
+        salary: data.salary,
+        role: employeeData.role, // role is authz data — preserve the existing value, the form never edits it
       };
       updateMutation.mutate(payload);
     }
     else {
-      const payload: Omit<Employee, 'id'> = {
+      // role omitted on create — the server assigns the default role.
+      const payload: Omit<Employee, 'id' | 'role'> = {
         ...data,
         mustChangePassword: true,
         salary: data.salary
