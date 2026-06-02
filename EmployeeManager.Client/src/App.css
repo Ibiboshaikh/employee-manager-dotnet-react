@@ -30,9 +30,9 @@
 body {
   /* System font stack — uses the operating system's native font for fast rendering */
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-
-  background-color: #f0f2f5;  /* Light gray background — gives the app a clean look */
-  color: #333;                 /* Dark gray text — easier on the eyes than pure black */
+  /* Page background + text colour live in index.css so they can be
+     dark-mode-aware (bg-gray-100 / dark:bg-gray-900). Don't hardcode
+     them here — a plain colour would override the dark: variant. */
 }
 
 /* MODAL — overlay pins to viewport, modal box centers inside it */
@@ -54,13 +54,16 @@ body {
   min-width: 320px;
 }
 
-.modal button {
-  margin: 12px 8px 0 0;
-  padding: 8px 16px;
-  border-radius: 4px;
-  border: none;
-  cursor: pointer;
+/* Dark-mode-aware modal surface — without this the box stays white
+   on a dark page. Mirrors the body's dark canvas. */
+.dark .modal {
+  background: #1f2937;  /* gray-800 */
+  color: #f3f4f6;       /* gray-100 */
 }
 
-.modal button:first-of-type { background: #f44336; color: white; }
-.modal button:last-of-type  { background: #ccc; }
+/* Spacing only — colour/padding/border come from the .btn-* classes
+   on each button. Avoid positional (:first-of-type) colour rules here:
+   they out-specify the single-class .btn-* utilities and override them. */
+.modal button {
+  margin: 12px 8px 0 0;
+}

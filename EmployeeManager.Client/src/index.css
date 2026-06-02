@@ -54,6 +54,11 @@
 
 /* Body styles — apply to the entire page */
 body {
+  /* Dark-mode-aware page canvas. Tailwind flips these when <html> gets
+     the .dark class, so the WHOLE page (not just dark:-tagged components)
+     responds to the theme toggle. */
+  @apply bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100;
+
   margin: 0;   /* Remove default browser margin (browsers add 8px by default) */
 
   /* Font stack — the browser tries each font in order, using the first one available:

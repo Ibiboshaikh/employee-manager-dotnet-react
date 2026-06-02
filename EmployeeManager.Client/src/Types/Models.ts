@@ -14,6 +14,7 @@ export interface Employee {
     dateOfJoining: string;
     isActive: boolean;
     mustChangePassword: boolean;
+    role: Role;
 }
 
 export interface User {

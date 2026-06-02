@@ -6512,7 +6512,7 @@ YOUR TIME: 31 May 26 — 20 minutes. Used Gemini to understand exactly WHEN
        are fine.
      - Object selectors (`s => ({ a, b })`) create a new object every
        call — that's an unstable reference, defeats memoisation. We
-       fix this in 22.3 with `shallow`.
+       fix this in 22.3 with `useShallow`.
 
   ─────────────────────────────────────────────────────────────────────
   FILES YOU'LL TOUCH
@@ -6638,155 +6638,217 @@ YOUR TIME: 31 May 26 — 20 minutes. Used Gemini to understand exactly WHEN
 
 CHALLENGE 22.2 — Migrate RecentActivityContext → Zustand    Target: 45 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 01 Jun 26 — 30 min, working properly. Initial blocker: the
+  store was half-written (interface only, no create() call) and had copied
+  the generic message/log shape instead of the real Activity{action,
+  details, ISO timestamp, userId}. Fixed by mirroring the real Context
+  shape, keeping localStorage persistence, dropping getRecentActivities()
+  (select s.activities directly), and removing the Provider from index.tsx.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
   ─────────────────────────────────────────────────────────────────────
-  RecentActivityContext is the perfect migration target — small
-  surface (entries + log + clear), cap-at-5 behaviour, multiple
+  RecentActivityContext is the ideal migration target — small surface
+  (activities + addActivity + cap-at-5 + localStorage), multiple
   consumers. Doing this once builds muscle memory for the dozens of
   Context-to-Zustand migrations real codebases routinely run.
+
+  ─────────────────────────────────────────────────────────────────────
+  YOUR ACTUAL SHAPE — read this before writing anything
+  ─────────────────────────────────────────────────────────────────────
+  This is NOT a generic message/log store. Your real Context
+  (src/Context/RecentActivityContext.tsx) is:
+
+      export interface ActivityInterface {
+          id: string;
+          action: string;      // "Created Employee", "Logged In", ...
+          details: string;     // "John Doe was added to the database"
+          timestamp: string;   // ISO date string
+          userId?: string;
+      }
+      export type Activity = ActivityInterface;
+
+      interface RecentActivityContextType {
+          activities: Activity[];
+          addActivity: (activity: Activity) => void;
+          getRecentActivities: () => Activity[];
+      }
+
+  It also caps at 5 and persists to localStorage("recentActivities").
+  The store MIRRORS THIS — not any message/log example you may have seen.
+  (.NET mapping: your contract is IActivityService.AddActivity(Activity),
+   NOT ILogger.Log(string). Implement YOUR interface, not the textbook's.)
 
   ─────────────────────────────────────────────────────────────────────
   NEW HERE — concepts you'll meet
   ─────────────────────────────────────────────────────────────────────
 
   1) Immutable updates with array spread
-     - Inside `set(s => ({ entries: [newEntry, ...s.entries].slice(0,5) }))`:
-       - `[newEntry, ...s.entries]` makes a NEW array (don't mutate).
-       - `.slice(0, 5)` caps it to the first 5.
-     - Why? Zustand uses `===` to detect changes. If you `.push()`,
-       it's the same array reference; no re-render fires.
+     - `[activity, ...s.activities].slice(0, 5)` makes a NEW array and
+       caps it at 5.
+     - Why? Zustand uses `===` to detect changes. `.push()` keeps the
+       same reference → no re-render fires.
 
   2) Selecting actions vs state
-     - State changes → component re-renders.
-     - Actions are stable function references — selecting them with
-       `s => s.log` is safe because the function never changes
-       across renders. Many tutorials show one selector per piece.
+     - State changes → the selecting component re-renders.
+     - Actions are stable function references — `s => s.addActivity` is
+       safe because the function identity never changes across renders.
+
+  3) Getters disappear in Zustand
+     - `getRecentActivities()` was a Context-era workaround. In Zustand
+       you SELECT state directly: `useRecentActivityStore(s => s.activities)`.
+       No getter function survives the migration.
 
   ─────────────────────────────────────────────────────────────────────
   FILES YOU'LL TOUCH
   ─────────────────────────────────────────────────────────────────────
-    src/stores/recentActivityStore.ts (NEW)
-    src/Context/RecentActivityContext.tsx (delete after migration)
-    src/components/RecentActivityModal.tsx (point to the new store)
-    src/components/EmployeeList.tsx (where you `log()` after actions)
-    src/App.tsx or wherever the Provider lived (delete it)
+    src/stores/recentActivityStore.ts        (the store)
+    src/components/RecentActivityModal.tsx    (reads activities)
+    src/hooks/useEmployees.tsx                (calls addActivity)
+    src/index.tsx                             (delete the Provider)
+    src/Context/RecentActivityContext.tsx     (delete after migration)
 
   ─────────────────────────────────────────────────────────────────────
   TASK — concrete steps with code
   ─────────────────────────────────────────────────────────────────────
 
-  STEP 1 — Read your current Context
-  Open src/Context/RecentActivityContext.tsx. Note its shape:
-  probably something like
-      interface RecentActivityContextType {
-          entries: ActivityEntry[];
-          log: (msg: string) => void;
-          clear: () => void;
+  STEP 1 — Write the store (mirror your real shape)
+  FILE: src/stores/recentActivityStore.ts
+  IMPORTANT: write the WHOLE thing — the interface AND the create(...)
+  call. A file that stops at the interface exports no usable store.
+
+      import { create } from "zustand";
+
+      export interface ActivityInterface {
+          id: string;
+          action: string;
+          details: string;
+          timestamp: string;   // ISO date string
+          userId?: string;
       }
-  Whatever exactly you have, the store mirrors it.
-
-  STEP 2 — Create the store
-  NEW FILE: src/stores/recentActivityStore.ts
-
-      import { create } from 'zustand';
-
-      export interface ActivityEntry {
-          id: string;        // crypto.randomUUID() for keys
-          message: string;
-          timestamp: number; // Date.now()
-      }
+      export type Activity = ActivityInterface;
 
       interface RecentActivityState {
-          entries: ActivityEntry[];
-          log: (message: string) => void;
+          activities: Activity[];
+          addActivity: (activity: Activity) => void;
           clear: () => void;
       }
 
       const MAX_ENTRIES = 5;
 
       export const useRecentActivityStore = create<RecentActivityState>((set) => ({
-          entries: [],
-          log: (message) => set((s) => {
-              const next: ActivityEntry = {
-                  id: crypto.randomUUID(),
-                  message,
-                  timestamp: Date.now(),
-              };
-              return { entries: [next, ...s.entries].slice(0, MAX_ENTRIES) };
-          }),
-          clear: () => set({ entries: [] }),
+          activities: JSON.parse(localStorage.getItem("recentActivities") || "[]"),
+          addActivity: (activity) =>
+              set((s) => {
+                  const updated = [activity, ...s.activities].slice(0, MAX_ENTRIES);
+                  localStorage.setItem("recentActivities", JSON.stringify(updated));
+                  return { activities: updated };
+              }),
+          clear: () => {
+              localStorage.removeItem("recentActivities");
+              set({ activities: [] });
+          },
       }));
 
-  STEP 3 — Migrate consumers
-  Find every file that calls `useContext(RecentActivityContext)` or
-  `useRecentActivity()`. Replace:
+  STEP 2 — Migrate the reader (the modal)
+  src/components/RecentActivityModal.tsx — swap the import and select
+  activities directly. getRecentActivities() is gone.
 
       // BEFORE
-      const { entries, log, clear } = useRecentActivity();
+      import { useRecentActivity } from "../Context/RecentActivityContext";
+      const { getRecentActivities } = useRecentActivity();
+      const activities = getRecentActivities();
 
       // AFTER
-      const entries = useRecentActivityStore(s => s.entries);
-      const log     = useRecentActivityStore(s => s.log);
-      const clear   = useRecentActivityStore(s => s.clear);
+      import { useRecentActivityStore } from "../stores/recentActivityStore";
+      const activities = useRecentActivityStore(s => s.activities);
 
-  Why one-selector-per-field rather than `s => ({entries, log,
-  clear})`? Without `shallow` (next round), the object selector
-  re-renders every store change. One selector per primitive (or
-  function ref) keeps things tight.
+  The JSX (activity.action / activity.details / timestamp) stays the same.
+
+  STEP 3 — Migrate the writer
+  src/hooks/useEmployees.tsx (lines ~15 and ~56):
+
+      // BEFORE
+      import { useRecentActivity } from "../Context/RecentActivityContext";
+      const { addActivity } = useRecentActivity();
+
+      // AFTER
+      import { useRecentActivityStore } from "../stores/recentActivityStore";
+      const addActivity = useRecentActivityStore(s => s.addActivity);
+
+  The addActivity({ id, action, details, timestamp, userId }) calls
+  themselves do NOT change.
+
+  Why one selector per field, not `s => ({ activities, addActivity })`?
+  Without `shallow` (next round) an object selector returns a new object
+  on every store change and re-renders needlessly. One selector per slice
+  keeps it tight.
 
   STEP 4 — Tear down the Provider
-  Open App.tsx (or wherever <RecentActivityProvider> wraps things).
-  Remove the wrapper element. Delete the import.
-
-  Delete src/Context/RecentActivityContext.tsx entirely.
+  src/index.tsx — delete the import and remove the
+  <RecentActivityProvider> wrapper around the tree.
+  Then delete src/Context/RecentActivityContext.tsx entirely.
 
   STEP 5 — Test
-   - Delete an employee → entry appears in the modal.
-   - Undo a delete → entry appears.
+   - Create / update / delete an employee → entry appears in the modal.
+   - Reload the page → entries persist (localStorage carried over).
    - Do 6 actions → only the most recent 5 are kept.
-   - Clear → list empties.
 
   ─────────────────────────────────────────────────────────────────────
   RULES / GOTCHAS
   ─────────────────────────────────────────────────────────────────────
-  - `crypto.randomUUID()` is built-in in modern browsers — perfect
-    for React keys. Don't reach for the `uuid` npm package for this.
-  - Array `.push()` mutates. ALWAYS spread `[new, ...old]` and let
-    Zustand see a fresh reference.
-  - When in doubt, one selector per slice. Combining comes in 22.3
-    with `shallow`.
+  - Write the create(...) call, not just the interface. The type alone
+    exports no store — nothing to import, nothing works.
+  - Mirror YOUR shape (action/details/ISO/userId), not a generic
+    message/log example.
+  - Array `.push()` mutates. ALWAYS spread `[new, ...old]` so Zustand
+    sees a fresh reference.
+  - Keep the localStorage read (initial state) and write (inside
+    addActivity) so persistence survives the migration.
+  - One selector per slice. Combining with `useShallow` comes in 22.3.
 
   ─────────────────────────────────────────────────────────────────────
   WHAT YOU JUST LEARNED
   ─────────────────────────────────────────────────────────────────────
-  - Migration recipe: identify shape → create store → swap call
-    sites → delete Provider.
-  - Immutable update idioms (spread, slice).
-  - Stable-function selectors for actions.
+  - Migration recipe: identify YOUR real shape → write the full store →
+    swap call sites → delete the Provider.
+  - Immutable update idioms (spread, slice) + carrying localStorage over.
+  - Stable-function selectors for actions; getters vanish (select state).
 
 
 CHALLENGE 22.3 — Shallow equality for combined selectors    Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 5 min — beat target by 30 min. Added Clear button + collapsed
+the two selectors into one useShallow object selector. Caught a real CSS
+bug afterward: legacy `.modal button:first-of-type/:last-of-type` colour
+rules in App.css out-specified the single-class .btn-* utilities (positional
+descendant selector beats one class) — pruned them so btn-danger/btn-secondary
+apply. JSX was correct; the override was the issue.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
   ─────────────────────────────────────────────────────────────────────
-  In 22.2 you wrote 3 separate `useRecentActivityStore(s => s.x)`
-  calls per consumer. That's verbose. The natural impulse is:
+  RecentActivityModal will need a "Clear" button. That means it has
+  to read TWO things from the store: the `activities` list (to show)
+  and the `clear` action (for the button). The verbose way is two
+  separate calls:
 
-      const { entries, log, clear } = useRecentActivityStore(s => ({
-          entries: s.entries,
-          log: s.log,
+      const activities = useRecentActivityStore(s => s.activities);
+      const clear      = useRecentActivityStore(s => s.clear);
+
+  The natural impulse to tidy that up is one object selector:
+
+      const { activities, clear } = useRecentActivityStore(s => ({
+          activities: s.activities,
           clear: s.clear,
       }));
 
-  But this returns a NEW OBJECT on every store update — Zustand
-  sees `{} !== {}` and re-renders the component every time, even
-  when none of the fields changed. `shallow` is the fix.
+  But that selector builds a NEW OBJECT on every store update.
+  Zustand compares the previous result to the new one with `===`,
+  sees `{} !== {}`, and re-renders the component on EVERY update —
+  even ones that didn't touch `activities` or `clear`. `useShallow`
+  is the fix: it compares the object's keys one level deep instead
+  of by reference.
 
   ─────────────────────────────────────────────────────────────────────
   NEW HERE — concepts you'll meet
@@ -6799,10 +6861,13 @@ YOUR TIME:
        deep. `shallowEqual({a:1}, {a:1})` is true. Nested objects
        are still reference-compared.
 
-  2) The shallow utility from zustand
-     - `import { shallow } from 'zustand/shallow';`
-     - Pass it as the second argument to the store hook:
-         const { a, b } = useStore(s => ({ a: s.a, b: s.b }), shallow);
+  2) The useShallow hook from zustand (v5)
+     - `import { useShallow } from 'zustand/react/shallow';`
+     - In Zustand v5 the old `(selector, shallow)` second-argument
+       form was REMOVED. You now WRAP the selector instead:
+         const { a, b } = useStore(useShallow(s => ({ a: s.a, b: s.b })));
+     - useShallow returns a memoized selector that shallow-compares
+       its own output before letting the component re-render.
 
   3) When you need it
      - Only when the selector returns a NEW OBJECT each call.
@@ -6812,67 +6877,95 @@ YOUR TIME:
   ─────────────────────────────────────────────────────────────────────
   FILES YOU'LL TOUCH
   ─────────────────────────────────────────────────────────────────────
-    src/components/RecentActivityModal.tsx
-    Any component currently doing 3+ separate selector calls
+    src/components/RecentActivityModal.tsx   (only file)
+
+  Your store today (recentActivityStore.ts) exposes exactly three
+  things — match these names, don't invent `entries`/`log`:
+    activities : Activity[]
+    addActivity: (a: Activity) => void
+    clear      : () => void
 
   ─────────────────────────────────────────────────────────────────────
   TASK — concrete steps with code
   ─────────────────────────────────────────────────────────────────────
 
-  STEP 1 — Identify combined-selector candidates
-  Grep for files calling `useRecentActivityStore` three times in
-  a row. Those are the candidates. The 22.1 themeStore is too
-  small (2 fields) — combined-selector overhead isn't worth it.
+  STEP 1 — Add the Clear button (this creates the 2-slice need)
+  In RecentActivityModal, render a "Clear" button next to Close.
+  It calls the store's `clear` action. Now the modal reads TWO
+  slices — `activities` and `clear`.
 
-  STEP 2 — Refactor to a single object selector + shallow
+      <button className="btn-secondary" onClick={clear}>Clear</button>
 
-      // BEFORE
-      const entries = useRecentActivityStore(s => s.entries);
-      const log     = useRecentActivityStore(s => s.log);
-      const clear   = useRecentActivityStore(s => s.clear);
+  STEP 2 — Collapse the two selectors into one object + useShallow
 
-      // AFTER
-      import { shallow } from 'zustand/shallow';
+      // BEFORE — two separate calls
+      const activities = useRecentActivityStore(s => s.activities);
+      const clear      = useRecentActivityStore(s => s.clear);
 
-      const { entries, log, clear } = useRecentActivityStore(
-          s => ({ entries: s.entries, log: s.log, clear: s.clear }),
-          shallow,
+      // AFTER (Zustand v5)
+      import { useShallow } from 'zustand/react/shallow';
+
+      const { activities, clear } = useRecentActivityStore(
+          useShallow(s => ({ activities: s.activities, clear: s.clear })),
       );
 
-  STEP 3 — Verify the perf claim
-  Add a console.log in RecentActivityModal's render. Toggle dark
-  mode (themeStore changes). The modal does NOT re-render because
-  none of its selected fields changed. Without `shallow`, it would.
+  STEP 3 — Verify it still works
+  Open the modal, confirm the list shows and the new Clear button
+  empties it (and clears localStorage). Then add `console.log(
+  "modal render")` at the top of the component and confirm the
+  modal isn't re-rendering on unrelated app activity. Remove the
+  log when done.
+
+  REALITY CHECK — be honest about the payoff
+  In this small store, useShallow's *measurable* win is modest: the
+  modal displays `activities`, so it re-renders whenever activities
+  change either way. The win is real and large only when a component
+  selects a SUBSET that excludes the field that keeps changing — e.g.
+  a component grabbing only `{ addActivity, clear }` (actions, never
+  the list) would, without useShallow, re-render on every logged
+  activity; with it, never. The transferable rule still holds: any
+  OBJECT selector needs useShallow.
 
   ─────────────────────────────────────────────────────────────────────
   RULES / GOTCHAS
   ─────────────────────────────────────────────────────────────────────
-  - Don't add `shallow` to single-slice selectors. Wasted overhead.
-  - The selector function should be stable (defined inline is fine
-    — it's re-created each render but the SHALLOW compare on the
-    returned object is what gates re-renders).
-  - Don't compare deeply-nested objects with `shallow`. If you have
-    nested state, structure your selectors to pull the leaves.
+  - Don't wrap single-slice selectors in `useShallow`. Wasted overhead.
+  - Inline selector is fine — it's re-created each render, but
+    useShallow's compare on the returned object is what gates
+    re-renders.
+  - useShallow is one level deep. Don't expect it to compare
+    deeply-nested objects; structure selectors to pull the leaves.
+  - Don't reach for the old `(selector, shallow)` two-arg form —
+    it's gone in v5 and will just be ignored / type-error.
 
   ─────────────────────────────────────────────────────────────────────
   WHAT YOU JUST LEARNED
   ─────────────────────────────────────────────────────────────────────
   - The reference-equality trap on object selectors.
-  - `shallow` as the targeted fix.
+  - `useShallow` (v5) as the targeted fix — wrap the selector.
   - When you DON'T need it (primitives, single function refs).
 
 
 CHALLENGE 22.4 — Persist middleware (theme + recent)        Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 5 min — beat target by 30 min. Swapped both stores' hand-rolled
+localStorage (init read + setItem/removeItem) for one `persist(...)` config
+each, partialize'd to mode / activities so actions aren't serialised. Kept
+themeStore's `set` action. Side-question that landed: why themeStore's setup
+takes (set, get) but recentActivityStore takes (set) — `get()` is only needed
+to read current state OUTSIDE a set call (toggle reads mode for applyDom before
+writing); recentActivityStore reads via the functional `set((s) => ...)` form,
+so no standalone get().
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
   ─────────────────────────────────────────────────────────────────────
-  Right now themeStore manually reads/writes localStorage in its
-  actions. recentActivityStore loses every entry on reload — log a
-  few activities, refresh, gone. Zustand's `persist` middleware
-  handles both for free.
+  Both stores already persist by hand: themeStore reads/writes the
+  `'theme'` key in `applyDom`, and recentActivityStore reads
+  `'recentActivities'` on init + writes it in addActivity/clear.
+  That's three scattered localStorage calls per store, easy to
+  forget on the next action you add. Zustand's `persist` middleware
+  does it declaratively — one config block, no manual setItem.
 
   ─────────────────────────────────────────────────────────────────────
   NEW HERE — concepts you'll meet
@@ -6909,7 +7002,8 @@ YOUR TIME:
   ─────────────────────────────────────────────────────────────────────
 
   STEP 1 — Migrate themeStore to persist
-  Open src/stores/themeStore.ts. Rewrite as:
+  Open src/stores/themeStore.ts. Keep ALL THREE members you already
+  have (mode, toggle, set) — don't drop `set`. Rewrite as:
 
       import { create } from 'zustand';
       import { persist } from 'zustand/middleware';
@@ -6919,12 +7013,13 @@ YOUR TIME:
       interface ThemeState {
           mode: ThemeMode;
           toggle: () => void;
+          set: (mode: ThemeMode) => void;
       }
 
+      // DOM-only now — persist owns localStorage, so the
+      // localStorage.setItem('theme', mode) line is GONE from here.
       const applyDom = (mode: ThemeMode) => {
-          const root = document.documentElement;
-          if (mode === 'dark') root.classList.add('dark');
-          else root.classList.remove('dark');
+          document.documentElement.classList.toggle('dark', mode === 'dark');
       };
 
       export const useThemeStore = create<ThemeState>()(
@@ -6935,6 +7030,10 @@ YOUR TIME:
                       const next: ThemeMode = get().mode === 'dark' ? 'light' : 'dark';
                       applyDom(next);
                       set({ mode: next });
+                  },
+                  set: (mode) => {
+                      applyDom(mode);
+                      set({ mode });
                   },
               }),
               {
@@ -6952,46 +7051,49 @@ YOUR TIME:
    - The double-call: `create<ThemeState>()(persist(setup, opts))`.
      The extra parens are a TypeScript ergonomic — they let the
      generic param flow through middleware properly.
-   - We dropped the manual `localStorage.setItem` calls. persist
-     handles them.
+   - `set`'s inner `set({ mode })` is Zustand's setter (shadowing the
+     action name). That's pre-existing in your store; it still works.
+   - We dropped the manual `localStorage.setItem` AND the module-load
+     `initialMode = localStorage.getItem('theme')` read. persist
+     rehydrates `mode` for you; onRehydrateStorage re-applies the DOM.
    - `partialize` returns only the slice we want stored.
-   - `onRehydrateStorage` applies the DOM class once persist has
-     populated `mode`. Keeps the FOUC fix working without the
-     manual read at module load.
 
   STEP 2 — Migrate recentActivityStore to persist
+  Use YOUR real shape (activities / addActivity / clear, the Activity
+  interface, MAX_ENTRIES = 5). Drop all three manual localStorage
+  calls — persist replaces them.
 
       import { create } from 'zustand';
       import { persist } from 'zustand/middleware';
 
-      // ... ActivityEntry interface, MAX_ENTRIES const, same as before
+      // ActivityInterface / Activity type + MAX_ENTRIES stay exactly
+      // as they are today.
 
       export const useRecentActivityStore = create<RecentActivityState>()(
           persist(
               (set) => ({
-                  entries: [],
-                  log: (message) => set((s) => {
-                      const next: ActivityEntry = {
-                          id: crypto.randomUUID(),
-                          message,
-                          timestamp: Date.now(),
-                      };
-                      return { entries: [next, ...s.entries].slice(0, MAX_ENTRIES) };
-                  }),
-                  clear: () => set({ entries: [] }),
+                  activities: [],          // was: JSON.parse(localStorage.getItem(...))
+                  addActivity: (activity) =>
+                      set((s) => ({
+                          activities: [activity, ...s.activities].slice(0, MAX_ENTRIES),
+                      })),                 // no more localStorage.setItem
+                  clear: () => set({ activities: [] }),  // no more localStorage.removeItem
               }),
               {
                   name: 'employee-manager:recent-activity',
-                  partialize: (s) => ({ entries: s.entries }),
+                  partialize: (s) => ({ activities: s.activities }),
               },
           ),
       );
 
   STEP 3 — Verify
    - Toggle dark mode, refresh — mode survives.
-   - Open localStorage in DevTools → you see two entries with the
-     prefixed names.
-   - Log 2 activities, refresh — both survive.
+   - Log 2 activities (delete an employee), refresh — both survive.
+   - Open localStorage in DevTools → you see the two new prefixed
+     keys (employee-manager:theme, employee-manager:recent-activity).
+   - The OLD keys ('theme', 'recentActivities') are now orphaned —
+     they won't be read anymore. Delete them once in DevTools so a
+     stale value can't confuse you later.
    - Open in a second tab — both stores have the same state.
 
   ─────────────────────────────────────────────────────────────────────
@@ -7017,7 +7119,17 @@ YOUR TIME:
 
 CHALLENGE 22.5 — Devtools + slice pattern + capstone        Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 7 min — beat target by 28 min. Wrapped both stores with
+devtools(persist(...)) (devtools outermost), labelled 'ThemeStore' /
+'RecentActivity'. Two follow-ups that taught more than the wrap itself:
+(1) Redux DevTools confusion — RecentActivity looked "missing" because the
+panel shows ONE instance at a time; the top-left instance dropdown switches
+between stores, and a store only logs once it dispatches (delete an employee
+→ addActivity fires). (2) Dark mode didn't cover the whole page: body
+background/text were hardcoded in App.css (#f0f2f5 / #333) with no dark
+variant, and .modal was hardcoded white — they overrode the dark: utilities.
+Fixed: body bg/text moved to index.css via @apply bg-gray-100 dark:bg-gray-900
++ text variants; added a .dark .modal rule. Now the whole canvas flips.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -7078,7 +7190,8 @@ YOUR TIME:
               persist(
                   (set, get) => ({
                       mode: 'light',
-                      toggle: () => { /* ... unchanged ... */ },
+                      toggle: () => { /* ... unchanged from 22.4 ... */ },
+                      set: (mode) => { /* ... unchanged from 22.4 ... */ },
                   }),
                   { name: 'employee-manager:theme', partialize: s => ({ mode: s.mode }) },
               ),
@@ -7188,7 +7301,10 @@ you'll re-write Round 17/18/19/20 in new domains. That's the point.
 
 CHALLENGE 23.1 — Profile types + .NET endpoint              Target: 45 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 12 min — beat target by 33 min. First feature round (My Profile).
+Profile = the caller's own Employee row, resolved server-side from the JWT
+(client never sends an id). Added the profile types + the .NET endpoint that
+reads the identity off the token and returns that employee.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -7323,7 +7439,19 @@ YOUR TIME:
 
 CHALLENGE 23.2 — useProfile query hook                      Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 12 min — beat target by 23 min. Built useProfile (useQuery wrapper
+hitting /profile). Three bugs chained, each a real lesson: (1) Rules of Hooks —
+useProfile was called after the `if (loading) return` early return AND a 2nd
+time inside JSX; hooks are tracked by CALL ORDER, so any call below a
+conditional return desyncs the slots. Fix: all hook calls at the top, use the
+captured variable in JSX. (2) Hook didn't `return useQuery(...)` → returned
+void → `profile.data` failed. (3) `profile` is React Query's RESULT WRAPPER
+(data/isLoading/isError/…), `profile.data` is the payload — destructure
+`const { data, isLoading } = useProfile()`. Final gotcha cost the most time:
+the missing `return` was fixed on disk but VS Code was type-checking a stale
+UNSAVED buffer (TS restart didn't help, tsc --noEmit was clean) — re-typing +
+saving resolved it. Lesson: when the editor and tsc disagree, trust tsc and
+save/revert the dirty buffer.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -7435,7 +7563,31 @@ YOUR TIME:
 
 CHALLENGE 23.3 — Profile page route + display               Target: 45 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~20 min — beat target by ~25 min. Built the profile route + display
+(Field label/value components reading profile.data). TWO real issues surfaced
+during the round and were both FIXED immediately after (tsc --noEmit clean):
+
+  FIX A (RESOLVED) — role on the model vs the form. `<Field value={profile.role} />`
+  needs role on Employee, but uncommenting `role: Role` (Models.ts) broke
+  EmployeeForm: create payload `Omit<Employee,'id'>` and edit payload `Employee`
+  both then demanded role, which the zod EmployeeFormData doesn't (and
+  shouldn't) provide. The earlier Omit attempt failed because it was applied in
+  the wrong spot. RESOLUTION: role is authz data, not a form field — added it to
+  Employee + uncommented the profile Field; excluded it from the form payloads:
+  createEmployee + create mutation/payload → `Omit<Employee,'id'|'role'>` (server
+  assigns default role), edit payload carries `role: employeeData.role` from the
+  loaded row (guarded with `if (!employeeData) return`). Files: Models.ts,
+  ProfilePage.tsx, api.ts, EmployeeForm.tsx.
+
+  FIX B (RESOLVED) — staleTime served the previous user's profile. After logout +
+  login as another user, the old profile showed. ROOT CAUSE was NOT staleTime
+  (kept at 5 min — it governs refetch timing, not identity) — it was logout
+  clearing localStorage but NOT the React Query cache. profileKeys.me() is a
+  static key, so user B read user A's cached entry. RESOLUTION: `queryClient.clear()`
+  in handleLogout. Provider wrinkle from 17.1 (Auth outside QueryClientProvider)
+  meant placing it in AuthLayout.tsx (the logout-triggering component, inside
+  QueryClientProvider), not in AuthContext. staleTime kept — removing it only
+  masked the bug. Security note: cross-user data leak, now closed.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -7617,7 +7769,33 @@ YOUR TIME:
 
 CHALLENGE 23.4 — Edit profile (RHF + Zod + mutation)        Target: 60 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~60 min — on target. Built ProfileEditPage (RHF + Zod
+profileSchema/ProfileFormData + updateProfile mutation hitting PUT /profile).
+Four snags, all resolved (tsc --noEmit clean):
+
+  (1) Wrong schema export name — imported `ProfileFormValues`, schema actually
+  exports `ProfileFormData`. Renamed the import.
+
+  (2) Profile type casing mismatch — Types/Profile exported lowercase `profile`
+  but api.ts imported PascalCase `Profile` → "no exported member". Standardized
+  on `Profile` (PascalCase = TS convention for types, mirrors C#): Profile.ts
+  export, useProfile.ts import + api.get<Profile>, api.ts already correct.
+
+  (3) updateProfile return type — declared `Promise<AxiosResponse<void>>` but
+  `api.put<Profile>` returns Profile. Checked the backend: ProfileController
+  UpdateProfile does `return Ok(me)` (the updated Employee), so the endpoint
+  DOES return the row. Fixed annotation to `Promise<AxiosResponse<Profile>>`.
+  Lesson: the generic on api.put<T> and the function's declared AxiosResponse<T>
+  must agree, and both must match what the .NET action actually returns.
+
+  (4) Edit page not visible — ProfileEditPage built + `/profile/edit` defined in
+  routes.ts + Edit link present, but the ROUTE was never registered in App.tsx
+  (turned out to be an unsaved file — same save-buffer trap as 23.2). Registered
+  `routes.profileEdit()` → <ProfileEditPage /> under AuthLayout (inherits the
+  header shell + auth guard). Lesson: a route exists only when it's in the route
+  tree — a component file + a path constant aren't enough.
+
+  Cleanup: stray `debugger` left in useProfile.ts queryFn — remove before commit.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -23845,14 +24023,14 @@ Fill this in as you complete each challenge:
   21.4       | 30 min  |           |  Tailwind: tokens + dark mode
   21.5       | 20 min  |           |  Tailwind: @apply patterns
   22.1       | 20 min  |           |  Zustand: install + first store
-  22.2       | 30 min  |           |  Zustand: migrate RecentActivity
-  22.3       | 25 min  |           |  Zustand: shallow equality
-  22.4       | 25 min  |           |  Zustand: persist middleware
-  22.5       | 20 min  |           |  Zustand: devtools + slices
-  23.1       | 30 min  |           |  Feature/Profile: types + endpoint
-  23.2       | 25 min  |           |  Feature/Profile: useProfile hook
-  23.3       | 30 min  |           |  Feature/Profile: page + display
-  23.4       | 40 min  |           |  Feature/Profile: edit (RHF+Zod)
+  22.2       | 30 min  | 30 min    |  Zustand: migrate RecentActivity → store. On target. Mirrored real Activity shape (action/details), dropped getRecentActivities() (select state), kept localStorage, removed Provider. Blocker was a half-written store + wrong shape copied.
+  22.3       | 25 min  | 5 min     | Beat target by ~30 min. Added Clear button to RecentActivityModal → 2-slice need (activities + clear) → collapsed into one `useShallow(s => ({...}))` object selector (v5 API; old `(selector, shallow)` two-arg form is gone). Challenge itself was rewritten first: original spec used v4 `shallow` + fictional `entries`/`log` fields + a non-existent 3-selector consumer. CSS bug surfaced post-task: `.modal button:first-of-type/:last-of-type` colour rules in App.css (specificity 0,2,1) out-ranked the single-class .btn-* utilities (0,1,0), painting buttons by POSITION regardless of className — pruned to margin-only. Lesson: pre-Tailwind positional descendant selectors silently override btn-* utilities.
+  22.4       | 25 min  | 5 min     | Beat target by ~30 min. Replaced both stores' manual localStorage with `persist` middleware: `create<T>()(persist(setup, { name, partialize }))`. partialize picks the storable slice (mode / activities) so action fns aren't serialised. themeStore kept all three members (mode/toggle/set); applyDom became DOM-only (persist owns localStorage), module-load initialMode read dropped (persist rehydrates), onRehydrateStorage re-applies the .dark class. Challenge rewritten first — original spec had a false premise ("loses entries on reload" — it already persisted manually) + fictional entries/log/ActivityEntry shape + dropped the `set` action. CONCEPT LOCKED: (set, get) vs (set) — `get()` only needed to read state OUTSIDE a set call (toggle reads mode for applyDom side-effect before writing); functional `set((s) => ...)` passes current state as arg, covering addActivity. Old keys ('theme', 'recentActivities') orphaned → cleared in DevTools.
+  22.5       | 20 min  | 7 min     | Beat target by ~13 min. Wrapped both stores with `devtools(persist(setup, opts), { name })` — devtools OUTERMOST so it sees persist's events; distinct names ThemeStore / RecentActivity. CONCEPT — Redux DevTools: a transaction log + time-travel for the store; the middleware is just the wire. Gotcha that cost real time: RecentActivity looked absent because the panel shows ONE instance at a time — the top-left instance dropdown switches stores, and a store only registers entries once it DISPATCHES (addActivity fires on employee delete). Slice pattern (uiStore) understood but not built — store too small, don't pre-split. Round 22 capstone: theme + recent activity now persistent + debuggable. SIDE FIX (dark mode whole-page): toggling set <html class="dark"> and component dark: utilities flipped, but the PAGE canvas didn't — body background/text were hardcoded in App.css (#f0f2f5 / #333) and .modal was hardcoded white, all out-ranking/ignoring the dark variant. Moved body bg/text into index.css `@apply bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100`; added `.dark .modal` surface rule. Lesson (3rd time this round, after 22.3's btn-* specificity): pre-Tailwind hardcoded plain-CSS colours silently defeat dark: variants — migrate them, don't layer over them.
+  23.1       | 30 min  | 12 min    | Beat target by ~33 min. First feature round (My Profile). Profile = the caller's OWN Employee row, resolved server-side from the JWT identity — client never sends an id. Added profile types + the .NET endpoint that reads the identity off the token and returns that employee row. Establishes the per-feature checklist the rest of the rounds repeat (types → API → hooks → route → page → form → validation → role check → tests).
+  23.2       | 25 min  | 12 min    | Beat target by ~13 min. Built useProfile — a useQuery wrapper on GET /profile (queryKey profileKeys.me(), staleTime 5min). THREE chained bugs, each a keeper: (1) RULES OF HOOKS — useProfile called after `if (loading) return` AND a duplicate call inside JSX; React tracks hooks by CALL ORDER (positional state slots), so any call below a conditional return desyncs them. Fix: every hook at top, before early returns; reuse the captured variable in JSX. .NET analog: locals matched to a backing array by declaration order — an early return that skips one shifts every later index. (2) Hook missing `return useQuery(...)` → inferred void → `profile.data` errored. (3) `profile` = RQ result WRAPPER (data/isLoading/isError/refetch), `profile.data` = payload (undefined while loading); idiom: `const { data, isLoading } = useProfile()`. TIME SINK: the `return` fix was on disk but VS Code type-checked a stale UNSAVED buffer — TS-server restart didn't clear it, but `tsc --noEmit` exited 0 (proved disk was clean). Re-typing + Save All fixed it. LESSON: editor vs compiler disagreement = trust tsc, the editor is reading a dirty buffer.
+  23.3       | 30 min  | ~20 min   | Beat target by ~25 min. Profile route + display (Field label/value reading profile.data). TWO issues found + FIXED same session (tsc clean): (A) ROLE ON MODEL vs FORM — `profile.role` needs role on Employee, but uncommenting `role: Role` broke EmployeeForm (create `Omit<Employee,'id'>` + edit `Employee` payloads then demand role the zod form doesn't supply). role is AUTHZ data, not a form field. RESOLVED: added role to Employee + uncommented profile Field; excluded from payloads (createEmployee + create mutation/payload → `Omit<Employee,'id'|'role'>`, edit carries `role: employeeData.role` from loaded row, guarded). Earlier Omit "didn't work" = applied in wrong spot. Files: Models.ts, ProfilePage.tsx, api.ts, EmployeeForm.tsx. (B) STALE PROFILE ACROSS LOGIN — after logout+login as another user the old profile showed (cross-user data leak). NOT a staleTime bug (kept 5min — staleTime = refetch timing, not identity); root cause = logout cleared localStorage but NOT the RQ cache, and profileKeys.me() is a static key → user B read user A's entry. RESOLVED: `queryClient.clear()` in handleLogout (AuthLayout.tsx — inside QueryClientProvider; 17.1 put Auth outside it). staleTime kept; removing it only masked the bug.
+  23.4       | 40 min  | ~60 min   | On target. Built ProfileEditPage (RHF + Zod profileSchema/ProfileFormData + updateProfile mutation → PUT /profile). FOUR snags, all fixed (tsc clean): (1) imported wrong schema export `ProfileFormValues` — actual export is `ProfileFormData`; renamed. (2) Profile TYPE CASING — Types/Profile exported lowercase `profile`, api.ts imported PascalCase `Profile` → "no exported member"; standardized on `Profile` (PascalCase TS convention) across Profile.ts / useProfile.ts / api.ts. (3) updateProfile RETURN TYPE — declared `Promise<AxiosResponse<void>>` but `api.put<Profile>` returns Profile; backend ProfileController returns `Ok(me)` (updated Employee), so fixed to `AxiosResponse<Profile>`. Lesson: api.put<T> generic + declared AxiosResponse<T> + the .NET action's actual return must all agree. (4) EDIT PAGE NOT VISIBLE — ProfileEditPage + `/profile/edit` in routes.ts + Edit link all existed, but the ROUTE was never registered in App.tsx (unsaved-file trap again, cf 23.2). Registered `routes.profileEdit()` → <ProfileEditPage /> under AuthLayout. Lesson: a route exists only when it's in the route tree; a component + path constant aren't enough. Cleanup: stray `debugger` in useProfile.ts queryFn to remove.
   23.5       | 30 min  |           |  Feature/Profile: avatar upload
   24.1       | 25 min  |           |  Feature/ChangePwd: endpoint
   24.2       | 25 min  |           |  Feature/ChangePwd: strength schema

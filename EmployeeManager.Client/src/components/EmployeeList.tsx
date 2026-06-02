@@ -24,8 +24,10 @@ import { EmployeeId } from "../Types/Ids";
 import { useSearchParams } from "react-router-dom";
 import { routes } from "../routes";
 import { useAuth } from "../Context/AuthContext";
+// import { useProfile } from "../Queries/useProfile";
 //import clsx from "clsx";
 const EmployeeList = () => {
+  // const profile = useProfile();
   // ── HOOKS ──────────────────────────────────────────────────────────────
   // Data + delete handling
   const { employees, loading, handleDelete, fetchedAt, confirm, onConfirm, onCancel } = useEmployees();
@@ -233,6 +235,9 @@ const [searchParams, setSearchParams] = useSearchParams();
             onConfirm={onConfirm}
             onCancel={onCancel}
           />
+          {/* <pre>{
+            JSON.stringify(profile.data, null, 2) 
+          }</pre> */}
           <button className="btn-success" onClick={() => setRecentActivityOpen(true)}>View Recent Activities</button>
           {/* RECENT ACTIVITY MODAL — state lives in RecentActivityContext; rendered here */}
           <RecentActivityModal

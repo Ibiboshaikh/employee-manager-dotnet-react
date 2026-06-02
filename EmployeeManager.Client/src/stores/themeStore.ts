@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist, devtools } from "zustand/middleware";
 
 type ThemeMode = 'light' | 'dark';
 
@@ -8,24 +9,37 @@ interface ThemeState {
     set: (mode: ThemeMode) => void;
 }
 
-const initialMode: ThemeMode = typeof window !== 'undefined' 
-    && window.localStorage.getItem('theme') === 'dark' ? 'dark' : 'light';
-
 const applyDom = (mode: ThemeMode) => {
-    const root = document.documentElement;
-    root.classList.toggle('dark', mode === 'dark');
-    localStorage.setItem('theme', mode);
+    document.documentElement.classList.toggle('dark', mode === 'dark');
 }
 
-export const useThemeStore = create<ThemeState>((set) => ({
-    mode: initialMode,
-    toggle: () => set((s) => {
-        const next: ThemeMode = s.mode === 'light' ? 'dark' : 'light';
-        applyDom(next);
-        return { mode: next };
-    }),
-    set: (mode)=>{
-        applyDom(mode);
-        set({ mode });
-    },
-}));
+export const useThemeStore = create<ThemeState>()(
+    devtools(
+        persist
+        (
+            (set, get) => ({
+                mode: 'light',
+                toggle: ()  => {
+                    const next: ThemeMode = get().mode === 'dark' ? 'light' : 'dark';
+                    applyDom(next);
+                    set({ mode: next });
+                },
+                set: (mode) => {
+                    applyDom(mode);
+                    set({ mode });
+                },
+            }),
+            {
+                name: 'employee-manager:theme',
+                partialize: (s) => ({ mode: s.mode }), // don't persist actions
+                onRehydrateStorage: () => (state) => {
+                    // Apply the DOM class right after rehydration.
+                    if (state) applyDom(state.mode);
+                },
+            }
+        ),
+        {
+            name: 'ThemeStore',
+        } 
+    ),
+);

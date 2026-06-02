@@ -12,7 +12,7 @@ import { useReducer, useEffect } from "react";
 import { toast } from "react-toastify";
 import { createEmployee, getEmployees, deleteEmployee } from "../services/api";
 import { Employee } from "../Types/Models";
-import { useRecentActivity } from "../Context/RecentActivityContext";
+import { useRecentActivityStore } from "../stores/recentActivityStore";
 import { isAxiosError } from "axios";
 import { EmployeeId } from "../Types/Ids";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -53,7 +53,7 @@ export interface UseEmployeesReturn {
 
 function useEmployees(): UseEmployeesReturn {
   const queryClient = useQueryClient();
-  const { addActivity } = useRecentActivity();
+  const addActivity = useRecentActivityStore(s => s.addActivity);
 
   // useQuery owns the employee list. On mount it fires queryFn; the result
   // is cached under ['employees']. data / loading / error states all come
