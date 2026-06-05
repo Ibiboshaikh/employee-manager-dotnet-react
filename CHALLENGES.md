@@ -24484,3 +24484,101 @@ FORWARD-LOOKING NOTES                                          (2026-06-01)
 <!-- ════════════════════════════════════════════════════════════════════ -->
 <!-- END ADDED 2026-06-01                                                   -->
 <!-- ════════════════════════════════════════════════════════════════════ -->
+
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- ADDED 2026-06-05 — enterprise HRMS module expansion (scope agreed       -->
+<!-- 2026-06-05). Listed in intended build order; not yet scheduled into     -->
+<!-- rounds. Mirror into ROADMAP.md when rounds are cut.                     -->
+<!-- ════════════════════════════════════════════════════════════════════ -->
+
+══════════════════════════════════════════════════════════════════════════
+ENTERPRISE HRMS MODULE EXPANSION                               (2026-06-05)
+══════════════════════════════════════════════════════════════════════════
+
+  Goal: take the system from "core HR" to an enterprise HRMS firms can run
+  on. Ordered by intended build sequence (dependencies first). Most of these
+  are workflow modules — they reuse one engine: a state machine + an
+  approval chain resolved from line management and gated by PBAC (see
+  FORWARD-LOOKING NOTE 1). Build that engine once; each module configures it.
+
+  6. HELP DESK / CASE MANAGEMENT.                          (PRIORITIZED)
+     HR ticketing — employees raise cases (queries, grievances, IT/HR
+     requests); cases route to a queue/agent, carry a status lifecycle
+     (Open → In Progress → Resolved → Closed), SLA timers, comments, and an
+     audit trail. First real consumer of the shared workflow + notification
+     surface — build it early so the engine is proven before the heavier
+     modules lean on it.
+
+  7. ORG CHART & POSITION MANAGEMENT.                       (FOUNDATIONAL)
+     Reporting lines, manager/report relationships, positions, and
+     headcount. Foundational because every approval workflow below resolves
+     its approver chain from line management — this is the data those
+     workflows read. Includes an org-tree view and "who reports to whom".
+
+  8. ATTENDANCE & SHIFTS.
+     Clock in/out (geo/biometric-ready), shift rosters, overtime, and
+     regularization requests. Feeds Time Tracking and, later, Payroll.
+
+  9. EXPENSE & REIMBURSEMENT.                               (WORKFLOW)
+     Claim submission with receipts; approvals flow up the claimant's LINE
+     MANAGEMENT chain (resolved from the org chart, module 7), each stage
+     gated by PBAC. Reuses the shared approval engine.
+
+ 10. TRAVEL MANAGEMENT.                                     (WORKFLOW)
+     Travel requests, bookings, and per-diem; same line-management approval
+     chain as Expense. Often pairs with an expense claim on return.
+
+ 11. COMPLIANCE & POLICY.
+     Statutory documents and policy acknowledgements — publish a policy,
+     require employees to read + acknowledge, track who has/hasn't, and keep
+     an immutable record (ties into the Audit Log).
+
+ 12. RECRUITMENT / ATS — INTERVIEW WORKFLOW.               (WORKFLOW, PBAC)
+     Focus is the WORKFLOW, not job-board breadth: a candidate's resume and
+     interview feedback flow from one user to the next along a PREDEFINED
+     pipeline (e.g. screen → tech round → manager round → offer), where each
+     stage's reviewer and their allowed actions are determined by PBAC.
+     Each stage hands the package (resume + accumulated feedback) forward;
+     the next reviewer sees prior feedback per their permissions.
+
+ 13. ASSET MANAGEMENT.                                      (BEFORE EXIT)
+     Devices/equipment issued to employees — assignment, custody history,
+     and condition. Deliberately sequenced BEFORE Offboarding because exit
+     clearance depends on knowing what assets a leaver must return.
+
+ 14. OFFBOARDING / EXIT.
+     Resignation/exit workflow: clearance checklist, asset return (consumes
+     module 13), knowledge handover, and full-and-final settlement. Mirrors
+     the Onboarding Wizard at the other end of the lifecycle.
+
+ 15. ANALYTICS & REPORTING.
+     Attrition, headcount, and operational dashboards with custom/exportable
+     reports. Sits late because it aggregates data the modules above produce.
+
+ 16. MULTI-TENANCY / SaaS.                                  (PLATFORM)
+     Turn the app into a SaaS product: users from multiple organizations log
+     in to the same deployment and see ONLY their own company's data. Tenant
+     identity is bound to the account (resolved at login and carried in the
+     token); every query is tenant-scoped at the data layer so cross-tenant
+     leakage is impossible by construction. Pairs with the PBAC work
+     (permissions become per-tenant) and the EF Core migration (note 5 —
+     a tenant discriminator/row filter is far cleaner in EF than in the JSON
+     store). This is the largest architectural shift on the list.
+
+ 17. MULTI-LINGUAL SUPPORT / LOCALIZATION.                  (PLATFORM)
+     Full i18n: UI strings externalized to locale resource bundles,
+     per-user/per-tenant language preference, plus locale-aware dates,
+     numbers, and currency. Client-side i18n (e.g. i18next) on the React
+     side; resource-based localization on the API for server-generated text
+     (emails, validation messages).
+
+ 18. PAYROLL & COMPENSATION.                               (LAST)
+     Salary structures, pay runs, payslips, tax and statutory deductions.
+     Sequenced last — it depends on attendance, leave, expenses, and a
+     hardened permission/tenant model, and carries the highest correctness
+     and compliance bar.
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- END ADDED 2026-06-05                                                   -->
+<!-- ════════════════════════════════════════════════════════════════════ -->

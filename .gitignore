@@ -66,6 +66,9 @@ memory/
 *.log
 TestResults/
 
+# Office temporary lock files (e.g. ~$document.docx)
+~$*
+
 # =========================================================
 # Runtime upload artifacts (user-uploaded files; not source)
 # =========================================================
