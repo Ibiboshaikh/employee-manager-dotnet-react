@@ -13,7 +13,7 @@
 
 using System.Security.Claims;
 using EmployeeManager.Domain.Models;
-
+using static EmployeeManager.Application.Services.AuthService;
 namespace EmployeeManager.Application.Services;
 
 /// <summary>
@@ -35,5 +35,6 @@ public interface IAuthService
     Task SeedDefaultUserAsync();
     Task<RefreshResult?> RefreshAsync(string refreshToken);
     Task LogoutAsync(string refreshToken);
-    Task<bool> ChangePasswordAsync(string userName, ChangePasswordRequest request);
+    Task<AuthService.ChangePasswordResult> ChangePasswordAsync(string userName, ChangePasswordRequest request);
+    Task<AuthService.ChangePasswordResult> ResetPasswordAsync(string userName, string newPassword);
 }

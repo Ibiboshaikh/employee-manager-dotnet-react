@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { format } from "date-fns";
 import { useProfile } from "../Queries/useProfile";
+import AvatarUpload from "./AvatarUpload";
 
 const Field = ({label, value}: {label: string, value: string}) => (
     <div className="flex flex-col py-2 border-b border-gray-200 dark:border-gray-700 last:border-b-0">
@@ -15,6 +16,7 @@ const Field = ({label, value}: {label: string, value: string}) => (
 
 const ProfilePage = () => {
     const { data: profile, isLoading, error } = useProfile();
+    console.log(profile);
     if (isLoading)
         return <div className="p-4">Loading profile...</div>;
     if (error || !profile)
@@ -26,6 +28,12 @@ const ProfilePage = () => {
                 <Link to="/profile/edit" className="btn-primary">
                     Edit
                 </Link>
+                <Link to="/profile/change-password" className="btn-secondary">
+                    Change Password
+                </Link>
+            </div>
+            <div className="mb-6">
+                <AvatarUpload currentUrl={profile.avatarUrl ?? ""} />
             </div>
             <div className="card">
                 <Field label="Name" value={`${profile.firstName} ${profile.lastName}`} />

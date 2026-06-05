@@ -30,6 +30,9 @@ const AuthLayout = () =>{
                 <NavLink to={routes.profile()} className={({ isActive }) => `px-3 py-2 text-sm ${isActive ? 'font-semibold' : ''}` }>
                   My Profile
                 </NavLink>
+                <NavLink to={routes.myDocuments()} className={({ isActive }) => `px-3 py-2 text-sm ${isActive ? 'font-semibold' : ''}` }>
+                  My Documents
+                </NavLink>
                 <nav style={styles.navMenu}>
                     <DarkModeToggle />
                     <span style={styles.userBadge}> 👤 {user?.fullName}</span>

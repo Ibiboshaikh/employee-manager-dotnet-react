@@ -65,3 +65,9 @@ memory/
 # =========================================================
 *.log
 TestResults/
+
+# =========================================================
+# Runtime upload artifacts (user-uploaded files; not source)
+# =========================================================
+EmployeeManager.API/wwwroot/avatars/
+EmployeeManager.API/wwwroot/documents/

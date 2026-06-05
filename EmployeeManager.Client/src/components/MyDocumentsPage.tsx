@@ -1,0 +1,89 @@
+import { useState } from 'react';
+import { format } from 'date-fns';
+import { useMyDocuments } from '../Queries/useMyDocuments';
+import { useDeleteDocument } from '../Queries/useDeleteDocument';
+import { formatBytes } from '../utils/format';
+import ConfirmModal from './ConfirmModal';
+import type { DocumentDTO } from '../Types/Document';
+import { toast } from 'react-toastify';
+import { downloadDocument } from '../services/api';
+import { triggerDownload } from '../utils/triggerDownload';
+
+const handleDownload = async (doc: DocumentDTO) => {
+    try {
+        const response = await downloadDocument(doc.id);
+        triggerDownload(response.data, doc.fileName);
+    } catch {
+        toast.error("Failed to download.");
+    }
+}
+
+const MyDocumentsPage = () => {
+    const {data: documents, isLoading, isError} = useMyDocuments();
+    const deleteDocument = useDeleteDocument();
+    const [pendingDelete, setPendingDelete] = useState<DocumentDTO | null>(null);
+    if(isLoading) return <p className="p-6 text-gray-500">Loading documents…</p>;
+    if(isError) return <p className="p-6 text-red-600">Failed to load documents.</p>;
+
+    return (
+        <div className="max-w-4xl mx-auto p-6">
+            <h1 className="text-2xl font-semibold mb-4">My Documents</h1>
+            {documents && documents.length === 0 ?(
+                <div className="card text-center text-gray-500">
+                    No documents yet. Please upload some to see them here.
+                </div>
+            ): (
+                <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+                    <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                        <thead className="bg-gray-50 dark:bg-gray-900">
+                            <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Name
+                                </th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Size
+                                </th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Uploaded
+                                </th>
+                                <th className="px-6 py-3"></th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                            {documents?.map(doc => (
+                                <tr key={doc.id}>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                        {doc.fileName}
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                        {formatBytes(doc.sizeBytes)}
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                        {format(new Date(doc.uploadedAt), 'MMM d, yyyy')}
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-right">
+                                        <button onClick={() => setPendingDelete(doc)} className="text-sm text-red-600 hover:text-red-800">Delete</button>
+                                        <button onClick={() => handleDownload(doc)} className="text-sm text-brand-600 hover:text-brand-800 mr-3">
+                                            Download
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+            <ConfirmModal open={!!pendingDelete} message={` "${pendingDelete?.fileName}"`}
+                onConfirm={() => {
+                    if(pendingDelete) {
+                        deleteDocument.mutate(pendingDelete.id);
+                        setPendingDelete(null);
+                    }
+                }}
+                onCancel={() => setPendingDelete(null)}>
+            </ConfirmModal>
+        </div>
+    );
+}
+
+export default MyDocumentsPage;

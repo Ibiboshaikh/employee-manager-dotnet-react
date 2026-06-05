@@ -70,6 +70,10 @@ import ForceChangePassword from "./components/ForceChangePassword";
 import Forbidden from "./components/Forbidden";
 import ProfilePage from "./components/ProfilePage";
 import ProfileEditPage from "./components/ProfileEditPage";
+import ChangePasswordPage from "./components/ChangePasswordPage";
+import ForgotPasswordPage from "./components/ForgotPasswordPage";
+import ResetPasswordPage from "./components/ResetPasswordPage";
+import MyDocumentsPage from "./components/MyDocumentsPage";
 const router = createBrowserRouter([
   {
     path: routes.login(),
@@ -78,6 +82,14 @@ const router = createBrowserRouter([
   {
     path: routes.forbidden(),
     element: <Forbidden />,
+  },
+  {
+    path: routes.forgotPassword(),
+    element: <ForgotPasswordPage />,
+  },
+  {
+    path: routes.resetPassword(":token"),
+    element: <ResetPasswordPage />,
   },
   {
     element: <ProtectedRoute />, // This layout wraps all protected routes
@@ -104,6 +116,14 @@ const router = createBrowserRouter([
           {
             path: routes.profileEdit(),
             element: <ProfileEditPage />,
+          },
+          {
+            path: routes.changePassword(),
+            element: <ChangePasswordPage />,
+          },
+          {
+            path: routes.myDocuments(),
+            element: <MyDocumentsPage/>,
           }
         ],
       },

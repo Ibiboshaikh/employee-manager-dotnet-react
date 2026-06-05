@@ -30,6 +30,7 @@ import { EmployeeId } from "../Types/Ids";
 import { routes } from "../routes";
 import type { Profile } from '../Types/Profile';
 import type { ProfileFormData } from '../schemas/profileSchema';
+import type { DocumentDTO } from '../Types/Document';
 
 // ── CREATE AXIOS INSTANCE ──────────────────────────────────────────────────
 // axios.create() creates a custom instance with pre-configured settings.
@@ -227,3 +228,27 @@ export const changePassword = (oldPassword: string, newPassword: string): Promis
   api.post('/Auth/change-password', { oldPassword, newPassword });
 
 export const updateProfile = (values: ProfileFormData): Promise<AxiosResponse<Profile>> => api.put<Profile>('/profile', values);
+
+export const uploadAvatar = (file: File) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  return api.post<Profile>('/profile/avatar', formData);
+}
+
+export const forgotPassword = (email: string) => api
+  .post<{ message: string; devResetUrl?: string }>('/auth/forgot-password', { email });
+
+export const resetPassword = (token: string, newPassword: string) => api
+  .post('/auth/reset-password', { token, newPassword });
+
+export const fetchMyDocuments = (): Promise<AxiosResponse<DocumentDTO[]>> => api
+  .get<DocumentDTO[]>('/documents/mine');
+
+export const fetchAllDocuments = (): Promise<AxiosResponse<DocumentDTO[]>> => api
+  .get<DocumentDTO[]>('/documents');
+
+export const deleteDocument = (id: string): Promise<AxiosResponse<void>> => api
+  .delete(`/documents/${id}`);
+
+export const downloadDocument = (id: string): Promise<AxiosResponse<Blob>> => api
+  .get(`/documents/${id}/download`, { responseType: 'blob', });

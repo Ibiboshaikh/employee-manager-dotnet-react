@@ -95,6 +95,10 @@ try
     // file corruption from concurrent writes.
     builder.Services.AddSingleton(new JsonDataStore<Employee>(
         Path.Combine(AppContext.BaseDirectory, "Data", "employees.json")));
+
+    builder.Services.AddSingleton(new JsonDataStore<Document>(
+        Path.Combine(AppContext.BaseDirectory, "Data", "documents.json")));
+    
     // ^^^ AppContext.BaseDirectory = the folder where the compiled DLL lives.
     //     Path.Combine joins path parts: "bin/Debug/net10.0" + "Data" + "employees.json"
 
@@ -108,8 +112,12 @@ try
     // Same pattern: interface → implementation.
     builder.Services.AddScoped<IEmployeeService, EmployeeService>();
     builder.Services.AddScoped<IAuthService, AuthService>();
+    builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
+    builder.Services.AddScoped<IDocumentService, DocumentService>();
+    
     builder.Services.AddSingleton<IRefreshTokenStore, RefreshTokenStore>();
-
+    builder.Services.AddSingleton<IPasswordResetStore, PasswordResetStore>();
+    
     // ── STEP 4: Configure JWT Authentication ───────────────────────────────
     //
     // JWT (JSON Web Token) lets us secure API endpoints WITHOUT server-side sessions.
@@ -217,8 +225,17 @@ try
     // go through the auth pipeline and potentially get 401'd.
     // UseDefaultFiles serves index.html for the root URL ("/")
     // UseStaticFiles serves CSS, JS, images, etc.
-    app.UseDefaultFiles();
-    app.UseStaticFiles();
+    // The static-file middleware binds its file provider ONCE, here. If wwwroot
+    // doesn't exist at this moment, ASP.NET binds a null provider and serves 404
+    // for everything underneath — even files written there later (e.g. uploaded
+    // avatars). Worse, WebRootPath may already be cached as null from build time.
+    // So create the folder and hand UseStaticFiles an explicit provider.
+    var webRoot = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+    Directory.CreateDirectory(Path.Combine(webRoot, "avatars"));
+    var webRootProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(webRoot);
+
+    app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = webRootProvider });
+    app.UseStaticFiles(new StaticFileOptions { FileProvider = webRootProvider });
 
     // Check CORS headers (allow/deny cross-origin requests)
     app.UseCors("AllowReactApp");

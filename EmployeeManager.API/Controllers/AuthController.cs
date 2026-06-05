@@ -32,6 +32,7 @@ using EmployeeManager.Domain.Models;         // LoginRequest
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;              // ControllerBase, [ApiController], etc.
 using EmployeeManager.Extensions;
+using EmployeeManager.Domain.Repositories;
 namespace EmployeeManager.Controllers;
 
 /// <summary>
@@ -137,12 +138,54 @@ public class AuthController : ControllerBase
         {
             return Unauthorized();
         }
-        var ok = await _authService.ChangePasswordAsync(userName, request);
-        if (!ok)
+        var result = await _authService.ChangePasswordAsync(userName, request);
+        if (!result.Success)
         {
-            return BadRequest(new {message ="Invalid old password or new password does not meet requirements" });
+            return BadRequest(new { errors = result.Errors });
         }
         return Ok(new { message = "Password changed." });
+    }
+
+    [HttpPost("forgot-password")]
+    [AllowAnonymous]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request, 
+        [FromServices] IPasswordResetStore resets, [FromServices] IWebHostEnvironment env,
+        [FromServices] IEmployeeRepository employees)
+    {
+        var emp = (await employees.GetAllAsync())
+            .FirstOrDefault(e=> string.Equals(e.Email, request.Email
+            , StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(e.Username));
+
+        string? resetUrl = null;
+
+        if(emp is not null)
+        {
+            var token = resets.Issue(emp.Username!);
+            resetUrl = $"/reset-password/{token}";
+        }
+
+        if(env.IsDevelopment() && resetUrl is not null)
+        {
+            return Ok(new { message = "Check your inbox.", devResetUrl = resetUrl });
+        }
+        return Ok(new { message = "Check your inbox." });
+    }
+
+    [HttpPost("reset-password")]
+    [AllowAnonymous]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request, [FromServices] IPasswordResetStore resets)
+    {
+        var username = resets.Consume(request.Token);
+        if (username is null)
+        {
+            return BadRequest(new { message = "Invalid or expired token." });
+        }
+
+        var result = await _authService.ResetPasswordAsync(username, request.NewPassword);
+          if (!result.Success)
+              return BadRequest(new { errors = result.Errors });
+
+          return Ok(new { message = "Password reset." });
     }
 
     private void SetRefreshCookie(string token)

@@ -60,5 +60,54 @@ namespace EmployeeManager.API.Controllers
             me.PasswordHash = null; // Don't return the password hash
             return Ok(me);
         }
+
+        [HttpPost("Avatar")]
+        public async Task<ActionResult> UploadAvatar(IFormFile file, [FromServices] IWebHostEnvironment env)
+        {
+            var userName = User.GetUsername();
+            if(string.IsNullOrEmpty(userName))
+            {
+                return Unauthorized();
+            }
+
+            if(file is null || file.Length == 0)
+            {
+                return BadRequest(new {message="No file uploaded."});
+            }
+
+            if (file.Length > 3_000_000)   // 3 MB
+            {
+                return BadRequest(new { message = "File too large (max 3MB)." });   
+            }
+
+            if (!file.ContentType.StartsWith("image/"))
+            {
+                return BadRequest(new { message = "Only image files allowed." });
+            }
+
+            var me = await _employeeRepository.GetByUsernameAsync(userName);
+            if (me == null)
+            {
+                return NotFound();
+            }
+
+            var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+            var avatarsDir = Path.Combine(env.WebRootPath ?? "wwwroot", "avatars");
+            Directory.CreateDirectory(avatarsDir);
+
+            var fileName = $"{me.Id}{ext}";
+            var fullPath = Path.Combine(avatarsDir, fileName);
+
+            await using (var stream =  System.IO.File.Create(fullPath))
+            {
+                await file.CopyToAsync(stream);
+            }
+
+            me.AvatarUrl = $"/avatars/{fileName}";
+            await _employeeRepository.UpdateAsync(me);
+
+            me.PasswordHash = null; // Don't return the password hash
+            return Ok(me);
+        }
     }
 }
