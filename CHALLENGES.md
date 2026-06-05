@@ -8091,7 +8091,16 @@ Four snags, all resolved (tsc --noEmit clean):
 
 CHALLENGE 23.5 — Avatar upload (small file)                 Target: 45 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~25 min (beat target). Build clean; the time went to a
+  post-build bug — avatar previewed fine but 404'd on refresh.
+  NOT an incomplete URL (the relative "/avatars/{id}.jpg" was correct):
+  app.UseStaticFiles() binds its wwwroot file provider ONCE at startup,
+  and the API had booted before the first upload created wwwroot/, so
+  it bound a null provider → permanent 404 for everything underneath.
+  Fix in Program.cs: create wwwroot/avatars first, then pass an explicit
+  PhysicalFileProvider to UseDefaultFiles/UseStaticFiles. Restart to apply.
+  Lesson: static-file middleware is bind-once — like a FileSystemWatcher
+  rooted at a path that doesn't exist yet; creating it later won't rebind.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -8365,7 +8374,15 @@ logged in, voluntary change).
 
 CHALLENGE 24.1 — Strengthen the change-password endpoint    Target: 40 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~10 min (beat target). Core landed clean: ChangePasswordResult
+  record, all-failures-collected validation, regex char-class rules,
+  IAuthService widened bool→ChangePasswordResult, controller checks
+  result.Success. THREE follow-ups noted (see table row): (1) leftover
+  old-impl checks left in after the early return — dead/redundant, prune
+  them; (2) controller joins result.Errors into one message string, which
+  throws away the structured array 24.2/24.3's form wants — return
+  `{ errors = result.Errors }` instead; (3) record nested in AuthService +
+  imported via `using static` works but a top-level type is cleaner.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -8518,9 +8535,19 @@ YOUR TIME:
   - Why server validation is the gate, not the client.
 
 
-CHALLENGE 24.2 — Password-strength schema (Zod refinements) Target: 40 min
+CHALLENGE 24.2 — Password-strength schema (Zod refinements) Target: 5-10 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~5 min (target was wildly off — see note). Schema correct:
+  4 chained .regex() rules + two cross-field .refine()s (confirm match,
+  new!=old) each with `path`. ONE BUG: newPassword message says "at least
+  6 characters" but the rule is .min(8) — message lies, fix to 8. Minor:
+  oldPassword .min(6) vs spec's .min(1) (harmless). Type named
+  ChangePasswordFormData = CORRECT (matches your ProfileFormData convention).
+  TARGET RECALIBRATED 40→5-10 min: a single ~19-line schema file where the
+  syntax is handed to you in the spec is a copy-adapt-verify task, not a
+  blank-slate authoring task. The 40-min figure assumed you'd derive the
+  Zod API yourself; that's not how these run (you hold logic, spec holds
+  syntax). Single-file schema rounds are inherently short.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -8634,7 +8661,19 @@ YOUR TIME:
 
 CHALLENGE 24.3 — Change-password page + mutation            Target: 45 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~60 min (over by ~15). Six-file wire-up landed working:
+  useChangePassword mutation, ChangePasswordPage (RHF + zodResolver,
+  mode:onChange, setError('root') for server errors, logout+redirect on
+  success), route + ProfilePage link + App.tsx registration. FIVE notes
+  (see table row): (1) clsx imported but NOT in package.json — only
+  resolves via react-toastify's transitive clsx@2.1.1; declare it as a
+  direct dep (cf tailwind/postcss fix b4376a6). (2) onError reads
+  data.errors[] FIRST, but 24.1's controller returns { message } (joined
+  string), so the array branch is DEAD — fix the controller to return
+  { errors } to light it up (this is 24.1 follow-up #2). (3) component
+  function named lowercase `changePasswordPage` — components must be
+  PascalCase. (4) `"..//routes"` double-slash typo. (5) Cancel button
+  from the spec omitted; stray console.log(profile) left in ProfilePage.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -8881,7 +8920,11 @@ YOUR TIME:
 
 CHALLENGE 24.4 — End-to-end test of both flows               Target: 25 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~5 min (beat target). No-code "run the app" round — walked
+  the forced + voluntary flows. Note: the test matrix passing does NOT
+  reveal 24.3's dead errors[] branch — test #9 ("root error from server")
+  shows because the { message } fallback fires, so both branches paint an
+  identical errors.root. Manual tests confirm UX, not internal paths.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -8938,7 +8981,7 @@ YOUR TIME:
   │ 8    │ /profile → "Change password" link  │ Page renders        │
   ├──────┼────────────────────────────────────┼─────────────────────┤
   │ 9    │ Submit current=wrong, strong new   │ root error from     │
-  │      │                                    │ server               │
+  │      │                                    │ server              │
   ├──────┼────────────────────────────────────┼─────────────────────┤
   │ 10   │ Submit current=correct, strong new │ Logout + redirect   │
   │      │                                    │ to /login           │
@@ -8959,7 +9002,54 @@ YOUR TIME:
 
 CHALLENGE 24.5 — Capstone: forgot-password (stubbed)         Target: 50 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~2 hr (over target by ~70 min). Full stubbed forgot/reset
+  flow shipped and working across 9 files: PasswordResetStore
+  (ConcurrentDictionary + TryRemove one-shot/atomic, 15-min TTL,
+  base64-url token), IPasswordResetStore, two [AllowAnonymous] auth
+  actions, Program.cs singleton, ForgotPasswordRequest/ResetPasswordRequest
+  DTOs, AuthService.ResetPasswordAsync, plus client routes/api/two pages/
+  Login link. WIRING CLEAN this round — routes registered in App.tsx,
+  api fns present, Login link in place, both pages in the tree. The
+  "route exists only when it's in the route tree" trap (23.2/23.4/24.3)
+  did NOT recur — lesson applied.
+
+  CONCEPT LOCKED — account enumeration defense: ForgotPassword ALWAYS
+  returns 200 "Check your inbox." regardless of whether the email
+  resolves; resetUrl is only built when emp != null, and devResetUrl is
+  only attached behind env.IsDevelopment(). A different status/message
+  for unknown emails would let an attacker harvest valid accounts. Same
+  family as the deliberately-vague "Invalid username or password" on login.
+  Token is opaque + one-shot: Consume() TryRemoves first (so a replay
+  finds nothing) THEN checks expiry — fetch-and-delete is atomic, two
+  concurrent requests can't both win.
+
+  CONTRACT CORRECT THIS TIME: reset-password returns { errors: [...] }
+  and ResetPasswordPage reads `.errors?.join(' ')` first — the two agree,
+  unlike 24.3's dead errors[] branch where the controller returned a
+  joined { message } string the array branch never saw. Fresh flow, got
+  the producer/consumer shape right on the first pass.
+
+  FOLLOW-UPS (work, but worth fixing):
+   (1) STRENGTH LOGIC DUPLICATED, NOT EXTRACTED — the spec (STEP 3) said
+       "Extract the shared strength logic into a private method to keep
+       both in sync." Instead ResetPasswordAsync is a verbatim copy of
+       ChangePasswordAsync's 5 regex rules + the "must differ" bonus.
+       Two copies WILL drift (and the zod client schema is a third). Pull
+       the rules into one private `ValidateStrength(string) -> List<string>`.
+   (2) 24.1's DEAD CODE STILL PRESENT — ChangePasswordAsync still has, AFTER
+       `if (errors.Count > 0) return`, the redundant second `oldHash`
+       re-check and the `NewPassword == OldPassword` guard (both already
+       covered above). Flagged as 24.1 follow-up #1; two rounds later,
+       unpruned. Delete on the next AuthService touch.
+   (3) MESSAGE WORDING — reset invalid/expired token returns "Invalid or
+       expired token." (spec wording was "Reset link is invalid or has
+       expired."). Harmless, but the spec text reads better to a user.
+
+  WHY IT TOOK 2x: first genuinely multi-layer feature in one sitting
+  (server store + DI + 2 endpoints + 2 DTOs + service method + 5 client
+  files) with no concrete before/after table to copy from — this was
+  closer to blank-slate authoring than the syntax-handed rounds (cf 24.2).
+  The time is the feature surface area, not a single blocker.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -9374,9 +9464,63 @@ views. We split it across 3 rounds (25/26/27) because the upload UX
 itself is rich.
 
 
-CHALLENGE 25.1 — Document domain + .NET CRUD                Target: 60 min
+CHALLENGE 25.1 — Document domain + .NET CRUD               Target: 120 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: ~120 min (on target after re-rating 60→120). Full clean-arch
+  slice shipped and working: Document + DocumentDto, IDocumentRepository
+  + DocumentRepository, IDocumentService + DocumentService (anti-traversal
+  GUID filenames, HashSet content-type whitelist, 5 MB cap, ownership/
+  role CanAccess), DocumentsController (mine/all/upload/download/delete),
+  DI in Program.cs. Endpoints verified end to end.
+
+  SPEC BUGS YOU CAUGHT AND FIXED (the reason this was a 120-min round, not
+  a copy job — the spec did NOT compile/run as written):
+
+   (1) FAKE JsonDataStore API — the spec told you to inject
+       `JsonDataStore<List<Document>>` and call `.ReadAsync()` +
+       `ReadModifyWriteAsync(list => { ...; return list; })` (a Func that
+       returns the list). That store does not exist in this repo. The
+       REAL one is `JsonDataStore<T>` where T is the ELEMENT type (it holds
+       the List<T> internally), with `ReadAllAsync()` and
+       `ReadModifyWriteAsync(Action<List<T>>)` — a void action you MUTATE
+       in place, no return. You matched the existing Employee repo:
+       `JsonDataStore<Document>`, `ReadAllAsync()`, and
+       `ReadModifyWriteAsync(list => { list.Add(doc); })`. Program.cs
+       registers `new JsonDataStore<Document>(...)` to match. LESSON: when
+       a spec hands you an API, confirm it against the ONE that already
+       exists in the codebase — don't trust the spec's invented signature.
+
+   (2) WRONG CLAIM FOR THE CALLER — the spec's controller read the username
+       via `User.Identity?.Name`. In this app the JWT sets
+       ClaimTypes.Name = "First Last" (the DISPLAY name) and the username
+       lives in Sub. `User.Identity?.Name` would feed "System Administrator"
+       into every ownership check and into ListMineAsync, while documents
+       store OwnerUsername = "admin" → no row ever matches, non-admins
+       locked out of their own files. You used the existing
+       `User.GetUsername()` extension (same one AuthController.ChangePassword
+       uses) which reads the username claim. This is a SILENT auth bug — it
+       compiles and only misbehaves at runtime.
+
+   (3) INTERFACE MISSING THE METHODS — DownloadAsync/DeleteAsync have to be
+       declared on IDocumentService, not just implemented on the class. The
+       controller is handed `IDocumentService` by DI; a method that lives
+       only on the concrete DocumentService is invisible through the
+       abstraction and won't call. CONCEPT (.NET, already known, reinforced):
+       program to the interface — the caller can only see what the interface
+       exposes, so every method the controller invokes must be on the
+       contract.
+
+  SMALLER ADJUSTMENTS: added ContentType null-guards the spec lacked
+  (`file.ContentType ?? ""` on the whitelist check, `?? "application/
+  octet-stream"` when storing); IFormFile/IWebHostEnvironment forced a
+  framework reference on the Application project (spec flagged this — the
+  service now depends on ASP.NET, accepted as pragmatic).
+
+  WHY 120 MIN IS THE RIGHT TARGET: this is the first full vertical slice
+  (model → DTO → repo → service → controller → DI) AND three of those
+  layers had spec defects you had to diagnose against the real codebase.
+  Authoring + debugging, not transcription. The old 40/60-min figures
+  assumed a clean copy-through.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -9823,7 +9967,15 @@ YOUR TIME:
 
 CHALLENGE 25.2 — TS types + query hooks (mine + all)        Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 20 min. Clean — validated against code, all four files match
+  spec. DEVIATION (justified, kept): typed fetchMyDocuments/fetchAllDocuments
+  as `Promise<AxiosResponse<DocumentDTO[]>>` instead of the spec's bare
+  `api.get<...>()`. This is the BETTER call — every other function in api.ts
+  carries the explicit AxiosResponse return type, so the spec's shorthand
+  would have been the odd one out. Renamed DocumentDto→DocumentDTO
+  consistently across Types/Document.ts, api.ts, and the hooks. documentKeys
+  (shared 'documents' root, mine/allAdmin/detail leaves) and both hooks
+  (enabled: user?.role==='Admin' gate on useAllDocuments) match spec.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -9958,7 +10110,13 @@ YOUR TIME:
 
 CHALLENGE 25.3 — My Documents page (list + delete)           Target: 50 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 15 min. Page + optimistic-delete wiring all present. Two bugs
+  caught in review and fixed: (1) useDeleteDocument mutationFn wasn't
+  returning deleteDocument(id) → fixed to return the promise so onError +
+  rollback work; (2) ConfirmModal double-printed its "Are you sure you want
+  to delete" prefix → message trimmed to just the filename. Correctly dropped
+  the spec's non-existent `title` prop; formatBytes, empty-state, and table
+  render match spec.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -10212,7 +10370,15 @@ YOUR TIME:
 
 CHALLENGE 25.4 — Authenticated download                     Target: 35 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 12 min. Clean — downloadDocument (responseType:'blob', typed
+  `Promise<AxiosResponse<Blob>>` consistent with the rest of api.ts),
+  triggerDownload (createObjectURL → appendChild → click → removeChild →
+  revokeObjectURL), and handleDownload all match spec. MINOR (not bugs):
+  (1) handleDownload is declared at module scope rather than inside the
+      component — works fine because it's pure (no hooks/props), just
+      unconventional. (2) `mr-3` sits on the right-most Download button so the
+      right-margin does nothing, and the Delete/Download order is reversed vs
+      spec (Delete first). Both cosmetic.
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -10345,7 +10511,16 @@ YOUR TIME:
 
 CHALLENGE 25.5 — Type/size validation (Zod for files)        Target: 30 min
 --------------------------------------------------------------------------
-YOUR TIME:
+YOUR TIME: 5 min. Clean — schema, both .refine() rules, safeParse helper all
+  match spec and work. GOOD CALL: used `result.error.issues` instead of the
+  spec's `.errors` — correct for Zod v4 (the repo is on zod@4.4.3, where
+  `.errors` is a deprecated alias and `.issues` is the real property). ONE
+  DEVIATION: dropped `as const` on ALLOWED_DOCUMENT_TYPES, so the array types
+  as `string[]` and `typeof ALLOWED_DOCUMENT_TYPES[number]` collapses to
+  `string` — the cast `file.type as string` is now a no-op. Compiles and runs
+  identically, but the readonly-tuple narrowing the GOTCHA was teaching is
+  lost. Add `as const` back to keep the lesson (and to catch typos in the
+  type list at compile time).
 
   ─────────────────────────────────────────────────────────────────────
   WHY THIS CHALLENGE EXISTS
@@ -24031,17 +24206,17 @@ Fill this in as you complete each challenge:
   23.2       | 25 min  | 12 min    | Beat target by ~13 min. Built useProfile — a useQuery wrapper on GET /profile (queryKey profileKeys.me(), staleTime 5min). THREE chained bugs, each a keeper: (1) RULES OF HOOKS — useProfile called after `if (loading) return` AND a duplicate call inside JSX; React tracks hooks by CALL ORDER (positional state slots), so any call below a conditional return desyncs them. Fix: every hook at top, before early returns; reuse the captured variable in JSX. .NET analog: locals matched to a backing array by declaration order — an early return that skips one shifts every later index. (2) Hook missing `return useQuery(...)` → inferred void → `profile.data` errored. (3) `profile` = RQ result WRAPPER (data/isLoading/isError/refetch), `profile.data` = payload (undefined while loading); idiom: `const { data, isLoading } = useProfile()`. TIME SINK: the `return` fix was on disk but VS Code type-checked a stale UNSAVED buffer — TS-server restart didn't clear it, but `tsc --noEmit` exited 0 (proved disk was clean). Re-typing + Save All fixed it. LESSON: editor vs compiler disagreement = trust tsc, the editor is reading a dirty buffer.
   23.3       | 30 min  | ~20 min   | Beat target by ~25 min. Profile route + display (Field label/value reading profile.data). TWO issues found + FIXED same session (tsc clean): (A) ROLE ON MODEL vs FORM — `profile.role` needs role on Employee, but uncommenting `role: Role` broke EmployeeForm (create `Omit<Employee,'id'>` + edit `Employee` payloads then demand role the zod form doesn't supply). role is AUTHZ data, not a form field. RESOLVED: added role to Employee + uncommented profile Field; excluded from payloads (createEmployee + create mutation/payload → `Omit<Employee,'id'|'role'>`, edit carries `role: employeeData.role` from loaded row, guarded). Earlier Omit "didn't work" = applied in wrong spot. Files: Models.ts, ProfilePage.tsx, api.ts, EmployeeForm.tsx. (B) STALE PROFILE ACROSS LOGIN — after logout+login as another user the old profile showed (cross-user data leak). NOT a staleTime bug (kept 5min — staleTime = refetch timing, not identity); root cause = logout cleared localStorage but NOT the RQ cache, and profileKeys.me() is a static key → user B read user A's entry. RESOLVED: `queryClient.clear()` in handleLogout (AuthLayout.tsx — inside QueryClientProvider; 17.1 put Auth outside it). staleTime kept; removing it only masked the bug.
   23.4       | 40 min  | ~60 min   | On target. Built ProfileEditPage (RHF + Zod profileSchema/ProfileFormData + updateProfile mutation → PUT /profile). FOUR snags, all fixed (tsc clean): (1) imported wrong schema export `ProfileFormValues` — actual export is `ProfileFormData`; renamed. (2) Profile TYPE CASING — Types/Profile exported lowercase `profile`, api.ts imported PascalCase `Profile` → "no exported member"; standardized on `Profile` (PascalCase TS convention) across Profile.ts / useProfile.ts / api.ts. (3) updateProfile RETURN TYPE — declared `Promise<AxiosResponse<void>>` but `api.put<Profile>` returns Profile; backend ProfileController returns `Ok(me)` (updated Employee), so fixed to `AxiosResponse<Profile>`. Lesson: api.put<T> generic + declared AxiosResponse<T> + the .NET action's actual return must all agree. (4) EDIT PAGE NOT VISIBLE — ProfileEditPage + `/profile/edit` in routes.ts + Edit link all existed, but the ROUTE was never registered in App.tsx (unsaved-file trap again, cf 23.2). Registered `routes.profileEdit()` → <ProfileEditPage /> under AuthLayout. Lesson: a route exists only when it's in the route tree; a component + path constant aren't enough. Cleanup: stray `debugger` in useProfile.ts queryFn to remove.
-  23.5       | 30 min  |           |  Feature/Profile: avatar upload
-  24.1       | 25 min  |           |  Feature/ChangePwd: endpoint
-  24.2       | 25 min  |           |  Feature/ChangePwd: strength schema
-  24.3       | 35 min  |           |  Feature/ChangePwd: form + logout
-  24.4       | 20 min  |           |  Feature/ChangePwd: forced flow test
-  24.5       | 30 min  |           |  Feature/ChangePwd: forgot-pwd stub
-  25.1       | 40 min  |           |  Feature/Docs: model + .NET CRUD
-  25.2       | 30 min  |           |  Feature/Docs: types + query hooks
-  25.3       | 35 min  |           |  Feature/Docs: My Documents page
-  25.4       | 25 min  |           |  Feature/Docs: download flow
-  25.5       | 20 min  |           |  Feature/Docs: type/size validation
+  23.5       | 30 min  | ~25 min   | Beat target by ~5 min. Built avatar upload (FormData + axios uploadAvatar → POST /profile/Avatar, IFormFile streamed to wwwroot/avatars/{id}{ext}, URL.createObjectURL preview + revoke cleanup, hidden-input/styled-label pattern, queryClient.setQueryData to refresh profile). POST-BUILD BUG (the real lesson): avatar showed right after upload (blob: preview) but vanished on refresh / navigation — img src "/avatars/{id}.jpg" 404'd from the API. Misdiagnosed first as an "incomplete URL"; the relative URL was correct. ROOT CAUSE: app.UseStaticFiles() binds its file provider to wwwroot ONCE, at startup. The API had been started BEFORE the first upload created wwwroot/, so ASP.NET bound a NULL file provider → every wwwroot/ request 404s forever, even files written there later. (Compounding risk: IWebHostEnvironment.WebRootPath may already be cached as null from build time, so creating the dir later doesn't rebind the auto-resolved provider.) FIX (Program.cs): Directory.CreateDirectory(wwwroot/avatars) BEFORE the middleware, and hand UseDefaultFiles/UseStaticFiles an explicit `new PhysicalFileProvider(webRoot)` so it never matters whether the folder pre-existed. Verified with curl: file existed on disk yet :5000 returned 404 → confirmed null-provider, not a routing/URL issue. CONCEPT LOCKED: static-file middleware is bind-once-at-registration, like a FileSystemWatcher rooted at a path that didn't exist — creating the dir afterward doesn't retroactively rebind. Restart required to pick up the fix. Round 23 capstone (read-edit-upload profile) complete.
+  24.1       | 25 min  | ~10 min   | Beat target by ~15 min. Strengthened the change-password endpoint: added `record ChangePasswordResult(bool Success, IReadOnlyList<string> Errors)`, rewrote ChangePasswordAsync to COLLECT every failure (length<8, lower/upper/digit/special via Regex.IsMatch char classes) instead of short-circuiting, plus the "must differ from current" bonus rule; widened IAuthService bool→ChangePasswordResult; AuthController now branches on result.Success. Build clean. THREE FOLLOW-UPS (work but worth fixing): (1) DEAD CODE — after `if (errors.Count > 0) return`, the old implementation's two guards are still there: a second `user.PasswordHash != oldHash` check (old password already verified at the top) and a `NewPassword == OldPassword` check (already covered by the "must differ" bonus rule that hashes newPw). Both unreachable when errors exist, redundant otherwise — prune. (2) CONTROLLER FLATTENS THE ARRAY — returns `BadRequest(new { message = string.Join(", ", result.Errors) })`, collapsing the structured error list into one string. The whole point of the result record (NEW HERE #1) is a flat array the client renders per-rule; 24.3's RHF form will want `errors` as an array → return `new { errors = result.Errors }` instead. (3) TYPE PLACEMENT — record nested inside AuthService and pulled into IAuthService via `using static EmployeeManager.Application.Services.AuthService` compiles fine, but a top-level type in the namespace (or its own file, as the spec offered) is the conventional home for a shared result DTO; nesting couples the interface to the implementation's class. Also dropped the prior _logger.LogWarning/LogInformation calls — fine for now, but auth-failure logging is worth keeping. CONCEPT: validation that collects all failures (accumulate-then-return) vs fail-fast — for user-facing forms, accumulate so the user fixes everything in one pass.
+  24.2       | 5-10min | ~5 min    | On target after recalibration (was 25 min — too high for a single syntax-handed schema file). Built changePasswordSchema.ts: 4 chained .regex() char-class rules on newPassword + two cross-field .refine()s (newPassword===confirm with path:['confirm']; newPassword!==oldPassword with path:['newPassword']), exported `type ChangePasswordFormData = z.infer<...>`. BUG: newPassword's .min(8) carries the message "must be at least 6 characters" — message/rule mismatch, fix the text to 8. Minor: oldPassword .min(6) vs spec .min(1) (harmless UX choice). Type name ChangePasswordFormData is correct — matches the ProfileFormData convention locked in 23.4 (not the spec's stale ...FormValues). RECALIBRATION NOTE: this is a "syntax-reference" round — the spec hands the full Zod API and the user copy-adapts + verifies; it is NOT blank-slate authoring, so the original 25/40-min target never fit. Schema-only single-file rounds run ~5 min. CONCEPT (already known, reinforced): chained .regex() = one error per failing rule (vs a mega-regex's single blanket error); cross-field rules need .refine() with explicit `path` or the error lands on the form root.
+  24.3       | 35 min  | ~60 min   | Over by ~25. Six-file voluntary change-password flow, all working: useChangePassword (bare mutation, no toast/nav — side-effects live in the page), ChangePasswordPage (RHF + zodResolver, mode:onChange, isValid+isSubmitting+mutation.isPending gating the Submit, setError('root') with inline banner, logout()+navigate(login,{replace}) on success), routes.changePassword(), ProfilePage link, App.tsx route registration. FIVE FOLLOW-UPS: (1) DEP UNDECLARED — `import clsx` but clsx is NOT in package.json; it only resolves because react-toastify pulls clsx@2.1.1 transitively (`npm ls clsx` → react-toastify→clsx). A toastify bump that drops it, or a clean install with different hoisting, breaks the build. Add clsx to dependencies — same lesson as the tailwind/postcss declare fix (b4376a6). (2) DEAD SERVER-ERROR BRANCH — onError reads `err.response?.data?.errors` (array) first and only falls back to `.message`, but 24.1's AuthController returns `{ message = string.Join(", ", result.Errors) }` with no `errors` field, so the array branch NEVER fires. Two coupled rounds disagree on the contract; fix the controller to return `{ errors = result.Errors }` (24.1 follow-up #2) to activate per-rule rendering. (3) COMPONENT CASE — the function is `const changePasswordPage = ...` (lowercase) with `export default changePasswordPage`. Works only because it's consumed via default import as <ChangePasswordPage/>; if ever written `<changePasswordPage/>` JSX treats a lowercase tag as a DOM element. React components must be PascalCase. (4) `import { routes } from "..//routes"` — double-slash path typo, resolves but sloppy. (5) SCOPE/CLEANUP — spec's Cancel button (type=button → navigate to profile) omitted; stray `console.log(profile)` left in ProfilePage.tsx from earlier debugging, and AvatarUpload gets `currentUrl={profile.avatarUrl ?? ""}` ("" vs undefined — harmless, undefined is cleaner). CONCEPT (reinforced): per-call `.mutate(values, { onSuccess, onError })` keeps generic mutation logic in the hook while component-specific side-effects (logout, setError, navigate) stay in the page; sensitive-mutation pattern = force re-login because the old 15-min JWT outlives the password change.
+  24.4       | 20 min  | ~5 min    | Beat target by ~15. No-code round — manual test matrix across both change-password callers (forced flow from 20.4 + voluntary from 24.3, shared 24.1 server policy). Flows verified working. OBSERVATION worth keeping: a green test matrix does NOT expose 24.3's dead errors[] branch — test #9 (wrong current password → "root error from server") passes because the `{ message }` fallback sets errors.root identically to how the array branch would, so the two code paths are visually indistinguishable from the UI. Manual black-box testing validates behaviour, not internal branch coverage — the dead branch only shows up by reading the code or by making the backend actually return an `errors` array.
+  24.5       | 30 min  | ~120 min  | Over by ~90. Full stubbed forgot/reset-password flow, 9 files, working: PasswordResetStore (ConcurrentDictionary + atomic TryRemove one-shot token, 15-min TTL, base64-url) + IPasswordResetStore + Program.cs singleton; two [AllowAnonymous] actions (forgot/reset); ForgotPasswordRequest/ResetPasswordRequest DTOs; AuthService.ResetPasswordAsync; client routes/api/ForgotPasswordPage/ResetPasswordPage/Login link. WIRING CLEAN — App.tsx routes registered, api fns + Login link present, both pages in tree: the "route exists only in the route tree" trap (23.2/23.4/24.3) did NOT recur. CONCEPT LOCKED — account-enumeration defense: forgot-password ALWAYS returns 200 "Check your inbox" whether or not the email resolves; resetUrl built only when emp!=null, devResetUrl only behind env.IsDevelopment(); same family as the vague login error. One-shot token: Consume() TryRemoves THEN checks expiry, so replays/concurrency can't both win. CONTRACT CORRECT THIS TIME: reset returns { errors:[...] } and the page reads `.errors?.join(' ')` first — they agree (unlike 24.3's dead errors[] branch). FOLLOW-UPS: (1) STRENGTH LOGIC DUPLICATED not extracted — ResetPasswordAsync is a verbatim copy of ChangePasswordAsync's 5 regex rules + "must differ"; spec said extract to a shared private method; 2 server copies + zod = 3 places to drift. (2) 24.1's DEAD CODE STILL THERE — ChangePasswordAsync keeps the redundant post-return oldHash recheck + NewPassword==OldPassword guard (24.1 follow-up #1, unpruned 2 rounds later). (3) reset invalid-token message "Invalid or expired token." vs spec's friendlier wording (harmless). TIME: feature surface area (store+DI+2 endpoints+2 DTOs+service+5 client files), no before/after table to copy — closer to blank-slate than the syntax-handed 24.2; not a single blocker.
+  25.1       | 120 min | ~120 min  | On target (re-rated 40→120). Full clean-arch slice working: Document + DocumentDto, IDocumentRepository + DocumentRepository, IDocumentService + DocumentService (GUID anti-traversal filenames, HashSet content-type whitelist, 5 MB cap, ownership/role CanAccess), DocumentsController (mine/all/upload/download/delete), Program.cs DI. Endpoints verified end to end. THE SPEC DID NOT RUN AS WRITTEN — three defects caught + fixed against the real codebase: (1) FAKE STORE API — spec said inject `JsonDataStore<List<Document>>` + `.ReadAsync()` + `ReadModifyWriteAsync(list => {...; return list;})`; the real store is `JsonDataStore<T>` (element type), `ReadAllAsync()`, and `ReadModifyWriteAsync(Action<List<T>>)` mutated in place — matched the existing Employee repo (`JsonDataStore<Document>`, register `new JsonDataStore<Document>(...)`). Lesson: validate a handed API against the one already in the repo. (2) WRONG CALLER CLAIM — spec read `User.Identity?.Name`, but the JWT puts the display name ("First Last") in ClaimTypes.Name and the username in Sub; that would feed "System Administrator" into ownership checks vs stored OwnerUsername "admin" → no rows match, non-admins locked out of their own docs. Fixed to the existing `User.GetUsername()` extension (as AuthController.ChangePassword uses). Silent runtime auth bug — compiles fine. (3) INTERFACE MISSING METHODS — DownloadAsync/DeleteAsync must be DECLARED on IDocumentService, not just on the class; the controller is handed the interface by DI and can't see concrete-only methods. Concept: program to the interface. Minor: added ContentType null-guards (`?? ""` / `?? "application/octet-stream"`) the spec lacked; IFormFile/IWebHostEnvironment forced a framework ref on the Application project. TIME: first full vertical slice AND three layers had spec defects to diagnose — authoring + debugging, not transcription, so 40/60 was never realistic.
+  25.2       | 30 min  | ~20 min   | Beat target by ~10. Types + query hooks, all four files match spec. Justified deviation: typed both fetch fns as Promise<AxiosResponse<DocumentDTO[]>> (matches the existing api.ts convention — better than the spec's bare shorthand). Renamed DocumentDto→DocumentDTO throughout. documentKeys + enabled-gated useAllDocuments correct. Clean.
+  25.3       | 35 min  | ~15 min   | Under target. Two bugs caught in review and fixed: useDeleteDocument mutationFn now returns deleteDocument(id) (onError + optimistic rollback work); ConfirmModal message trimmed to just the filename (was double-printing the "Are you sure you want to delete" prefix). Correctly dropped the non-existent `title` prop.
+  25.4       | 25 min  | ~12 min   | Beat target by ~13. Clean. responseType:'blob' + AxiosResponse<Blob> typing consistent with file convention; triggerDownload + handleDownload match spec. Cosmetic only: handleDownload at module scope (pure, fine); `mr-3` on the right-most Download button is a no-op and Delete/Download order is reversed vs spec.
+  25.5       | 20 min  | ~5 min    | Beat target by ~15. Clean Zod file schema (instanceof + size/type .refine() + safeParse helper). GOOD CALL: used result.error.issues, not the spec's .errors — correct for Zod v4 (repo on 4.4.3, .errors deprecated). ONE DEVIATION: dropped `as const` on ALLOWED_DOCUMENT_TYPES → array types as string[], so the `as typeof ...[number]` cast degrades to a no-op `as string`; runs fine but loses the readonly-tuple narrowing the GOTCHA taught. Add `as const` back.
   26.1       | 25 min  |           |  Feature/DocsUpload: basic form
   26.2       | 30 min  |           |  Feature/DocsUpload: progress bar
   26.3       | 30 min  |           |  Feature/DocsUpload: drag-drop
@@ -24288,6 +24463,122 @@ FORWARD-LOOKING NOTES                                          (2026-06-01)
      exists (no self-registration). Gmail-authenticated users skip the
      forced first-login password change.
 
+  5. PERSISTENCE: JSON → EF CORE (SQLite).               (raised 2026-06-05)
+     Replace the JSON file store with EF Core on SQLite to practice real
+     data access. SQLite needs no server/install — it's a NuGet package
+     (Microsoft.EntityFrameworkCore.Sqlite) + a single .db file, so the
+     footprint stays as light as the current JSON files. The repository
+     abstraction already supports the swap: IEmployeeRepository /
+     IDocumentRepository live in Domain, JSON impls in Infrastructure,
+     wired in Program.cs — only the implementations + DI lines change;
+     Application/API/Client untouched. Scope when scheduled: AppDbContext
+     + DbSets, IEntityTypeConfiguration fluent config (keep EF attributes
+     OUT of Domain models), `dotnet ef` migration, admin seed via
+     HasData(), one-line Program.cs swap per repo. ReadModifyWriteAsync's
+     atomic pattern is replaced by transactions + SaveChanges + concurrency
+     tokens. Decide InMemory-vs-SQLite NOT in scope — SQLite chosen (EF
+     InMemory skips migrations + SQL translation, teaches little). Plan the
+     round split (one repo as worked template, the other solo) once the
+     current feature track completes.
+
 <!-- ════════════════════════════════════════════════════════════════════ -->
 <!-- END ADDED 2026-06-01                                                   -->
+<!-- ════════════════════════════════════════════════════════════════════ -->
+
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- ADDED 2026-06-05 — enterprise HRMS module expansion (scope agreed       -->
+<!-- 2026-06-05). Listed in intended build order; not yet scheduled into     -->
+<!-- rounds. Mirror into ROADMAP.md when rounds are cut.                     -->
+<!-- ════════════════════════════════════════════════════════════════════ -->
+
+══════════════════════════════════════════════════════════════════════════
+ENTERPRISE HRMS MODULE EXPANSION                               (2026-06-05)
+══════════════════════════════════════════════════════════════════════════
+
+  Goal: take the system from "core HR" to an enterprise HRMS firms can run
+  on. Ordered by intended build sequence (dependencies first). Most of these
+  are workflow modules — they reuse one engine: a state machine + an
+  approval chain resolved from line management and gated by PBAC (see
+  FORWARD-LOOKING NOTE 1). Build that engine once; each module configures it.
+
+  6. HELP DESK / CASE MANAGEMENT.                          (PRIORITIZED)
+     HR ticketing — employees raise cases (queries, grievances, IT/HR
+     requests); cases route to a queue/agent, carry a status lifecycle
+     (Open → In Progress → Resolved → Closed), SLA timers, comments, and an
+     audit trail. First real consumer of the shared workflow + notification
+     surface — build it early so the engine is proven before the heavier
+     modules lean on it.
+
+  7. ORG CHART & POSITION MANAGEMENT.                       (FOUNDATIONAL)
+     Reporting lines, manager/report relationships, positions, and
+     headcount. Foundational because every approval workflow below resolves
+     its approver chain from line management — this is the data those
+     workflows read. Includes an org-tree view and "who reports to whom".
+
+  8. ATTENDANCE & SHIFTS.
+     Clock in/out (geo/biometric-ready), shift rosters, overtime, and
+     regularization requests. Feeds Time Tracking and, later, Payroll.
+
+  9. EXPENSE & REIMBURSEMENT.                               (WORKFLOW)
+     Claim submission with receipts; approvals flow up the claimant's LINE
+     MANAGEMENT chain (resolved from the org chart, module 7), each stage
+     gated by PBAC. Reuses the shared approval engine.
+
+ 10. TRAVEL MANAGEMENT.                                     (WORKFLOW)
+     Travel requests, bookings, and per-diem; same line-management approval
+     chain as Expense. Often pairs with an expense claim on return.
+
+ 11. COMPLIANCE & POLICY.
+     Statutory documents and policy acknowledgements — publish a policy,
+     require employees to read + acknowledge, track who has/hasn't, and keep
+     an immutable record (ties into the Audit Log).
+
+ 12. RECRUITMENT / ATS — INTERVIEW WORKFLOW.               (WORKFLOW, PBAC)
+     Focus is the WORKFLOW, not job-board breadth: a candidate's resume and
+     interview feedback flow from one user to the next along a PREDEFINED
+     pipeline (e.g. screen → tech round → manager round → offer), where each
+     stage's reviewer and their allowed actions are determined by PBAC.
+     Each stage hands the package (resume + accumulated feedback) forward;
+     the next reviewer sees prior feedback per their permissions.
+
+ 13. ASSET MANAGEMENT.                                      (BEFORE EXIT)
+     Devices/equipment issued to employees — assignment, custody history,
+     and condition. Deliberately sequenced BEFORE Offboarding because exit
+     clearance depends on knowing what assets a leaver must return.
+
+ 14. OFFBOARDING / EXIT.
+     Resignation/exit workflow: clearance checklist, asset return (consumes
+     module 13), knowledge handover, and full-and-final settlement. Mirrors
+     the Onboarding Wizard at the other end of the lifecycle.
+
+ 15. ANALYTICS & REPORTING.
+     Attrition, headcount, and operational dashboards with custom/exportable
+     reports. Sits late because it aggregates data the modules above produce.
+
+ 16. MULTI-TENANCY / SaaS.                                  (PLATFORM)
+     Turn the app into a SaaS product: users from multiple organizations log
+     in to the same deployment and see ONLY their own company's data. Tenant
+     identity is bound to the account (resolved at login and carried in the
+     token); every query is tenant-scoped at the data layer so cross-tenant
+     leakage is impossible by construction. Pairs with the PBAC work
+     (permissions become per-tenant) and the EF Core migration (note 5 —
+     a tenant discriminator/row filter is far cleaner in EF than in the JSON
+     store). This is the largest architectural shift on the list.
+
+ 17. MULTI-LINGUAL SUPPORT / LOCALIZATION.                  (PLATFORM)
+     Full i18n: UI strings externalized to locale resource bundles,
+     per-user/per-tenant language preference, plus locale-aware dates,
+     numbers, and currency. Client-side i18n (e.g. i18next) on the React
+     side; resource-based localization on the API for server-generated text
+     (emails, validation messages).
+
+ 18. PAYROLL & COMPENSATION.                               (LAST)
+     Salary structures, pay runs, payslips, tax and statutory deductions.
+     Sequenced last — it depends on attendance, leave, expenses, and a
+     hardened permission/tenant model, and carries the highest correctness
+     and compliance bar.
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- END ADDED 2026-06-05                                                   -->
 <!-- ════════════════════════════════════════════════════════════════════ -->

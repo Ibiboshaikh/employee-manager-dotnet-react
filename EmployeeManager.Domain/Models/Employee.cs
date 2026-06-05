@@ -91,4 +91,5 @@ public class Employee
     public string? PasswordHash { get; set; }
     public string Role { get; set; } = "Employee";   // Admin|Manager|Employee
     public bool MustChangePassword { get; set; } = true; // Force password change on first login
+    public string? AvatarUrl { get; set; }
 }

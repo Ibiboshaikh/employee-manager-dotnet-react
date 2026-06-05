@@ -33,6 +33,7 @@ using System.IdentityModel.Tokens.Jwt;    // JwtSecurityToken, JwtSecurityTokenH
 using System.Security.Claims;              // Claim, ClaimTypes
 using System.Security.Cryptography;        // HMACSHA256 for password hashing
 using System.Text;                         // Encoding.UTF8
+using System.Text.RegularExpressions;
 using EmployeeManager.Domain.Models;       // User, LoginRequest, LoginResponse
 using EmployeeManager.Domain.Repositories; // IUserRepository
 using Microsoft.Extensions.Configuration;  // IConfiguration (reads appsettings.json)
@@ -259,33 +260,78 @@ public class AuthService : IAuthService
         return Convert.ToBase64String(hash);
     }
 
-    public async Task<bool> ChangePasswordAsync(string userName, ChangePasswordRequest request)
+    public record ChangePasswordResult(bool Success, IReadOnlyList<string> Errors);
+
+    public async Task<ChangePasswordResult> ChangePasswordAsync(string userName, ChangePasswordRequest request)
     {
         var user = await _employeeRepository.GetByUsernameAsync(userName);
-        if (user == null) return false; // User not found
+        if (user == null) return new ChangePasswordResult(false, new [] {"User not found"}); // User not found
+
+        if (user.PasswordHash != HashPassword(request.OldPassword)) 
+            return new ChangePasswordResult(false, new [] {"Old password is incorrect"}); // Old password is incorrect  
+        
+        var errors = new List<string>();
+        var newPw = request.NewPassword ?? string.Empty;
+
+        if (newPw.Length < 8)
+            errors.Add("Must be at least 8 characters.");
+        if (!Regex.IsMatch(newPw, @"[a-z]"))
+            errors.Add("Must contain a lowercase letter.");
+        if (!Regex.IsMatch(newPw, @"[A-Z]"))
+            errors.Add("Must contain an uppercase letter.");
+        if (!Regex.IsMatch(newPw, @"\d"))
+            errors.Add("Must contain a digit.");
+        if (!Regex.IsMatch(newPw, @"[^a-zA-Z0-9]"))
+            errors.Add("Must contain a special character.");
+
+        // 3. Bonus rule — don't allow re-using the same password.
+        if (errors.Count == 0 && user.PasswordHash == HashPassword(newPw))
+            errors.Add("New password must differ from current password.");
+
+        if (errors.Count > 0)
+            return new ChangePasswordResult(false, errors);
+        
         var oldHash = HashPassword(request.OldPassword);
-        if (user.PasswordHash != oldHash)
-        {
-            _logger.LogWarning("Change password failed — invalid old password for user: {Username}", userName);
-            return false; // Old password is incorrect
-        }
+        if (user.PasswordHash != oldHash) return new ChangePasswordResult(false, new [] {"Old password is incorrect"});
 
-        if(string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 8)
-        {
-            _logger.LogWarning("Change password failed — new password does not meet complexity requirements for user: {Username}", userName);
-            return false; // New password doesn't meet complexity requirements
-        }
+        if(request.NewPassword == request.OldPassword) 
+            return new ChangePasswordResult(false, new [] {"New password is the same as the old password"}); // New password is the same as the old password
 
-        if(request.NewPassword == request.OldPassword)
-        {
-            _logger.LogWarning("Change password failed — new password is the same as the old password for user: {Username}", userName);
-            return false; // New password is the same as the old password
-        }
-
-        user.PasswordHash = HashPassword(request.NewPassword);
+        user.PasswordHash = HashPassword(request.NewPassword!);
         user.MustChangePassword = false; // Clear the flag after successful password change
         await _employeeRepository.UpdateAsync(user);
-        _logger.LogInformation("Password changed successfully for user: {Username}", userName);
-        return true;
+        return new ChangePasswordResult(true, Array.Empty<string>());
+    }
+
+    public async Task<ChangePasswordResult> ResetPasswordAsync(string userName, string newPassword)
+    {
+        var user = await _employeeRepository.GetByUsernameAsync(userName);
+        if (user == null) return new ChangePasswordResult(false, new [] {"User not found"}); // User not found
+
+        var errors = new List<string>();
+        var newPw = newPassword ?? string.Empty;
+
+        if (newPw.Length < 8)
+            errors.Add("Must be at least 8 characters.");
+        if (!Regex.IsMatch(newPw, @"[a-z]"))
+            errors.Add("Must contain a lowercase letter.");
+        if (!Regex.IsMatch(newPw, @"[A-Z]"))
+            errors.Add("Must contain an uppercase letter.");
+        if (!Regex.IsMatch(newPw, @"\d"))
+            errors.Add("Must contain a digit.");
+        if (!Regex.IsMatch(newPw, @"[^a-zA-Z0-9]"))
+            errors.Add("Must contain a special character.");
+
+        // 3. Bonus rule — don't allow re-using the same password.
+        if (errors.Count == 0 && user.PasswordHash == HashPassword(newPw))
+            errors.Add("New password must differ from current password.");
+
+        if (errors.Count > 0)
+            return new ChangePasswordResult(false, errors);
+
+        user.PasswordHash = HashPassword(newPassword!);
+        user.MustChangePassword = false; // Clear the flag after successful password reset
+        await _employeeRepository.UpdateAsync(user);
+        return new ChangePasswordResult(true, Array.Empty<string>());
     }
 }

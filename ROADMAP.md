@@ -115,6 +115,7 @@ was chosen over the alternatives.
 | `@hookform/resolvers`            | 5.4     | Round 19   | Bridges Zod schemas into React Hook Form via `zodResolver(schema)`.                     |
 | `zustand`                        | 5.0     | Round 22   | Lightweight global-state store. Backs theme (dark mode) and recent-activity with selective subscriptions (`useShallow` for object selectors), `persist` + `devtools` middleware; reduces prop drilling without Context re-render fan-out. |
 | `date-fns`                       | 4.4     | Round 23.3 | Deterministic date formatting on the profile page. Avoids `toLocaleDateString` locale drift. |
+| `clsx`                           | 2.1     | Round 24.3 | Conditional `className` composition (error-state inputs on the change-password form, status badges). Standard Tailwind companion; promoted from a transitive dependency to a declared one. |
 | `@testing-library/react`         | 16.3    | (CRA default) | Component testing library. Active use begins Round 42.                              |
 | `@testing-library/jest-dom`      | 6.9     | (CRA default) | Custom Jest matchers for DOM assertions (`toBeInTheDocument`, etc.).                |
 | `@testing-library/user-event`    | 13.5    | (CRA default) | User-interaction simulation for tests.                                              |
@@ -123,8 +124,11 @@ was chosen over the alternatives.
 
 > **Resolved (Tailwind, Round 21):** `tailwindcss` (3.4), `postcss` (8.5),
 > and `autoprefixer` (10.5) are now declared in `package.json`, so a clean
-> `npm install` restores the build. `clsx` is still not installed — adopt it
-> (to `dependencies`) only if conditional `className` composition is needed.
+> `npm install` restores the build.
+>
+> **Resolved (`clsx`, Round 24.3):** `clsx` (2.1) was being resolved
+> transitively (via `react-toastify`); it is now a declared `dependency`, so
+> the build no longer relies on a transitive hoist.
 
 ### Frontend dependencies (planned)
 
@@ -133,7 +137,6 @@ before installation, not retrofitted afterwards.
 
 | Package                  | Planned round | Why                                                                                  |
 | ------------------------ | ------------- | ------------------------------------------------------------------------------------ |
-| `clsx`                   | Round 21.2    | Conditional `className` composition. Standard companion to Tailwind. (Not yet installed.) |
 | `react-day-picker`       | Round 29.4    | Date-range picker for leave-request form.                                             |
 | `recharts`               | Round 34.3    | Chart library for manager dashboard KPIs.                                             |
 | `@microsoft/signalr`     | Round 41      | Real-time client for SignalR hub (live notifications, presence).                      |
@@ -150,7 +153,7 @@ packages have been added yet. References used:
 | ------------------------------------------------------- | -------------------------------------- |
 | `Microsoft.AspNetCore.Authentication.JwtBearer`         | JWT validation middleware              |
 | `Microsoft.IdentityModel.Tokens` / `System.IdentityModel.Tokens.Jwt` | JWT token generation      |
-| `Microsoft.AspNetCore.Http.Features`                    | `IFormFile` for multipart uploads (Round 25) |
+| `Microsoft.AspNetCore.App` (FrameworkReference, Application project) | Exposes `IFormFile` and `IWebHostEnvironment` to the Application layer for document upload/storage (added Round 25.1). |
 
 Planned:
 - `BCrypt.Net-Next` when password hashing is upgraded from HMAC-SHA256
@@ -163,8 +166,9 @@ Planned:
 
 ## Current state
 
-As of 2026-06-02, foundation work is complete and the first feature
-module (My Profile) is underway.
+As of 2026-06-05, foundation work is complete and the first three feature
+modules (My Profile, Change Password / password reset, and Documents) are
+complete.
 
 | Area                                   | State                    |
 | -------------------------------------- | ------------------------ |
@@ -176,7 +180,9 @@ module (My Profile) is underway.
 | Auth hardening (refresh, first-login, route guards) | Complete (one follow-up) |
 | Styling (Tailwind)                     | Complete                 |
 | Client state (Zustand)                 | Complete                 |
-| Feature: My Profile (Round 23)         | In progress (23.1–23.4 done) |
+| Feature: My Profile (Round 23)         | Complete (incl. avatar upload, 23.5) |
+| Feature: Change Password + password reset (Round 24) | Complete                 |
+| Feature: Documents — list, delete, download, file validation (Round 25) | Complete |
 
 Auth hardening detail: refresh-token rotation (20.1), axios refresh
 interceptor (20.2), User-into-Employee aggregate consolidation (20.3,
@@ -188,10 +194,15 @@ that could not be located — tracked in `CHALLENGES.md`).
 Styling: Round 21 — Tailwind refactor, design tokens, dark mode, and
 `@apply` button patterns — is complete. Client state: Round 22 is
 complete — theme and recent-activity stores migrated to Zustand with
-`persist` + `devtools` middleware and `useShallow` selectors. Feature
-modules have begun: Round 23 (My Profile) is underway with 23.1–23.4
-done (types, `useProfile`/`useUpdateProfile` hooks, display page, and the
-RHF + Zod edit page); 23.5 (avatar upload) is next.
+`persist` + `devtools` middleware and `useShallow` selectors. Three feature
+modules are complete: Round 23 (My Profile — types, `useProfile`/
+`useUpdateProfile` hooks, display page, RHF + Zod edit page, avatar upload);
+Round 24 (authenticated change-password with accumulate-all validation, plus
+a stubbed forgot/reset-password flow with one-shot tokens); and Round 25
+(Documents — full clean-architecture slice: GUID-named storage, ownership/
+role access checks, list + optimistic delete, authenticated blob download,
+and Zod file-type/size validation). Round 26 (the document upload UI) is
+next.
 
 Detailed per-task history is tracked in [`CHALLENGES.md`](./CHALLENGES.md).
 
@@ -245,13 +256,15 @@ primitives.
 
 Dates are target windows, not commitments.
 
-**Basis (re-estimated 2026-06-02):** 282 challenges total, 82 complete
-(through 23.4), **200 remaining**. The original "mid-December" estimate
-assumed one challenge per day. Observed cadence is higher — 8 challenges
-(22.2 → 23.4) were completed on 2026-06-02, and per-task targets are
-consistently beaten by 50–75%. The estimate below assumes a sustained
-average of **~3 challenges per active day (~15/week)**, which is between
-the observed burst rate and a conservative steady pace.
+**Basis (re-estimated 2026-06-05):** 282 challenges total, 93 complete
+(through 25.5), **189 remaining**. The original "mid-December" estimate
+assumed one challenge per day. Observed cadence remains higher — 11
+challenges (23.5 → 25.5) were completed in the three days since the last
+estimate (~3.7/day), and per-task targets are consistently beaten by
+50–75%. The estimate below assumes a sustained average of **~3 challenges
+per active day (~15/week)**, which is between the observed burst rate and a
+conservative steady pace. Because pace held, the milestone windows below are
+unchanged from the 2026-06-02 estimate.
 
 | Milestone                          | Target (~15/week)   |
 | ---------------------------------- | ------------------- |
@@ -260,12 +273,12 @@ the observed burst rate and a conservative steady pace.
 | Phase 1 modules complete (~Rd 40)  | Mid-July 2026       |
 | Phase 2 platform work complete     | Early September 2026 |
 
-Sensitivity to cadence (200 remaining, every-calendar-day basis):
+Sensitivity to cadence (189 remaining, every-calendar-day basis):
 
 | Pace            | Project complete    |
 | --------------- | ------------------- |
 | 1 / day         | ~Mid-December 2026  |
-| 2 / day         | ~Mid-September 2026 |
+| 2 / day         | ~Early September 2026 |
 | 3 / day         | ~Early August 2026  |
 | 4 / day         | ~Late July 2026     |
 

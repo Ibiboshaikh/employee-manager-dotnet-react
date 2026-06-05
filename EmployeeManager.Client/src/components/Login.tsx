@@ -41,7 +41,7 @@ import { isAxiosError } from 'axios';
 
 // useNavigate: a React Router hook that returns a function to change the URL.
 // It's like Response.Redirect() in .NET — it changes the page programmatically.
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 // login: our API function from api.ts that sends POST /api/auth/login.
 // It's imported as a named import (with curly braces) because api.ts uses export const.
@@ -52,6 +52,7 @@ import { useAuth } from "../Context/AuthContext";
 // toast: a function to show popup notification messages.
 // toast.success("msg") shows a green popup, toast.error("msg") shows a red one.
 import { toast } from "react-toastify";
+import { routes } from "../routes";
 
 // ── THE LOGIN COMPONENT ────────────────────────────────────────────────────
 
@@ -215,6 +216,10 @@ const Login = () => {
             {loading ? "Signing in..." : "Sign In"}
           </button>
         </form>
+
+        <p style={{ textAlign: 'center', marginTop: 12 }}>
+          <Link to={routes.forgotPassword()}>Forgot password?</Link>
+        </p>
 
         {/* Hint showing default credentials */}
         <p style={styles.hint}>

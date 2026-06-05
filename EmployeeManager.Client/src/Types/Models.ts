@@ -15,6 +15,7 @@ export interface Employee {
     isActive: boolean;
     mustChangePassword: boolean;
     role: Role;
+    avatarUrl?: string;
 }
 
 export interface User {
