@@ -252,3 +252,9 @@ export const deleteDocument = (id: string): Promise<AxiosResponse<void>> => api
 
 export const downloadDocument = (id: string): Promise<AxiosResponse<Blob>> => api
   .get(`/documents/${id}/download`, { responseType: 'blob', });
+
+export const uploadDocument = (file: File): Promise<AxiosResponse<DocumentDTO>> => {
+  const fd = new FormData();
+  fd.append('file', file);
+  return api.post<DocumentDTO>('/documents', fd);
+}

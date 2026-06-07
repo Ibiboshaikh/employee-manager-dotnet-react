@@ -16,8 +16,10 @@ export interface StatusBadgeProps {
 // Spreads shared badge styles, then overrides backgroundColor per status.
 // JS equivalent of: class="badge active" or class="badge inactive"
 const StatusBadge = ({ employee }: StatusBadgeProps) => (
-    <span className={clsx('inline-block px-2 py-0.5 rounded text-xs font-semibold',
-        employee.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-200 text-gray-700 dark:text-gray-300',
+    <span className={clsx('inline-block px-2.5 py-0.5 rounded-full text-xs font-medium',
+        employee.isActive
+            ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
+            : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
     )}>
         {employee.isActive ? "Active" : "Inactive"}
     </span>

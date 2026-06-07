@@ -1,4 +1,4 @@
-# Employee Manager - Learning Challenges
+# NoviManager - Learning Challenges
 
 Domain: Employee self-service system. Every employee logs in to manage
 their own documents, attendance, leave, etc. `admin` is an Employee
@@ -117,8 +117,8 @@ YOUR TIME: 1 Minute
 
   TASK:
   1. Open EmployeeManager.Client/src/components/Login.js
-  2. Find the text "Employee Manager" (it's in an <h2> tag)
-  3. Change it to "Employee Manager v2.0"
+  2. Find the text "NoviManager" (it's in an <h2> tag)
+  3. Change it to "NoviManager v2.0"
   4. Save the file
   5. Look at the browser — it updated WITHOUT refreshing!
 

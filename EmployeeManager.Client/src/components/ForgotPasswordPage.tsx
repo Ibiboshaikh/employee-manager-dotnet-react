@@ -22,33 +22,38 @@ const ForgotPasswordPage = () =>{
     };
 
     return (
-        <div className="max-w-md mx-auto p-6">
-            <h1 className="text-2xl font-semibold mb-4">Forgot password</h1>
-            <form onSubmit={handleSubmit} className="space-y-4 card">
-                <p className="text-sm text-gray-600 dark:text-gray-300">
-                    Enter the email on your account. We'll send a reset link
-                </p>
-                <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-                    required placeholder="email@example.com" className="w-full rounded border-gray-300" />
-
-                <button type="submit" disabled={submitting} className="btn-primary w-full">
-                    {submitting ? "Submitting..." : "Send reset link"}
-                </button>
-                {devUrl && (
-                    <div className="p-3 rounded bg-yellow-50 border border-yellow-300">
-                        <p className="text-sm font-medium mb-1">
-                            Dev mode: reset link
-                        </p>
-                        <Link to={devUrl} className="text-sm text-brand-600 underline">
-                            {devUrl}
-                        </Link>
+        <div className="auth-shell">
+            <div className="auth-card space-y-4">
+                <h1 className="page-title text-center">Forgot password</h1>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <p className="text-sm text-muted dark:text-gray-300">
+                        Enter the email on your account. We'll send a reset link
+                    </p>
+                    <div>
+                        <label htmlFor="email" className="label">Email</label>
+                        <input id="email" type="email" value={email} onChange={e => setEmail(e.target.value)}
+                            required placeholder="email@example.com" className="input" />
                     </div>
-                )};
-            </form>
-            <div className="mt-4 text-center">
-                <Link to={routes.login()} className="text-sm text-brand-600">
-                    Back to login
-                </Link>
+
+                    <button type="submit" disabled={submitting} className="btn-primary w-full">
+                        {submitting ? "Submitting..." : "Send reset link"}
+                    </button>
+                    {devUrl && (
+                        <div className="p-3 rounded-lg bg-yellow-50 border border-yellow-300 dark:bg-yellow-900/30 dark:border-yellow-800">
+                            <p className="text-sm font-medium mb-1 text-ink dark:text-gray-100">
+                                Dev mode: reset link
+                            </p>
+                            <Link to={devUrl} className="text-sm text-brand-600 underline break-all">
+                                {devUrl}
+                            </Link>
+                        </div>
+                    )}
+                </form>
+                <div className="text-center">
+                    <Link to={routes.login()} className="text-sm text-brand-600 hover:text-brand-700">
+                        Back to login
+                    </Link>
+                </div>
             </div>
         </div>
     );

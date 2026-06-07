@@ -46,12 +46,12 @@ return (
 // ── MINIMAL CLEAN OVERLAY VISUAL STYLES ────────────────────────────────────
 const styles = {
   container: { display: "flex", justifyContent: "center", padding: "40px 20px" },
-  card: { backgroundColor: "white", padding: "30px", borderRadius: "8px", boxShadow: "0 2px 8px rgba(0,0,0,0.08)", width: "100%", maxWidth: "400px" },
-  title: { margin: "0 0 20px 0", color: "#1a1a2e", fontSize: "16px" },
+  card: { backgroundColor: "white", padding: "30px", borderRadius: "16px", boxShadow: "0 18px 40px -20px rgba(11,31,58,0.28)", border: "1px solid #e4e8ee", width: "100%", maxWidth: "400px" },
+  title: { margin: "0 0 20px 0", fontFamily: "'Poppins', sans-serif", color: "#0b1f3a", fontSize: "16px" },
   formGroup: { marginBottom: "20px" },
   label: { display: "block", marginBottom: "6px", fontWeight: "600", fontSize: "13px", color: "#444" },
-  input: { width: "100%", padding: "10px", border: "1px solid #ddd", borderRadius: "4px", boxSizing: "border-box" as const },
-  submitBtn: { width: "100%", padding: "10px", backgroundColor: "#1a1a2e", color: "white", border: "none", borderRadius: "4px", fontWeight: "600", cursor: "pointer" }
+  input: { width: "100%", padding: "11px 14px", border: "1px solid #e4e8ee", borderRadius: "10px", boxSizing: "border-box" as const },
+  submitBtn: { width: "100%", padding: "12px", backgroundColor: "#2a93a8", color: "white", border: "none", borderRadius: "999px", fontWeight: "600", cursor: "pointer" }
 };
 
 export default TestForm;

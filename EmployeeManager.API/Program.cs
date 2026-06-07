@@ -55,7 +55,7 @@ Log.Logger = new LoggerConfiguration()
 // Wrap everything in try/catch so fatal startup errors are logged
 try
 {
-    Log.Information("Starting Employee Manager API...");
+    Log.Information("Starting NoviManager API...");
 
     // ── STEP 2: Create the WebApplication Builder ──────────────────────────
     // This is the starting point for configuring the ASP.NET Core application.
@@ -250,7 +250,7 @@ try
     // e.g., GET /api/employee → EmployeeController.GetAll()
     app.MapControllers();
 
-    Log.Information("Employee Manager API is running on http://localhost:5000");
+    Log.Information("NoviManager API is running on http://localhost:5000");
 
     // Start the web server and listen for HTTP requests on port 5000.
     // This call BLOCKS — the app runs until you press Ctrl+C or it crashes.

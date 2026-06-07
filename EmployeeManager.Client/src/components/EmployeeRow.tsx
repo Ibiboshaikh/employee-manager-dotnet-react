@@ -28,7 +28,7 @@ export interface EmployeeRowProps {
 const EmployeeRow = ({ employee, onEdit, onDelete, onSelect, selected }: EmployeeRowProps) => (
   <tr
     onClick={() => onSelect(employee.id)}
-    className={clsx('cursor-pointer', employee.id === selected ? 'bg-blue-50 dark:bg-blue-900' : 'hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-800')}>
+    className={clsx('cursor-pointer transition-colors', employee.id === selected ? 'bg-brand-50 dark:bg-brand-900/40' : 'hover:bg-gray-50 dark:hover:bg-gray-800')}>
     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">{employee.firstName} {employee.lastName}</td>
     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">{employee.email}</td>
     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">{employee.department}</td>

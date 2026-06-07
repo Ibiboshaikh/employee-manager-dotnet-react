@@ -746,7 +746,7 @@ STEP 2 -- Use it in EmployeeList.js:
     import Navbar from './Navbar';
 
     // Replace the entire navbar <div> with:
-    <Navbar title="Employee Manager" user={user} />
+    <Navbar title="NoviManager" user={user} />
 
 WHAT YOU LEARN: Creating components, passing props, component reusability.
 

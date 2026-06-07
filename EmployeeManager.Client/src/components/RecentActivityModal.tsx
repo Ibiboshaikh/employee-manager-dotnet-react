@@ -14,21 +14,23 @@ function RecentActivityModal({ open, onClose }: RecentActivityModalProps) {
     return(
         <div className="modal-overlay">
             <div className="modal">
-                <h2>Recent Activity</h2>
-                <ul>
+                <h2 className="text-lg font-semibold text-navy-900 dark:text-gray-100 mb-3">Recent Activity</h2>
+                <ul className="space-y-2 max-h-72 overflow-y-auto text-sm text-ink dark:text-gray-200">
                     {activities.length === 0 ? (
-                        <li>No recent activity.</li>
+                        <li className="text-muted dark:text-gray-400">No recent activity.</li>
                     ) : (
-                        
+
                         activities.map((activity, index) => (
-                            <li key={index}>
-                                <strong>{activity.action}</strong>: {activity.details} <em>({new Date(activity.timestamp).toLocaleString()})</em>
+                            <li key={index} className="py-2 border-b border-line dark:border-gray-700 last:border-b-0">
+                                <strong className="text-navy-900 dark:text-gray-100">{activity.action}</strong>: {activity.details} <em className="text-muted dark:text-gray-400">({new Date(activity.timestamp).toLocaleString()})</em>
                             </li>
                         ))
                     )}
                 </ul>
-                <button className="btn-danger" onClick={clear}>Clear</button>
-                <button className="btn-secondary" onClick={onClose}>Close</button>
+                <div className="flex justify-end gap-2 mt-4">
+                    <button className="btn-secondary" onClick={onClose}>Close</button>
+                    <button className="btn-danger" onClick={clear}>Clear</button>
+                </div>
             </div>
         </div>
     );

@@ -25,20 +25,30 @@ const StatsBar = ({ filtered }: StatsBarProps ) => {
         ? (totalSalary / totalEmployees)
         : 0;
 
+    const currency = (n: number) =>
+        n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+
+    const stats = [
+        { label: 'Total Employees', value: totalEmployees.toLocaleString('en-US') },
+        { label: 'Total Salary', value: currency(totalSalary) },
+        { label: 'Average Salary', value: currency(averageSalary) },
+    ];
+
     return (
-        <div className="flex flex-wrap items-center gap-4">
-            <div className="w-48">
-                <h3>Total Employees</h3>
-                <p>{totalEmployees}</p>
-            </div>
-            <div className="w-48">
-                <h3>Total Salary</h3>
-                <p>{totalSalary.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</p>
-            </div>
-            <div className="w-48">
-                <h3>Average Salary</h3>
-                <p>{averageSalary.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</p>
-            </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {stats.map((s) => (
+                <div
+                    key={s.label}
+                    className="rounded-xl border border-line dark:border-gray-700 bg-[#f5f7fa] dark:bg-gray-800 px-5 py-4"
+                >
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted dark:text-gray-400">
+                        {s.label}
+                    </p>
+                    <p className="mt-1 font-heading text-2xl font-bold text-navy-900 dark:text-gray-100 truncate">
+                        {s.value}
+                    </p>
+                </div>
+            ))}
         </div>
     );
 };

@@ -265,52 +265,51 @@ const EmployeeForm = () => {
   
   // ── JSX RETURN (the form UI) ───────────────────────────────────────────
   return (
-    <div className="max-w-6xl mx-auto p-6">
-      <div className="bg-white dark:bg-gray-900 rounded-lg shadow p-6">
-        <h2 className="text-3xl font-bold text-gray-700 dark:text-gray-300 mb-6">
-          {isEditMode ? "Edit Employee" : "Add New Employee"}
-        </h2> 
+    <div className="max-w-3xl mx-auto p-6 space-y-6">
+      <h1 className="page-title">
+        {isEditMode ? "Edit Employee" : "Add New Employee"}
+      </h1>
 
-        {/* Bind your form submission run wrapper */}
-        <form onSubmit={handleSubmit(onValidSubmit)} className="space-y-4 mx-auto">
+      {/* Bind your form submission run wrapper */}
+      <form onSubmit={handleSubmit(onValidSubmit)} className="card space-y-4">
           {errors.root && <p className="text-red-600 text-sm mb-4">{errors.root.message}</p>}
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">First Name *</label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="label">First Name *</label>
               <input
                 type="text"
-                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
+                className="input"
                 {...register("firstName")}
               />
               {touchedFields.firstName && errors.firstName && <p className="text-red-600 text-xs mt-1">{errors.firstName.message}</p>}
             </div>
 
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Last Name *</label>
+            <div>
+              <label className="label">Last Name *</label>
               <input
                 type="text"
-                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
+                className="input"
                 {...register("lastName")}
               />
               {touchedFields.lastName && errors.lastName && <p className="text-red-600 text-xs mt-1">{errors.lastName.message}</p>}
             </div>
           </div>
 
-          <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email *</label>
+          <div>
+            <label className="label">Email *</label>
             <input
               type="email"
-              className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
+              className="input"
               {...register("email")}
             />
             {touchedFields.email && errors.email && <p className="text-red-600 text-xs mt-1">{errors.email.message}</p>}
           </div>
 
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Department *</label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Department *</label>
               <select
-                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
+                className="input"
                 {...register("department")}
               >
                 <option value="">Select Department</option>
@@ -324,23 +323,23 @@ const EmployeeForm = () => {
               {touchedFields.department && errors.department && <p className="text-red-600 text-xs mt-1">{errors.department.message}</p>}
             </div>
 
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Position *</label>
+            <div>
+              <label className="label">Position *</label>
               <input
                 type="text"
-                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                className="input"
                 {...register("position")}
               />
               {touchedFields.position && errors.position && <p className="text-red-600 text-xs mt-1">{errors.position.message}</p>}
             </div>
           </div>
 
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Salary (USD) *</label>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="label">Salary (USD) *</label>
               <input
                 type="number"
-                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
+                className="input"
                 step="0.01"
                 // valueAsNumber: RHF coerces string→number BEFORE Zod validates.
                 // That's what lets the schema use z.number(), not z.coerce.number().
@@ -349,54 +348,53 @@ const EmployeeForm = () => {
               {touchedFields.salary && errors.salary && <p className="text-red-600 text-xs mt-1">{errors.salary.message}</p>}
             </div>
 
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Date of Joining *</label>
+            <div>
+              <label className="label">Date of Joining *</label>
               <input
                 type="date"
-                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
+                className="input"
                 {...register("dateOfJoining")}
               />
               {touchedFields.dateOfJoining && errors.dateOfJoining && <p className="text-red-600 text-xs mt-1">{errors.dateOfJoining.message}</p>}
             </div>
 
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone Number *</label>
+            <div>
+              <label className="label">Phone Number *</label>
               <input
                 type="tel"
-                className="block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-800 dark:text-gray-100"
+                className="input"
                 {...register("phoneNumber")}
               />
               {touchedFields.phoneNumber && errors.phoneNumber && <p className="text-red-600 text-xs mt-1">{errors.phoneNumber.message}</p>}
             </div>
           </div>
 
-          <div className="flex items-center gap-2 mb-6">
+          <div className="flex items-center gap-2 pt-2">
             <input
               type="checkbox"
               id="isActive"
-              className="h-4 w-4 text-brand-600 focus:ring-blue-500 border-gray-300 rounded dark:bg-gray-800 dark:border-gray-600"
+              className="h-4 w-4 text-brand-600 focus:ring-brand-500 border-gray-300 rounded dark:bg-gray-800 dark:border-gray-600"
               {...register("isActive")}
             />
-            <label htmlFor="isActive" className="text-gray-700 dark:text-gray-300 font-medium">
+            <label htmlFor="isActive" className="text-ink dark:text-gray-300 font-medium">
               Active Employee
             </label>
           </div>
 
-          <div className="flex gap-3">
-            <button type="submit" className="btn-secondary" disabled={!isValid || isPending}>
-              {isPending ? "Saving..." : isEditMode ? "Update Employee" : "Create Employee"}
-            </button>
-
+          <div className="flex gap-3 justify-end pt-2">
             <button
               type="button"
               onClick={() => navigate(routes.employees())}
-              className="bg-transparent text-gray-600 border border-gray-300 px-4 py-2 rounded dark:text-gray-300 dark:border-gray-600"
+              className="btn-secondary"
             >
               Cancel
             </button>
+
+            <button type="submit" className="btn-primary" disabled={!isValid || isPending}>
+              {isPending ? "Saving..." : isEditMode ? "Update Employee" : "Create Employee"}
+            </button>
           </div>
         </form>
-      </div>
     </div>
   );
 };

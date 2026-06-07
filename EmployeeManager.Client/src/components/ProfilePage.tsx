@@ -4,11 +4,11 @@ import { useProfile } from "../Queries/useProfile";
 import AvatarUpload from "./AvatarUpload";
 
 const Field = ({label, value}: {label: string, value: string}) => (
-    <div className="flex flex-col py-2 border-b border-gray-200 dark:border-gray-700 last:border-b-0">
-        <span className="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+    <div className="flex flex-col py-2 border-b border-line dark:border-gray-700 last:border-b-0">
+        <span className="text-xs uppercase tracking-wider text-muted dark:text-gray-400">
             {label}
         </span>
-        <span className="text-sm text-gray-900 dark:text-gray-100">
+        <span className="text-sm text-ink dark:text-gray-100">
             {value || '--'}
         </span>
     </div>
@@ -18,21 +18,23 @@ const ProfilePage = () => {
     const { data: profile, isLoading, error } = useProfile();
     console.log(profile);
     if (isLoading)
-        return <div className="p-4">Loading profile...</div>;
+        return <div className="p-6 text-muted dark:text-gray-400">Loading profile...</div>;
     if (error || !profile)
-        return <div className="p-4 text-red-500">Error loading profile.</div>;
+        return <div className="p-6 text-red-600">Error loading profile.</div>;
     return (
-        <div className="max-w-2xl mx-auto p-6">
-            <div className="flex justify-between items-center mb-4">
-                <h1 className="text-2xl font-semibold">My Profile</h1>
-                <Link to="/profile/edit" className="btn-primary">
-                    Edit
-                </Link>
-                <Link to="/profile/change-password" className="btn-secondary">
-                    Change Password
-                </Link>
+        <div className="max-w-2xl mx-auto p-6 space-y-6">
+            <div className="flex flex-wrap justify-between items-center gap-3">
+                <h1 className="page-title">My Profile</h1>
+                <div className="flex gap-2">
+                    <Link to="/profile/edit" className="btn-primary">
+                        Edit
+                    </Link>
+                    <Link to="/profile/change-password" className="btn-secondary">
+                        Change Password
+                    </Link>
+                </div>
             </div>
-            <div className="mb-6">
+            <div className="card">
                 <AvatarUpload currentUrl={profile.avatarUrl ?? ""} />
             </div>
             <div className="card">
