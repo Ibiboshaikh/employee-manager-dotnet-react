@@ -167,7 +167,7 @@ from simple to complex.
     return (<div>...)   = the View/Razor template
 
   EXERCISE: While the app is running, open Login.js and change the <h2> text
-  from "Employee Manager" to "My App". Save the file. The browser updates
+  from "NoviManager" to "My App". Save the file. The browser updates
   INSTANTLY (no rebuild needed). This is called Hot Reload — React's version.
 
   --- THEN THIS ---

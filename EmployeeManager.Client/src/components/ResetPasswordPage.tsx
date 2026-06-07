@@ -38,14 +38,20 @@ const ResetPasswordPage = () => {
     };
 
     return (
-        <div className="max-w-md mx-auto p-6">
-            <h1 className="text-2xl font-semibold mb-4">Reset password</h1>
-            <form onSubmit={handleSubmit} className="space-y-4 card">
-                <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)}
-                    placeholder="New Password" required className="w-full rounded border-gray-300" />
-                
-                <input type="password" value={confirm} onChange={e=> setConfirm(e.target.value)}
-                    placeholder="confirm password" required className="w-full rounded border-gray-300" />
+        <div className="auth-shell">
+            <form onSubmit={handleSubmit} className="auth-card space-y-4">
+                <h1 className="page-title text-center">Reset password</h1>
+                <div>
+                    <label htmlFor="newPassword" className="label">New Password</label>
+                    <input id="newPassword" type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)}
+                        placeholder="New Password" required className="input" />
+                </div>
+
+                <div>
+                    <label htmlFor="confirm" className="label">Confirm Password</label>
+                    <input id="confirm" type="password" value={confirm} onChange={e=> setConfirm(e.target.value)}
+                        placeholder="Confirm password" required className="input" />
+                </div>
 
                 <button type="submit" disabled={submitting} className="btn-primary w-full">
                     {submitting ? "Submitting..." : "Reset Password"}

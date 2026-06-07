@@ -37,40 +37,42 @@ const ProfileEditPage =() =>{
         });
     };
 
-    if (isLoading) return <p className="p-6 text-gray-500">Loading…</p>;
+    if (isLoading) return <p className="p-6 text-muted dark:text-gray-400">Loading…</p>;
 
     const submitDisabled = !isDirty || !isValid || isSubmitting;
 
     return (
-        <div className="max-w-md mx-auto p-6">
-            <h1 className="text-2xl font-semibold mb-4">Edit Profile</h1>
-            <form onSubmit={handleSubmit(onSubmit)}>
-                <div className="space-y-4 card">
-                    <label htmlFor="phoneNumber" className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                        Phone number
-                    </label>
-                    <input id="phoneNumber" {...register('phoneNumber')} className={clsx(
-                        'w-full rounded shadow-sm', errors.phoneNumber ? 'border-red-500' : 'border-gray-300 dark:border-gray-600',
-                    )} />
-                    {errors.phoneNumber && <p className="text-red-500 text-sm mt-1">{errors.phoneNumber.message}</p>}
-                </div>
-                <div className="space-y-4 card">
-                    <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                        First name
-                    </label>
-                    <input id="firstName" {...register('firstName')} className={clsx(
-                        'w-full rounded shadow-sm', errors.firstName ? 'border-red-500' : 'border-gray-300 dark:border-gray-600',
-                    )} />
-                    {errors.firstName && <p className="text-red-500 text-sm mt-1">{errors.firstName.message}</p>}
-                </div>
-                <div className="space-y-4 card">
-                    <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                        Last name
-                    </label>
-                    <input id="lastName" {...register('lastName')} className={clsx(
-                        'w-full rounded shadow-sm', errors.lastName ? 'border-red-500' : 'border-gray-300 dark:border-gray-600',
-                    )} />
-                    {errors.lastName && <p className="text-red-500 text-sm mt-1">{errors.lastName.message}</p>}
+        <div className="max-w-md mx-auto p-6 space-y-6">
+            <h1 className="page-title">Edit Profile</h1>
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+                <div className="card space-y-4">
+                    <div>
+                        <label htmlFor="phoneNumber" className="label">
+                            Phone number
+                        </label>
+                        <input id="phoneNumber" {...register('phoneNumber')} className={clsx(
+                            'input', errors.phoneNumber && 'border-red-500 focus:border-red-500 focus:ring-red-500',
+                        )} />
+                        {errors.phoneNumber && <p className="text-red-600 text-sm mt-1">{errors.phoneNumber.message}</p>}
+                    </div>
+                    <div>
+                        <label htmlFor="firstName" className="label">
+                            First name
+                        </label>
+                        <input id="firstName" {...register('firstName')} className={clsx(
+                            'input', errors.firstName && 'border-red-500 focus:border-red-500 focus:ring-red-500',
+                        )} />
+                        {errors.firstName && <p className="text-red-600 text-sm mt-1">{errors.firstName.message}</p>}
+                    </div>
+                    <div>
+                        <label htmlFor="lastName" className="label">
+                            Last name
+                        </label>
+                        <input id="lastName" {...register('lastName')} className={clsx(
+                            'input', errors.lastName && 'border-red-500 focus:border-red-500 focus:ring-red-500',
+                        )} />
+                        {errors.lastName && <p className="text-red-600 text-sm mt-1">{errors.lastName.message}</p>}
+                    </div>
                 </div>
                 <div className="flex gap-2 justify-end">
                     <button type="button"

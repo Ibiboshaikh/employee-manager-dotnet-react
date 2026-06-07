@@ -1,6 +1,6 @@
 # EmployeeManager.Client - React Frontend
 
-The React frontend for the Employee Manager application.
+The React frontend for the NoviManager application.
 This is a standalone project at the solution root, separate from the .NET backend.
 
 

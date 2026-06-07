@@ -57,8 +57,8 @@ const FilterBar = ({
 }: FilterBarProps) => (
     <>
         {/* Department dropdown — value is controlled by prop */}
-        <div className="flex flex-wrap items-center gap-4">
-        <select className="block w-48 border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm" value={department} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => onDepartmentChange(e.target.value)}>
+        <div className="flex flex-wrap items-center gap-3">
+        <select className="input w-48" value={department} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => onDepartmentChange(e.target.value)}>
             <option value="">All Departments</option>
             {departments.map(dept => (
                 <option key={dept} value={dept}>{dept}</option>
@@ -68,7 +68,7 @@ const FilterBar = ({
         {/* Search input — each keystroke calls onSearchChange + bumps view counter */}
         <input
             type="text"
-            className="block w-48 border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+            className="input w-48"
             placeholder="Search Employees..."
             value={search}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
@@ -78,19 +78,19 @@ const FilterBar = ({
         />
 
         {/* Debug: shows how many search renders have fired since mount */}
-        
+
 
         {/* Checkbox — filters out low-salary employees when checked */}
         <input
             type="checkbox"
-            className="h-4 w-4 text-brand-600 focus:ring-blue-500 border-gray-300 rounded"
+            className="h-4 w-4 text-brand-600 focus:ring-brand-500 border-gray-300 rounded"
             checked={hideBelow50K}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => onHideBelow50KChange(e.target.checked)}
         />
-        <input type="number" className="block w-48 border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm" placeholder="Minimum Salary" value={minSalary} onChange={ (e: React.ChangeEvent<HTMLInputElement>) => onMinSalaryChange(e.target.value)} />
-        <input type="number" className="block w-48 border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm" placeholder="Maximum Salary" value={maxSalary} onChange={ (e: React.ChangeEvent<HTMLInputElement>) => onMaxSalaryChange(e.target.value)} />
+        <input type="number" className="input w-48" placeholder="Minimum Salary" value={minSalary} onChange={ (e: React.ChangeEvent<HTMLInputElement>) => onMinSalaryChange(e.target.value)} />
+        <input type="number" className="input w-48" placeholder="Maximum Salary" value={maxSalary} onChange={ (e: React.ChangeEvent<HTMLInputElement>) => onMaxSalaryChange(e.target.value)} />
         <button className="btn-secondary" onClick={onClear}>Clear Filters</button>
-        <label>{view}</label>
+        <label className="text-sm text-muted dark:text-gray-400">{view}</label>
         </div>
         
     </>

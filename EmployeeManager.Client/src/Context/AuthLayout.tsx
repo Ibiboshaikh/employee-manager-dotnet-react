@@ -25,15 +25,17 @@ const AuthLayout = () =>{
         <div style={styles.layoutWrapper}>
             <header style={styles.header}>
                 <div style={styles.brand} onClick={() => navigate(routes.employees())}>
-                    Employee Management Portal
+                    <img src="/logo.svg" alt="" style={styles.brandLogo} />
+                    NoviManager
                 </div>
-                <NavLink to={routes.profile()} className={({ isActive }) => `px-3 py-2 text-sm ${isActive ? 'font-semibold' : ''}` }>
-                  My Profile
-                </NavLink>
-                <NavLink to={routes.myDocuments()} className={({ isActive }) => `px-3 py-2 text-sm ${isActive ? 'font-semibold' : ''}` }>
-                  My Documents
-                </NavLink>
                 <nav style={styles.navMenu}>
+                    <NavLink to={routes.profile()} style={({ isActive }) => ({ ...styles.navLink, color: isActive ? '#ffffff' : styles.navLink.color, fontWeight: isActive ? 700 : 400 })}>
+                      My Profile
+                    </NavLink>
+                    <NavLink to={routes.myDocuments()} style={({ isActive }) => ({ ...styles.navLink, color: isActive ? '#ffffff' : styles.navLink.color, fontWeight: isActive ? 700 : 400 })}>
+                      My Documents
+                    </NavLink>
+                    <span style={styles.navDivider} />
                     <DarkModeToggle />
                     <span style={styles.userBadge}> 👤 {user?.fullName}</span>
                     <button style={styles.logoutBtn} onClick={handleLogout}>Logout</button>
@@ -52,7 +54,7 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     minHeight: "100vh",
-    backgroundColor: "#f5f6fa",
+    backgroundColor: "#f5f7fa",
   },
   header: {
     display: "flex",
@@ -60,20 +62,39 @@ const styles = {
     alignItems: "center",
     padding: "0 40px",
     height: "70px",
-    backgroundColor: "#1a1a2e",
+    backgroundColor: "#0b1f3a",
     color: "white",
-    boxShadow: "0 2px 5px rgba(0,0,0,0.1)",
+    boxShadow: "0 6px 24px -16px rgba(11, 31, 58, 0.6)",
   },
   brand: {
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    fontFamily: "'Poppins', sans-serif",
     fontSize: "18px",
     fontWeight: "700",
-    letterSpacing: "0.5px",
+    letterSpacing: "0.3px",
     cursor: "pointer",
+  },
+  brandLogo: {
+    width: "32px",
+    height: "32px",
   },
   navMenu: {
     display: "flex",
     alignItems: "center",
-    gap: "20px",
+    gap: "18px",
+  },
+  navLink: {
+    color: "#e2e8f0",
+    textDecoration: "none",
+    fontSize: "14px",
+    padding: "6px 4px",
+  },
+  navDivider: {
+    width: "1px",
+    height: "22px",
+    backgroundColor: "rgba(255,255,255,0.18)",
   },
   userBadge: {
     fontSize: "14px",

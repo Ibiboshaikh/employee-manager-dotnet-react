@@ -53,42 +53,40 @@ const ChangePasswordPage = () =>{
     };
 
     const inputClass = (hasError: boolean) => clsx(
-        'w-full rounded shadow-sm',
-        hasError ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-gray-300 focus:border-brand-500 focus:ring-brand-500',
+        'input',
+        hasError && 'border-red-500 focus:border-red-500 focus:ring-red-500',
     );
 
     return (
-        <div className="max-w-md mx-auto p-6">
-            <h1 className="text-2xl font-semibold mb-4">Change Password</h1>
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 card">
-                {errors.root && 
-                    <div className="p-3 rounded bg-red-50 border border-red-200 text-red-700 text-sm">
+        <div className="auth-shell">
+            <form onSubmit={handleSubmit(onSubmit)} className="auth-card space-y-4">
+                <h1 className="page-title text-center">Change Password</h1>
+                {errors.root &&
+                    <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm dark:bg-red-900/30 dark:border-red-800 dark:text-red-300">
                         {errors.root.message}
                     </div>
                 }
                 <div>
-                    <label className="block text-sm font-medium mb-1">Current Password</label>
+                    <label className="label">Current Password</label>
                     <input type="password" {...register("oldPassword")}
                         className={inputClass(!!errors.oldPassword)} />
                     {errors.oldPassword && <p className="text-red-600 text-sm mt-1">{errors.oldPassword.message}</p>}
                 </div>
                 <div>
-                    <label className="block text-sm font-medium mb-1">New Password</label>
+                    <label className="label">New Password</label>
                     <input type="password" {...register("newPassword")}
                         className={inputClass(!!errors.newPassword)} />
                     {errors.newPassword && <p className="text-red-600 text-sm mt-1">{errors.newPassword.message}</p>}
                 </div>
                 <div>
-                    <label className="block text-sm font-medium mb-1">Confirm New Password</label>
+                    <label className="label">Confirm New Password</label>
                     <input type="password" {...register("confirm")}
                         className={inputClass(!!errors.confirm)} />
                     {errors.confirm && <p className="text-red-600 text-sm mt-1">{errors.confirm.message}</p>}
                 </div>
-                <div className="flex gap-2 justify-end">
-                    <button type="submit" disabled={!isValid || isSubmitting || mutation.isPending } className="btn-primary w-full">
-                        {mutation.isPending ? "Changing..." : "Change Password"}
-                    </button>
-                </div>
+                <button type="submit" disabled={!isValid || isSubmitting || mutation.isPending } className="btn-primary w-full">
+                    {mutation.isPending ? "Changing..." : "Change Password"}
+                </button>
             </form>
         </div>
     );

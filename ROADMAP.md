@@ -1,4 +1,4 @@
-# Employee Manager
+# NoviManager
 
 Internal employee and HR management system. Web application providing an
 employee directory, self-service profile actions, document management,

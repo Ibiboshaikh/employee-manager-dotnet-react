@@ -6,6 +6,12 @@ import { changePassword } from "../services/api";
 import { useAuth } from "../Context/AuthContext";
 import { routes } from "../routes";
 
+const inputStyle: React.CSSProperties = {
+    width: '100%', padding: '11px 14px', marginBottom: 12,
+    border: '1px solid #e4e8ee', borderRadius: 10, fontSize: 14,
+    boxSizing: 'border-box',
+};
+
 const ForceChangePassword = () => {
     const [oldPassword, setOldPassword] = useState("");
     const [newPassword, setNewPassword] = useState("");
@@ -40,22 +46,22 @@ const ForceChangePassword = () => {
     };
 
     return(
-        <div style={{maxWidth: 400, margin: '80px auto', padding: 20, background: 'white', borderRadius: 8, boxShadow: '0 2px 10px rgba(0,0,0,0.1)'}}>
+        <div style={{maxWidth: 400, margin: '80px auto', padding: 28, background: 'white', borderRadius: 16, boxShadow: '0 24px 60px -24px rgba(11,31,58,0.4)'}}>
             <h2>Set a new password</h2>
-            <p style={{ color: '#666'}}>
+            <p style={{ color: '#5b6675', marginBottom: 16}}>
                 You're using a temporary password. Choose a permanent one before continuing.
             </p>
             <form onSubmit={handleSubmmit}>
                 <input type="password" placeholder="current password" value={oldPassword} onChange={e => setOldPassword(e.target.value)}
-                    required style={{width: '100%', padding: 10, marginBottom: 12}} />
+                    required style={inputStyle} />
 
                 <input type="password" placeholder="new password" value={newPassword} onChange={e => setNewPassword(e.target.value)}
-                    required style={{width: '100%', padding: 10, marginBottom: 12}} />
+                    required style={inputStyle} />
 
                 <input type="password" placeholder="confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)}
-                    required style={{width: '100%', padding: 10, marginBottom: 12}} />
+                    required style={inputStyle} />
 
-                <button type="submit" disabled={submitting} className="btn-success">
+                <button type="submit" disabled={submitting} className="btn-primary w-full">
                     {submitting ? 'Saving...' : 'Change password'}
                 </button>
             </form>

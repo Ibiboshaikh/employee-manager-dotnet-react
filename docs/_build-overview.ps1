@@ -128,16 +128,16 @@ $body = ""
 
 # Cover band
 $coverInner  = "<w:p><w:pPr><w:spacing w:before='220' w:after='60'/></w:pPr>$(Run 'HUMAN RESOURCE MANAGEMENT' $true '9DC3E6' 22)</w:p>"
-$coverInner += "<w:p><w:pPr><w:spacing w:after='80'/></w:pPr>$(Run 'Employee Manager' $true 'FFFFFF' 76)</w:p>"
+$coverInner += "<w:p><w:pPr><w:spacing w:after='80'/></w:pPr>$(Run 'NoviManager' $true 'FFFFFF' 76)</w:p>"
 $coverInner += "<w:p><w:pPr><w:spacing w:after='240'/></w:pPr>$(Run 'One platform to manage your people, end to end.' $false 'CFE0F0' 30)</w:p>"
 $body += Band '1A3C5E' $coverInner
 $band2 = "<w:p><w:pPr><w:spacing w:before='40' w:after='40'/></w:pPr>$(Run 'Product Overview      |      June 2026' $false 'FFFFFF' 22)</w:p>"
 $body += Band '2F7FB8' $band2
 
-$body += "<w:p><w:pPr><w:spacing w:before='320' w:after='160'/></w:pPr>$(Run 'Employee Manager brings your entire workforce into one secure, easy-to-use system - from the employee directory and self-service profiles to documents, leave, time, approvals, and reporting. It replaces scattered spreadsheets and disconnected tools with a single source of truth your whole organization can rely on.' $false '3A3A3A' 24)</w:p>"
+$body += "<w:p><w:pPr><w:spacing w:before='320' w:after='160'/></w:pPr>$(Run 'NoviManager brings your entire workforce into one secure, easy-to-use system - from the employee directory and self-service profiles to documents, leave, time, approvals, and reporting. It replaces scattered spreadsheets and disconnected tools with a single source of truth your whole organization can rely on.' $false '3A3A3A' 24)</w:p>"
 $body += P 'It is designed to grow with you: start with core HR today, and add attendance, expenses, recruitment, analytics, and payroll as your needs expand, all within the same familiar platform.' 24 '3A3A3A' $false 160
 
-$body += H3 'Why organizations choose Employee Manager'
+$body += H3 'Why organizations choose NoviManager'
 $body += Bullet 'Less admin, more self-service.' 'Employees update their own details, reset passwords, and access documents, freeing HR for higher-value work.'
 $body += Bullet 'Everything in one place.' 'People data, documents, and approvals live together, accurate and always up to date.'
 $body += Bullet 'Secure by design.' 'Enterprise-grade sign-in and role-based access keep sensitive employee information protected.'
@@ -169,7 +169,7 @@ $body += Table2 @('Milestone','Target') $timeline 3500 1500
 $body += H2 'Find out more'
 $body += P 'We would be glad to arrange a live demonstration tailored to your organization needs and discuss a rollout plan that fits your priorities.' 22 '2B2B2B' $false 140
 $body += P 'To book a demonstration, please contact your account representative.' 24 '1A3C5E' $true 200
-$body += P 'Employee Manager - Product Overview, June 2026. Feature availability and timelines are indicative and may change. "Available today" reflects the current release; other items are planned roadmap capabilities.' 18 '8A8A8A' $false 0
+$body += P 'NoviManager - Product Overview, June 2026. Feature availability and timelines are indicative and may change. "Available today" reflects the current release; other items are planned roadmap capabilities.' 18 '8A8A8A' $false 0
 
 $sect = "<w:sectPr><w:pgSz w:w='11906' w:h='16838'/><w:pgMar w:top='1080' w:right='1080' w:bottom='1080' w:left='1080' w:header='720' w:footer='720' w:gutter='0'/></w:sectPr>"
 

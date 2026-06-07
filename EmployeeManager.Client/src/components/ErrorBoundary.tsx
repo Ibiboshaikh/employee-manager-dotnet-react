@@ -30,11 +30,13 @@ class ErrorBoundary extends Component<Props, State> {
     render() {
         if (this.state.hasError) {
             return (
-                <div style={{ padding: 24 }}>
-                    <h2>Something went wrong.</h2>
-                    {/* The ?. operator is perfect here because error could be null initially */}
-                    <p>{this.state.error?.message}</p>
-                    <button onClick={this.handleRetry}>Retry</button>
+                <div className="max-w-md mx-auto p-6">
+                    <div className="card text-center space-y-3">
+                        <h2 className="page-title">Something went wrong.</h2>
+                        {/* The ?. operator is perfect here because error could be null initially */}
+                        <p className="text-muted dark:text-gray-400">{this.state.error?.message}</p>
+                        <button onClick={this.handleRetry} className="btn-primary">Retry</button>
+                    </div>
                 </div>
             );
         }

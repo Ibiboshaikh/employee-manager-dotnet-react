@@ -158,8 +158,11 @@ const Login = () => {
       {/* Login card — white box with shadow */}
       <div style={styles.card}>
 
-        {/* Title and subtitle */}
-        <h2 style={styles.title}>Employee Manager V2.0</h2>
+        {/* Brand emblem (same SVG used in the navbar) */}
+        <img src="/logo.svg" alt="NoviManager" style={styles.logo} />
+
+        {/* Brand title + subtitle */}
+        <h1 style={styles.title}>NoviManager</h1>
         <p style={styles.subtitle}>Sign in to continue</p>
 
         {/* ── THE LOGIN FORM ──────────────────────────────────────────
@@ -220,11 +223,6 @@ const Login = () => {
         <p style={{ textAlign: 'center', marginTop: 12 }}>
           <Link to={routes.forgotPassword()}>Forgot password?</Link>
         </p>
-
-        {/* Hint showing default credentials */}
-        <p style={styles.hint}>
-          Default credentials: <strong>admin</strong> / <strong>admin123</strong>
-        </p>
       </div>
     </div>
   );
@@ -252,24 +250,39 @@ const styles = {
     justifyContent: "center",     // Center horizontally
     alignItems: "center",         // Center vertically
     minHeight: "100vh",           // vh = viewport height. 100vh = full screen height
-    backgroundColor: "#f0f2f5",   // Light gray background
+    backgroundColor: "#0b1f3a",   // Brand navy base (shows through the faded logo)
+    // The emblem SVG as a large, faded, repeating watermark over the navy base.
+    backgroundImage:
+      "linear-gradient(135deg, rgba(11,31,58,0.92), rgba(16,42,76,0.82)), url('/logo.svg')",
+    backgroundSize: "auto, 180px 180px",
+    backgroundRepeat: "no-repeat, repeat",
+    backgroundPosition: "center, center",
   },
 
   // Card: the white box containing the form
   card: {
     backgroundColor: "white",
     padding: "40px",               // Space inside the card (between border and content)
-    borderRadius: "8px",           // Rounded corners
-    boxShadow: "0 2px 10px rgba(0,0,0,0.1)", // Subtle shadow for depth effect
-    //          ↑ offset-x  ↑ offset-y  ↑ blur  ↑ color (black at 10% opacity)
+    borderRadius: "16px",          // Rounded corners (matches site cards)
+    boxShadow: "0 24px 60px -24px rgba(11,31,58,0.5)", // Soft navy-tinted depth
     width: "400px",                // Fixed width for the card
   },
 
-  // Title: centered, dark color
+  // Title: centered, navy, Poppins (matches site headings)
   title: {
     textAlign: "center" as const,
-    color: "#1a1a2e",              // Dark navy blue
-    marginBottom: "5px",
+    fontFamily: "'Poppins', sans-serif",
+    color: "#0b1f3a",
+    fontSize: "24px",
+    marginBottom: "4px",
+  },
+
+  // Logo: centered emblem at the top of the card
+  logo: {
+    display: "block",
+    width: "64px",
+    height: "64px",
+    margin: "0 auto 16px",
   },
 
   // Subtitle: centered, lighter gray
@@ -295,21 +308,21 @@ const styles = {
   // Input: full-width text field with border
   input: {
     width: "100%",                 // Takes full width of its container
-    padding: "10px 12px",          // Inner spacing (vertical horizontal)
-    border: "1px solid #ddd",      // Light gray border
-    borderRadius: "4px",           // Slightly rounded corners
+    padding: "11px 14px",          // Inner spacing (vertical horizontal)
+    border: "1px solid #e4e8ee",   // Hairline border (site --line)
+    borderRadius: "10px",          // Rounded corners
     fontSize: "14px",
     boxSizing: "border-box" as const,       // Width includes padding and border
   },
 
-  // Button: full-width, dark background, white text
+  // Button: full-width teal pill (matches site primary CTA)
   button: {
     width: "100%",
     padding: "12px",
-    backgroundColor: "#e74c3c",    // Dark navy blue (matches title)
+    backgroundColor: "#2a93a8",    // Brand teal (site --teal-500)
     color: "white",
     border: "none",                // Remove default button border
-    borderRadius: "4px",
+    borderRadius: "999px",         // Pill shape
     fontSize: "16px",
     cursor: "pointer",             // Show pointer cursor on hover
     fontWeight: "600",
